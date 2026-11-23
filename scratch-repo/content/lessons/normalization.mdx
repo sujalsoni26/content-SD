@@ -1,0 +1,76 @@
+**Normalization** means storing each fact once: a user's name lives in `users`, and a post points at it with `user_id`. **Denormalization** copies facts to where they are read.
+
+```text
+normalized:   users(id, name)   posts(id, user_id, text)
+denormalized: posts(id, user_id, author_name, text, like_count)
+```
+
+## The feed, normalized
+
+Showing 20 posts with each author's name and a like count means a join and an aggregate on every page view:
+
+```sql
+SELECT p.id, p.text, u.name, COUNT(l.post_id) AS like_count
+FROM posts p
+JOIN users u ON u.id = p.user_id
+LEFT JOIN likes l ON l.post_id = p.id
+WHERE p.user_id IN (/* the ids the viewer follows */)
+GROUP BY p.id, p.text, u.name
+ORDER BY p.created_at DESC
+LIMIT 20;
+```
+
+Correct and compact, but the most visited page in the app now pays for a join against `users` and a count over `likes` every single time.
+
+## The same feed, denormalized
+
+```sql
+SELECT id, text, author_name, like_count
+FROM posts
+WHERE user_id IN (/* the ids the viewer follows */)
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+One table, one index, no join. The price moves to the write side.
+
+<Mermaid caption="Normalized: three tables, each fact once. Denormalized: the hot read path carries copies of the facts it needs." chart={`flowchart LR
+    subgraph N["Normalized"]
+        U["users (id, name)"] --> P["posts (id, user_id, text)"]
+        P --> L["likes (post_id, user_id)"]
+    end
+    subgraph D["Denormalized"]
+        P2["posts (id, user_id, author_name, like_count, text)"]
+    end
+`} />
+
+|  | Normalized: each fact stored once | Denormalized: data duplicated for reads |
+| --- | --- | --- |
+| Reads | Need JOINs (slower at scale) | No joins (fast) |
+| Writes | One place to update | Many rows (a rename is a mass update) |
+| Integrity | Strong | Copies can drift |
+| Good for | Write-heavy, correctness-critical data (banking, orders) | Read-heavy hot paths (feeds, dashboards, analytics) |
+
+## Keeping the copies honest
+
+- **A rename is a mass update.** Change `users.name`, then update `author_name` on every post by that user. Do it asynchronously through a queue (see [Message queues](/learn/message-queues)) and accept that a few posts show the old name for some seconds (see [Consistency: strong vs eventual](/learn/consistency)).
+- **A like is an atomic increment.** `UPDATE posts SET like_count = like_count + 1 WHERE id = …`, plus an occasional recount from `likes` to repair any drift.
+- **Measure first.** Before copying anything, confirm the join is the bottleneck: read the query plan (see [Database indexing](/learn/indexing)) and the slow-query log. An index often fixes what denormalization was about to paper over.
+
+<Callout type="idea" title="Rule of thumb">
+
+<mark>Normalize by default; denormalize the hot read paths that measurements show are bottlenecked.</mark> NoSQL designs are often denormalized by nature.
+
+</Callout>
+
+<Callout type="analogy" title="An address on every envelope">
+
+Keeping a friend's address only in your contacts is normalized: one place to update. Printing it on fifty envelopes in advance is denormalized: faster on posting day, and a chore when they move.
+
+</Callout>
+
+<DeepDive title="Go deeper: the normal forms in one breath">
+
+The textbook rules are steps toward "each fact once". **1NF**: every column holds a single value, no lists in a cell. **2NF**: no column depends on only part of a composite key. **3NF**: no column depends on another non-key column (store a city once per address, not next to every order). Most production schemas stop at 3NF and then denormalize deliberately where measurements demand it.
+
+</DeepDive>

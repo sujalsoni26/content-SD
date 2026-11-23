@@ -1,0 +1,323 @@
+A parking lot is the warm-up problem of low-level design because it has every ingredient in miniature: a hierarchy of things, a lifecycle (the ticket), decisions that change with the business, and several gates acting at once. The decision that carries the rest of the design is to **keep the things apart from the decisions**. Floors, spots and tickets are plain entities that know their own state; *which spot* and *what price* live behind two small interfaces, `SpotAllocationStrategy` and `PricingStrategy`, that can be swapped without touching an entity.
+
+## Requirements and assumptions
+
+Say the scope out loud before drawing a class. Most failed attempts here are scope failures: valet, reservations and electric charging get designed before a single car has parked.
+
+**Functional requirements**
+
+- Several floors. Every spot has a size: small for two-wheelers, medium for cars, large for trucks. A vehicle may take a spot of its own size or, if none is free, the next size up.
+- An entry gate issues a ticket that records the vehicle, the spot and the entry time, and tells the driver where to go.
+- The driver pays at a kiosk or at the exit gate; the fee depends on duration and spot size; the barrier opens only for a ticket with zero balance.
+- A display on each floor shows free spots by size.
+- A lost ticket is settled with a flat fee after a plate check.
+
+**Assumptions**, as numbers so they can be challenged: 5 floors of 200 spots, 4 entry and 4 exit gates, one lot per deployment, prices rounded up to the hour, a 15-minute grace window after paying at a kiosk.
+
+**Out of scope**: reservations, electric charging, valet, several lots sharing capacity, and the payment provider's integration (we define the interface and stop).
+
+**Non-functional**: correctness beats throughput. A spot must never go to two cars, a gate decision should take milliseconds, and with tens of gates one process can own the lot's state.
+
+## Core entities and responsibilities
+
+Each entity answers to one stakeholder, the single responsibility principle from [SOLID](/learn/solid) applied to a domain: operations changes how spots are chosen, finance changes prices, the hardware vendor changes gates, and the entities change only when the physical lot does.
+
+| Entity | Responsibility | Knows |
+| --- | --- | --- |
+| ParkingLot | Facade for the two use cases, park and exit; owns floors and the strategies | floors, active tickets, strategies, clock |
+| ParkingFloor | Holds its spots; answers "free spots of at least this size" | spots, a free counter per size |
+| ParkingSpot | One bay: a size and an occupancy flag that can be claimed exactly once at a time | id, size, occupied |
+| Vehicle | A plate and a type; knows the smallest spot size it fits | plate, type |
+| Ticket | Links a vehicle to a spot and carries the lifecycle: issued, paid, closed, lost | id, vehicle, spot, entry time, status, amount paid |
+| EntryGate, ExitGate | Translate hardware events (plate scanned, card tapped) into calls on the lot | gate id, lot |
+| SpotAllocationStrategy | Chooses *and claims* a spot for a vehicle | nothing: it is stateless |
+| PricingStrategy | Turns a ticket and an exit time into a fee | rates |
+| PaymentProcessor | Charges an amount to a payment method and reports success or failure | provider client |
+
+The ticket is an entity rather than an id because it is the only object that lives across both use cases: entry creates it, the kiosk changes it, exit closes it, and every edge case below is a question about its state.
+
+## Class design
+
+<Mermaid caption="Entities on the left know their own state. The three interfaces on the right are the decisions that change; ParkingLot depends on the interfaces, never on NearestFreeSpot or HourlyPricing." chart={`classDiagram
+    class ParkingLot {
+        +park(Vehicle vehicle) Ticket
+        +exit(String ticketId, PaymentMethod method) Receipt
+    }
+    class ParkingFloor {
+        +spotsOf(SpotSize size) List
+        +freeCount(SpotSize size) int
+    }
+    class ParkingSpot {
+        -SpotSize size
+        -AtomicBoolean occupied
+        +fits(Vehicle vehicle) boolean
+        +tryOccupy() boolean
+        +release()
+    }
+    class Vehicle {
+        +String plate
+        +VehicleType type
+        +minimumSize() SpotSize
+    }
+    class Ticket {
+        +String id
+        +Instant entryAt
+        +TicketStatus status
+        +recordPayment(Money amount)
+        +close(Instant at)
+    }
+    class SpotAllocationStrategy {
+        <<interface>>
+        +allocate(Vehicle vehicle, List floors) Optional
+    }
+    class NearestFreeSpot
+    class PricingStrategy {
+        <<interface>>
+        +price(Ticket ticket, Instant exitAt) Money
+    }
+    class HourlyPricing
+    class PaymentProcessor {
+        <<interface>>
+        +charge(Money amount, PaymentMethod method) PaymentResult
+    }
+    class EntryGate
+    class ExitGate
+    ParkingLot *-- ParkingFloor
+    ParkingFloor *-- ParkingSpot
+    ParkingLot --> SpotAllocationStrategy : uses
+    ParkingLot --> PricingStrategy : uses
+    ParkingLot --> PaymentProcessor : uses
+    NearestFreeSpot ..|> SpotAllocationStrategy
+    HourlyPricing ..|> PricingStrategy
+    Ticket --> Vehicle
+    Ticket --> ParkingSpot
+    EntryGate --> ParkingLot : park
+    ExitGate --> ParkingLot : exit
+`} />
+
+Two choices are deliberate. Vehicle types are an `enum`, not a hierarchy: a motorcycle and a truck differ in one datum, the smallest spot they fit, and three empty subclasses would be ceremony. The lot *composes* floors (`*--`) because a floor has no meaning outside its lot; a ticket merely *refers to* a vehicle and a spot (`-->`) that exist whether it does or not (see [Class relationships and UML](/learn/class-relationships-uml)).
+
+## Key interfaces and methods
+
+The vehicle is a record, and the only "factory" worth having is one static method that maps what the gate camera reports to a type. As the [creational patterns lesson](/learn/design-patterns-creational) put it, a Factory Method hierarchy earns its place when the created objects behave differently, and these do not.
+
+```java
+enum VehicleType { MOTORCYCLE, CAR, TRUCK }
+enum SpotSize { SMALL, MEDIUM, LARGE }
+
+record Vehicle(String plate, VehicleType type) {
+    static Vehicle from(String plate, String scannedCategory) {     // the one place gate input becomes a type
+        return new Vehicle(plate, VehicleType.valueOf(scannedCategory.toUpperCase()));
+    }
+    SpotSize minimumSize() {
+        return switch (type) {
+            case MOTORCYCLE -> SpotSize.SMALL;
+            case CAR -> SpotSize.MEDIUM;
+            case TRUCK -> SpotSize.LARGE;
+        };
+    }
+}
+```
+
+The three decisions are three interfaces. Note that the allocation strategy *claims* the spot it returns; the reason is in the concurrency section.
+
+```java
+interface SpotAllocationStrategy {
+    Optional<ParkingSpot> allocate(Vehicle vehicle, List<ParkingFloor> floors);   // finds and claims
+}
+interface PricingStrategy {
+    Money price(Ticket ticket, Instant exitAt);
+}
+interface PaymentProcessor {
+    PaymentResult charge(Money amount, PaymentMethod method);
+}
+```
+
+A spot owns its occupancy as an `AtomicBoolean`, so claiming it is a single compare-and-set rather than a check followed by a write:
+
+```java
+final class ParkingSpot {
+    private final String id;
+    private final SpotSize size;
+    private final AtomicBoolean occupied = new AtomicBoolean(false);
+
+    boolean fits(Vehicle v) { return size.compareTo(v.minimumSize()) >= 0; }
+    boolean tryOccupy() { return occupied.compareAndSet(false, true); }   // exactly one caller ever sees true
+    void release() { occupied.set(false); }
+}
+```
+
+The default strategy walks sizes from exact fit upwards (`SpotSize.fromUpwards` is a two-line helper on the enum) and floors from the bottom, taking the first spot it can claim. A spot another gate grabbed a microsecond earlier fails the claim and the loop moves on:
+
+```java
+final class NearestFreeSpot implements SpotAllocationStrategy {
+    public Optional<ParkingSpot> allocate(Vehicle v, List<ParkingFloor> floors) {
+        for (SpotSize size : SpotSize.fromUpwards(v.minimumSize()))     // exact fit first, then larger
+            for (ParkingFloor floor : floors)                            // lowest floor first
+                for (ParkingSpot spot : floor.spotsOf(size))
+                    if (spot.tryOccupy()) return Optional.of(spot);      // claim while searching
+        return Optional.empty();
+    }
+}
+```
+
+The lot itself is short, because everything that varies has been pushed out of it:
+
+```java
+final class ParkingLot {
+    private final List<ParkingFloor> floors;
+    private final SpotAllocationStrategy allocation;
+    private final PricingStrategy pricing;
+    private final PaymentProcessor payments;
+    private final Clock clock;
+    private final ConcurrentHashMap<String, Ticket> activeTickets = new ConcurrentHashMap<>();
+
+    Ticket park(Vehicle vehicle) {
+        ParkingSpot spot = allocation.allocate(vehicle, floors)
+            .orElseThrow(() -> new LotFullException(vehicle.minimumSize()));
+        Ticket ticket = Ticket.issue(vehicle, spot, clock.instant());
+        activeTickets.put(ticket.id(), ticket);
+        return ticket;
+    }
+
+    Receipt exit(String ticketId, PaymentMethod method) {
+        Ticket ticket = activeTickets.get(ticketId);
+        if (ticket == null) throw new UnknownTicketException(ticketId);
+        Money due = pricing.price(ticket, clock.instant()).minus(ticket.amountPaid());
+        if (due.isPositive()) {
+            PaymentResult result = payments.charge(due, method);
+            if (!result.ok()) throw new PaymentDeclinedException(result.reason());   // nothing changes
+            ticket.recordPayment(due);
+        }
+        ticket.close(clock.instant());
+        ticket.spot().release();
+        activeTickets.remove(ticketId);
+        return Receipt.from(ticket);
+    }
+}
+```
+
+Pricing is the second strategy. The hourly rule rounds up and charges at least one hour; a weekend flat rate is another class, not another branch:
+
+```java
+final class HourlyPricing implements PricingStrategy {
+    private final Map<SpotSize, Money> ratePerHour;
+    public Money price(Ticket t, Instant exitAt) {
+        long minutes = Duration.between(t.entryAt(), exitAt).toMinutes();
+        long hours = Math.max(1, (minutes + 59) / 60);                  // round up, minimum one hour
+        return ratePerHour.get(t.spot().size()).times(hours);
+    }
+}
+```
+
+The `Clock` is injected rather than calling `Instant.now()`, so a test can fix the entry time and advance three hours without sleeping.
+
+## Interactions
+
+<Mermaid caption="Park, pay, exit. The lot never asks a spot whether it is free and then claims it; the strategy claims as it searches, and the exit path releases only after payment succeeds." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant D as Driver
+    participant E as Entry gate
+    participant L as ParkingLot
+    participant A as Allocation strategy
+    participant S as Spot F2-041
+    participant X as Exit gate
+    participant P as Pricing strategy
+    participant M as Payments
+    D->>E: arrives, plate scanned
+    E->>L: park(vehicle)
+    L->>A: allocate(vehicle, floors)
+    A->>S: tryOccupy()
+    S-->>A: true
+    A-->>L: spot F2-041
+    L-->>E: ticket T-1001, Issued
+    E-->>D: barrier opens, go to F2-041
+    Note over D: three hours later
+    D->>X: ticket T-1001, card
+    X->>L: exit(T-1001, card)
+    L->>P: price(ticket, now)
+    P-->>L: ₹120
+    L->>M: charge(₹120, card)
+    M-->>L: ok
+    L->>S: release()
+    L-->>X: receipt, ticket Closed
+    X-->>D: barrier opens
+`} />
+
+The ticket's lifecycle is small, but drawing it exposes the two transitions people forget: a paid ticket that misses the grace window owes money again, and a lost ticket is a state, not an exception.
+
+<Mermaid caption="Ticket lifecycle. Every edge case in the next section is a question about one of these arrows." chart={`stateDiagram-v2
+    [*] --> Issued: entry gate issues the ticket
+    Issued --> Paid: paid at kiosk or exit gate
+    Paid --> Closed: leaves within the grace window
+    Paid --> Issued: grace window missed, balance due
+    Issued --> Lost: driver reports the ticket lost
+    Lost --> Closed: flat fee paid after a plate check
+    Closed --> [*]
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Strategy | SpotAllocationStrategy | Operations wants nearest-first today and "fill upper floors first" next month; tests want a fake | There is one rule and it never changes |
+| Strategy | PricingStrategy | Hourly, daily cap, weekend flat and monthly pass change independently | Pricing is one line |
+| Static factory | Vehicle.from | One place turns the camera's category string into a type | The gate already produces a VehicleType |
+| Facade | ParkingLot | Gates see two methods and no floors, spots or strategies | You only ever have one caller |
+
+Three patterns are deliberately absent. The lot is not a Singleton: one instance created at start-up and handed to the gates is all "one" needs. The display board is not an Observer: it reads the per-floor counters when it refreshes. There is no Builder for Ticket: four required fields, no optional ones. Each absence is a sentence worth saying in the interview.
+
+## Edge cases and error handling
+
+- **Lot full for that size.** `allocate` returns `Optional.empty()`, `park` throws `LotFullException` carrying the size, the gate shows "Full for cars" and keeps the barrier down. Whether a car may take a large spot is strategy policy: `NearestFreeSpot` allows it, a stricter variant keeps the last few large spots for trucks.
+- **Lost ticket.** A second index maps plate to active ticket. Staff verify the plate, the ticket moves to Lost, the flat fee is paid and the ticket closes; if the "lost" ticket turns up later it is refused, because it is already Closed.
+- **Payment declined.** `exit` throws before touching the ticket or the spot, so the spot stays occupied, the ticket stays Issued and the driver tries another method. Nothing is half-done, because every write happens after the charge succeeds.
+- **Paid at the kiosk, then stuck in the exit queue.** `exit` charges `price - amountPaid`: zero inside the grace window, the overrun after it. The window length is a pricing concern, so it lives in the strategy.
+- **The same plate scanned twice while inside.** Almost always a camera misread: refuse the second entry and alert staff rather than ticket a vehicle that cannot be in two bays.
+- **Double release.** `release()` and `activeTickets.remove()` are idempotent, so a retried exit after a crash does no harm.
+
+<Callout type="analogy" title="The light above the bay">
+
+Many car parks hang a light above every bay: green when free, red when taken. The light is the truth about that bay; the "42 spaces free" sign at the entrance is a summary that lags a second behind. Here the `AtomicBoolean` on the spot is the light and the per-floor counters are the sign. Where the analogy fails: a real light turns red when a car arrives, but ours turns red when the gate *assigns* the bay, minutes earlier. That is the point: the claim must happen at decision time, or two gates can decide the same thing.
+
+</Callout>
+
+## Concurrency
+
+Name the shared mutable state first, as [Concurrency and thread safety](/learn/concurrency-basics) insists: spot occupancy, the active-ticket map and the per-floor counters, all touched by gate threads at once.
+
+The race that matters is two gates searching at the same moment, both seeing F2-041 free, both issuing tickets for it. A strategy that *finds* a free spot and returns it for the lot to *claim* has exactly this gap between check and act. Claiming inside the search closes it: `compareAndSet(false, true)` succeeds for one caller and fails for every other, and the loser's loop moves on. The ticket map is a `ConcurrentHashMap`, safe to call from any gate. The counters are `AtomicInteger`s, decremented on a successful claim and incremented on release; a display may read a value a few milliseconds stale, which is harmless because the spot flag, not the counter, decides who parks.
+
+The alternative is a `ReentrantLock` per floor held for the whole search, acquired with `lock()` and released in `finally`. It is easier to reason about, it finds the truly nearest spot rather than the nearest one still free at claim time, and it serialises only the gates competing for one floor. Either answer is fine if you say why. A lock on the whole lot is not, because eight gates take turns; nor is `volatile` on the flag, which fixes visibility and leaves the check-then-act gap open. No code path holds two locks, so there is no deadlock to order away.
+
+## Extensibility and trade-offs
+
+- **A new vehicle type.** Electric cars add an enum constant and a size mapping. Charging bays add a feature set to `ParkingSpot` and a strategy that filters on it. The lot does not change.
+- **A new pricing rule.** One class, plus a small selector mapping day, membership and spot size to a strategy.
+- **Reservations.** A claim with an expiry: the same `tryOccupy` on behalf of a future driver, released by a timer if nobody arrives. The seat holds in [Movie ticket booking](/learn/lld-movie-ticket-booking) are the same idea with a database behind them.
+- **Gates on several machines.** The spot flags must live where every gate can see them: the deep dive below.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| Compare-and-set per spot | No lock, gates never wait for each other | "Nearest" is best-effort under contention |
+| Strategy claims the spot | No check-then-act gap | The strategy is no longer a pure query |
+| Enum for vehicle types | Three lines, exhaustive switch | Behaviour per type, if it ever appears, has nowhere to live |
+| State in one process | Simple, fast, testable | A second machine needs a database and a different claim |
+
+<Callout type="interview" title="The two-minute version">
+
+"Entities are floors, spots, vehicles and tickets; the two decisions, which spot and what price, are Strategy interfaces injected into a ParkingLot facade. A spot owns an atomic occupied flag, and the allocation strategy claims it with compare-and-set while searching, so concurrent gates can never share a bay. The ticket is a state machine: issued, paid, closed, with lost as a state and a grace window after kiosk payment. Payment failure changes nothing, because the spot is released only after the charge succeeds. To add a vehicle type I add an enum constant; to add a pricing rule I add a class."
+
+</Callout>
+
+<DeepDive title="Go deeper: the same lot across several machines">
+
+Once gates run on separate machines, an `AtomicBoolean` in one process protects nothing. The spot table moves to a database and the claim becomes a conditional update: set `occupied = true` and the ticket id *where* the spot id matches *and* `occupied = false`, then check that exactly one row changed. The database serialises the gates the way compare-and-set did; zero rows changed is the failed `tryOccupy`. The search becomes a query for candidates followed by claim attempts, at one round trip per attempt under contention. If the lot must keep working while the database is unreachable, give each gate its own pool of spots, trading an even fill for availability.
+
+</DeepDive>

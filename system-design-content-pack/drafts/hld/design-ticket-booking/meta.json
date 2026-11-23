@@ -1,0 +1,115 @@
+{
+  "slug": "design-ticket-booking",
+  "title": "Design a ticket booking system",
+  "moduleId": "hld",
+  "level": "intermediate",
+  "minutes": 15,
+  "problem": "Two hundred thousand fans want five thousand seats in the same minute, and two of them tapping E7 together must not both get a ticket.",
+  "summary": "A booking system caches the seat map, queues the crowd in a virtual waiting room, and lets one database transaction decide each seat: a hold with a TTL taken under row locks, an idempotent confirm, and a payment timeout that releases the seats.",
+  "catTip": "I nap on the box with the seats, and nobody gets E7 until I say so. The map on the wall can run a second behind and the queue outside can be long, but the box answers once per seat.",
+  "recall": {
+    "q": "An IPL final puts 5,000 seats in front of 200,000 fans in one minute. What is the key design decision, and what hangs off it?",
+    "a": "Queue the people, cache the map, and let the database decide the seat. A waiting room admits fans at the rate holds can be made (free seats divided by seats per hold, with a margin for abandons), the seat map is a cached snapshot that may be a second stale, and each hold is one transaction under SELECT FOR UPDATE NOWAIT with a TTL, an idempotent confirm on the payment id, and a payment timeout that releases the seats."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Two fans read seat E7 as free in the same millisecond and both are told to pay, or a sale lets 200,000 people hammer the database for 2,000 holds and every show on the platform slows down.",
+    "tradeoffs": "Holds take seats off the market for ten minutes while carts are abandoned, the seat map is deliberately a second stale, fans wait in a queue even when the site is idle elsewhere, and the write path refuses holds during a database failover rather than risk two owners.",
+    "explainSimply": "A cloakroom has one attendant and a board of numbered hooks. Everyone in the hall can see the board, a steward lets people in a few at a time, and only the attendant hangs coats, one at a time. If you have not paid for your hook within ten minutes, the coat comes back off.",
+    "hint": "Separate the three crowds: who looks at the map, who is let in, and who is allowed to write a seat row, then ask which one the database must serve."
+  },
+  "meow": "Mrrp. Queue the humans, cache the map. One paw on the seat row, one transaction, one ticket. Ten minutes to pay or the seat comes back. Meow.",
+  "quiz": [
+    {
+      "prompt": "An IPL final releases 5,000 seats at noon and 200,000 fans arrive in the first minute. Where should the design put its first line of defence against the database being overwhelmed?",
+      "options": [
+        "Add PostgreSQL read replicas so seat-map reads stop competing with hold writes",
+        "A virtual waiting room that admits fans at roughly the rate holds can be created, with the seat map served from a cache and each admitted hold decided by the database under a row lock",
+        "Move seat holds to Redis SET NX with a TTL so the database only sees confirmed bookings",
+        "Optimistic locking with a version column so hold attempts never block each other"
+      ],
+      "answer": 1,
+      "explanation": "Only the waiting room changes the number of hold attempts the database must refuse, from about 3,300 a second to about 50, and the cache removes the 100k map reads a second. Redis holds are the strongest distractor: they are fast, but a failover loses every hold in flight and a multi-seat hold needs a script, and they still let 3,300 attempts a second through to something."
+    },
+    {
+      "prompt": "A fan's payment is authorised at 12:10:03 for a hold that expired at 12:10:00, and another fan has already held the same seats. What should the confirm step do?",
+      "options": [
+        "Confirm the paying fan and release the newer hold, because money has changed hands",
+        "Lock the hold row, find it released, answer 409 so the payment service cancels the authorisation, and treat this as rare because pay extends the hold before authorising",
+        "Automatically book different seats of the same price category for the paying fan",
+        "Return 500 so the payment service retries the confirm until the seats free up"
+      ],
+      "answer": 1,
+      "explanation": "The hold row in the database is the only decision that counts, and because pay extended the hold before any money moved, a lapsed hold at confirm time is the exception, not the rule. Confirming the payer anyway is the strongest distractor: it would override a hold the database already granted to someone else, which is the double booking the whole design exists to prevent."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: two booking servers each read seat E7 as free in the same millisecond during a sold-out drop. Decision and why?",
+      "a": "Let the database decide inside one transaction: SELECT the requested seats FOR UPDATE NOWAIT in seat-id order, treat a HELD seat whose expiry has passed as free, update them to HELD with a 10-minute expiry and insert the hold, and keep a unique constraint on booked seats as the backstop. NOWAIT fits because the loser wants another seat, not a place in line; a fixed lock order prevents deadlocks; optimistic version checks are cheaper on a quiet day but cause retry storms when 99 attempts in 100 will fail."
+    },
+    {
+      "q": "Problem: 200,000 fans for 2,000 possible holds in the first minute of a sale. Decision and why?",
+      "a": "A virtual waiting room: an arrival counter gives each fan a number, an admitted counter advances at a pace computed from the inventory (free seats divided by seats per hold, times a margin for abandoned holds, so about 3,000 fans in minute one and then roughly the rate of released and confirmed holds), and an admitted fan gets a signed token the gateway requires on POST /holds. The queue page compares two counters and never touches the database; if the queue store fails, fail open to a per-show rate limit so the sale continues degraded."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    {
+      "title": "PostgreSQL documentation, SELECT, \"The Locking Clause\"",
+      "url": "https://www.postgresql.org/docs/current/sql-select.html",
+      "accessed": "2026-11-22",
+      "supports": "FOR UPDATE locks the selected rows against concurrent updates; NOWAIT reports an error rather than waiting if a row cannot be locked immediately; SKIP LOCKED skips rows that cannot be locked and is suggested for multiple consumers on a queue-like table",
+      "status": "verified"
+    },
+    {
+      "title": "PostgreSQL documentation, \"Partial Indexes\", Example 11.3 Setting up a Partial Unique Index",
+      "url": "https://www.postgresql.org/docs/current/indexes-partial.html",
+      "accessed": "2026-11-22",
+      "supports": "a unique index with a WHERE predicate enforces uniqueness among the rows that satisfy the predicate only, used here for the insert-only hold variant",
+      "status": "verified"
+    },
+    {
+      "title": "Redis documentation, SET command",
+      "url": "https://redis.io/docs/latest/commands/set/",
+      "accessed": "2026-11-22",
+      "supports": "NX sets the key only if it does not exist and EX sets an expiry; SET resource NX EX is described as a simple lock whose release should compare a random token in a script, and the documentation says the pattern is discouraged in favour of Redlock",
+      "status": "verified"
+    },
+    {
+      "title": "Cloudflare Waiting Room documentation, overview",
+      "url": "https://developers.cloudflare.com/waiting-room/",
+      "accessed": "2026-11-22",
+      "supports": "a virtual waiting room sends excess visitors to a waiting page to protect origin servers from overload, tracks visitors' inflow and outflow, and shows estimated wait times",
+      "status": "verified"
+    },
+    {
+      "title": "Cloudflare Waiting Room documentation, \"Configuration settings\"",
+      "url": "https://developers.cloudflare.com/waiting-room/reference/configuration-settings/",
+      "accessed": "2026-11-22",
+      "supports": "the total active users cap and the new users per minute threshold, session duration of 1 to 30 minutes with a default of 5, session revocation by the origin through the Cf-Waiting-Room-Command: revoke response header, and a Turnstile challenge mode",
+      "status": "verified"
+    },
+    {
+      "title": "Stripe API reference, \"Idempotent requests\"",
+      "url": "https://docs.stripe.com/api/idempotent_requests",
+      "accessed": "2026-11-22",
+      "supports": "the Idempotency-Key header; the saved response is returned on a retry; keys may be pruned after 24 hours; a reused key with different parameters is an error; GET and DELETE need no key",
+      "status": "verified"
+    },
+    {
+      "title": "Stripe documentation, \"Place a hold on a payment method\"",
+      "url": "https://docs.stripe.com/payments/place-a-hold-on-a-payment-method",
+      "accessed": "2026-11-22",
+      "supports": "separate authorisation and capture with capture_method manual; an authorisation for an online card payment is usually valid for 7 days; cancelling before capture releases the held funds, which is what the design does when a hold lapses mid-payment",
+      "status": "verified"
+    },
+    {
+      "title": "Stripe documentation, \"How Payment Intents and Setup Intents work\" (lifecycle)",
+      "url": "https://docs.stripe.com/payments/paymentintents/lifecycle",
+      "accessed": "2026-11-22",
+      "supports": "requires_capture after authorisation when capturing separately; cancellation releases any held funds and cannot be undone",
+      "status": "verified"
+    }
+  ]
+}

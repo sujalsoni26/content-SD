@@ -1,0 +1,33 @@
+A **client** (a mobile app, a browser) sends a **request**. A **server** does the work, such as running logic and reading the database, and returns a **response**.
+
+The client always starts the conversation. This is the <mark>request–response model</mark>, and nearly everything on the web follows it.
+
+<Comparison>
+
+<ComparisonItem title="Client">
+
+- Mobile app, browser, another service
+- Shows the UI and collects input
+- Starts every exchange
+
+</ComparisonItem>
+
+<ComparisonItem title="Server">
+
+- A program on a machine you run
+- Holds the logic and talks to the database
+- Waits for requests and answers them
+
+</ComparisonItem>
+
+</Comparison>
+
+## Where every scaling problem begins
+
+Many clients share one server. When a thousand phones ask at once, that one server must do a thousand units of work. Every lesson that follows is a way to cope with that sharing: more servers, faster storage, smarter routing.
+
+<DeepDive title="Go deeper: is everything client–server?">
+
+No. In **peer-to-peer** systems (BitTorrent, WebRTC video calls) machines talk directly. Even then, a server usually helps peers find each other first: a tracker in BitTorrent, a signaling server in WebRTC. The client–server shape is the default because it gives one place to enforce rules, store data and apply security.
+
+</DeepDive>

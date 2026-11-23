@@ -1,0 +1,115 @@
+{
+  "slug": "design-pastebin",
+  "title": "Design Pastebin",
+  "moduleId": "hld",
+  "level": "intermediate",
+  "minutes": 14,
+  "problem": "A paste is a 10 KB to multi-megabyte text that must stay readable until it expires; the shortener's single table cannot hold 180 TB of bodies.",
+  "summary": "Pastebin is the shortener with large, expiring objects. Bodies go to object storage behind a CDN, metadata stays in SQL, expiry is enforced on every read while lifecycle rules and a sweeper clean up later, and size and rate limits keep storage from becoming abuse.",
+  "catTip": "Same door as the shortener, much bigger parcels. I keep the labels in the ledger and the parcels in the big cheap warehouse, and I read the expiry date before handing anything over. The warehouse clears old shelves whenever it gets round to it.",
+  "recall": {
+    "q": "Ten million 10 KB pastes a day for five years: which number dominates the design, and what two decisions does it force?",
+    "a": "About 180 TB of immutable bodies against a few TB of metadata. Bodies go to object storage behind a CDN and metadata stays in PostgreSQL; expiry is enforced on the read path with capped cache TTLs, while lifecycle rules and a batched sweeper delete later."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Putting 180 TB of text bodies in the metadata database makes every backup, replica and vacuum pay for blobs it never queries, and trusting deletion to enforce expiry serves expired pastes from caches and edges for days.",
+    "tradeoffs": "Two stores can disagree, so the design needs an orphan sweep, an upload path that confirms the body exists before the row goes live, and an unlisted-paste read path that cannot use the CDN.",
+    "explainSimply": "A pastebin is a left-luggage office. The desk keeps a small ledger of tags and expiry dates, the bags sit on cheap shelves in the back room, and the clerk checks the date before handing a bag over. Popular bags get copied to kiosks around town so the desk is never the queue.",
+    "hint": "Multiply pastes per day by bytes per paste by days of retention, then compare that with the metadata, and ask which store is built for each."
+  },
+  "meow": "Label in the ledger, parcel in the warehouse, expiry checked at the counter. Meow-tadata.",
+  "quiz": [
+    {
+      "prompt": "A paste set to expire at 12:00 is still readable at 12:03 through the CDN. The team proposes running the row sweeper every second. Which change actually fixes the cause?",
+      "options": [
+        "Run the sweeper every second and add a lifecycle rule on the bucket",
+        "Cap Redis TTLs and the CDN's s-maxage at the remaining lifetime and check expires_at on every origin read",
+        "Delete the body from object storage at exactly 12:00 with a scheduled job",
+        "Shorten the maximum expiry users may choose to one day"
+      ],
+      "answer": 1,
+      "explanation": "Copies already at the edge and in Redis outlive the row no matter how often rows or objects are deleted, so expiry has to be enforced where the read happens. The sweeper is the strongest distractor, but it only reclaims space; object-store lifecycle deletion can lag by days."
+    },
+    {
+      "prompt": "A teammate wants to store paste bodies in a TEXT column next to the metadata to keep one database. Under which condition is that the right call?",
+      "options": [
+        "Always: one store is simpler and PostgreSQL handles large text well",
+        "When the total body volume stays around a terabyte, so backups, replication and vacuum are not dominated by blobs the database never queries inside",
+        "Never: text bodies belong in object storage at any size",
+        "When reads are 10× writes, because object storage is slow for reads"
+      ],
+      "answer": 1,
+      "explanation": "The decision is driven by total body volume: around a terabyte one store is simpler, while at 180 TB every backup and replica pays SQL prices for immutable blobs read whole. 'Never' is the strongest distractor, but the shortener-sized version of this system is perfectly happy with bodies in SQL."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: 10M pastes a day for five years is about 180 TB of text bodies plus a few TB of metadata. Where does each live, and why not one database?",
+      "a": "Bodies in object storage (cheap per GB, eleven-nines durability, lifecycle deletion by prefix, CDN origin); metadata (~200 B per paste) in PostgreSQL for point lookups, unique custom URLs and indexes for expiry and owner lists. One database would spend backups, replication and vacuum on immutable blobs it never queries inside; the condition flips when total body volume is only around a terabyte."
+    },
+    {
+      "q": "Problem: pastes expire, but object-store lifecycle deletion can lag by days and cached copies live at the edge. How do you guarantee an expired paste is never served?",
+      "a": "Treat correctness and cleanup as separate jobs. Correctness: check expires_at on every origin read, cap Redis TTLs and CDN s-maxage at the remaining lifetime, purge on explicit delete. Cleanup: lifecycle rules per TTL prefix for bodies and a batched sweeper or partition drops for rows, which may run late without anyone noticing."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    {
+      "title": "AWS, \"Download and upload objects with presigned URLs\" (Amazon S3 User Guide)",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html",
+      "accessed": "2026-11-22",
+      "supports": "presigned URLs valid up to 7 days with IAM user credentials (SigV4), 1 minute to 12 hours from the console, no longer than temporary credentials when signed with them; expiry checked at request time; presigned URLs are bearer tokens; logs identify the signer",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Sharing objects with presigned URLs\" (Amazon S3 User Guide)",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html",
+      "accessed": "2026-11-22",
+      "supports": "console maximum of 12 hours and CLI/SDK maximum of 7 days for a presigned URL",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Expiring objects\" (Amazon S3 User Guide)",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-expire-general-considerations.html",
+      "accessed": "2026-11-22",
+      "supports": "S3 queues expired objects for asynchronous removal; there may be a delay between the expiration date and removal; no storage charge after expiry; lifecycle evaluates daily",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Setting an S3 Lifecycle configuration on a bucket\" (Amazon S3 User Guide), section Transition or expiration delay",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/how-to-set-lifecycle-configuration-intro.html",
+      "accessed": "2026-11-22",
+      "supports": "objects satisfying an expiration rule might not be deleted until days or even weeks later; billing changes when the object becomes eligible; AWS does not recommend relying on S3 Lifecycle alone for deletions that must complete by a fixed deadline",
+      "status": "verified"
+    },
+    {
+      "title": "AWS SDK for Python (Boto3), \"S3.Client.generate_presigned_post\"",
+      "url": "https://docs.aws.amazon.com/boto3/latest/reference/services/s3/client/generate_presigned_post.html",
+      "accessed": "2026-11-22",
+      "supports": "a POST policy may carry a content-length-range condition (example [\"content-length-range\", 2, 5]); default ExpiresIn of 3600 seconds",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Creating a POST Policy\" (Amazon S3 API Reference)",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-HTTPPOSTConstructPolicy.html",
+      "accessed": "2026-11-22",
+      "supports": "definition of the content-length-range condition as minimum and maximum upload size in bytes; the page could not be fetched on the access date, so the definition is cited from the Boto3 reference above",
+      "status": "reference"
+    },
+    {
+      "title": "PostgreSQL documentation, \"5.13 Table Partitioning\" (current)",
+      "url": "https://www.postgresql.org/docs/current/ddl-partitioning.html",
+      "accessed": "2026-11-22",
+      "supports": "dropping a partition with DROP TABLE or DETACH PARTITION is far faster than a bulk DELETE and avoids its VACUUM overhead; unique and primary key constraints on a partitioned table must include all partition key columns; rule of thumb that partitioning pays once a table exceeds the server's physical memory",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 9110, \"HTTP Semantics\" (June 2022), sections 15.5.14 and 10.2.3",
+      "url": "https://www.rfc-editor.org/rfc/rfc9110.html",
+      "accessed": "2026-11-22",
+      "supports": "413 Content Too Large: the server refuses to process a request whose content is larger than it is willing or able to process; Retry-After as seconds or an HTTP-date",
+      "status": "verified"
+    }
+  ]
+}

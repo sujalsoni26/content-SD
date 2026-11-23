@@ -1,0 +1,372 @@
+Chess is where the board-game design from [Snake and Ladder](/learn/lld-snake-and-ladder) stops being enough. That game had one movement rule and no illegal moves; chess has six piece types that move differently, three moves whose legality depends on earlier history, and one rule that depends on the whole board: you may not leave your own king in check. The decision that carries the design is to **split "where could this piece go" from "is this move legal"**. The first question is geometry and belongs to the piece, answered polymorphically by six small subclasses. The second is answered once, by the board, the same way for every piece: make the move provisionally, ask whether the king is attacked, take it back. Every accepted move is recorded as a Command carrying enough state to be reversed, so undo, replay and the legality test share one make-and-unmake mechanism.
+
+## Requirements and assumptions
+
+**Functional requirements**
+
+- Two players alternate, white first; a move from the player not on turn, or after the game is over, is refused.
+- Full movement rules for the six pieces, including castling, en passant and promotion with a choice of piece.
+- After every move, report check, checkmate or stalemate; allow draw claims under the fifty-move and threefold repetition rules, resignation and a draw by agreement.
+- Undo the last move; replay a finished game move by move.
+- Expose the legal moves for the side to move, so a user interface can highlight them and an engine can search them.
+
+**Assumptions**: the standard 8 by 8 board and starting position; one game per `Game` object; a move request arrives as a from-square, a to-square and an optional promotion piece; no clocks; a casual setting in which undo is allowed; a few hundred moves per game at most, so keeping the full history in memory costs nothing.
+
+**Out of scope**: network play, clocks, ratings, opening books, an engine (the legal-move list is its entry point, but the search is not designed here), notation import and export, and variants, which appear under extensibility.
+
+**Non-functional**: correctness first. A legality check may take milliseconds: humans move every few seconds, so generating every legal move and simulating each one is affordable. An engine would need far more, which is the deep dive.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility | Knows |
+| --- | --- | --- |
+| Game | Facade: turn order, applies and records moves, reports status, undoes and replays | board, players, side to move, history, status |
+| Board | Which piece stands where; the position facts the rules need (castling rights, en passant target, half-move clock); apply and revert a move; is a square attacked | grid, rights, target square, clock |
+| Square | A file and a rank, an immutable value | file, rank |
+| Piece and its six subclasses | Colour and movement geometry: candidate moves from a square, and whether the piece attacks a square | colour only |
+| Move | Immutable description of one move: from, to, type (normal, castle, en passant, promotion), captured piece, promotion piece | its five fields |
+| MoveCommand | Applies a Move to the Board and keeps what is needed to reverse it | move, undo record |
+| MoveHistory | Stack of executed commands; doubles as the replay list | a deque |
+| Player, GameStatus | A colour and a way of producing a move; the enum of outcomes | colour |
+
+Two placements decide the rest. First, a piece does not know where it stands; the board does. A piece holds nothing but its colour, so the six subclasses are immutable and shareable: one white knight object can stand on both knight squares. Second, the facts that rules need beyond geometry, whether each king and rook has moved, where an en passant capture may land, how many moves since the last capture or pawn move, belong to the *position*, not to a piece. The chess programming literature calls these the irreversible aspects of a position, and keeping them in one place is what makes undo tractable.
+
+## Class design
+
+<Mermaid caption="The Piece hierarchy owns geometry and nothing else. Queen, Rook and Bishop share a sliding generator and differ only in their directions. The Board owns the position facts and the two operations, apply and revert, that every other feature is built from." chart={`classDiagram
+    class Piece {
+        <<abstract>>
+        #Colour colour
+        +candidateMoves(Board board, Square from) List
+        +attacks(Board board, Square from, Square target) boolean
+    }
+    class SlidingPiece {
+        <<abstract>>
+        #directions() List
+    }
+    class King {
+        +candidateMoves(Board board, Square from) List
+        +attacks(Board board, Square from, Square target) boolean
+    }
+    class Queen
+    class Rook
+    class Bishop
+    class Knight {
+        +candidateMoves(Board board, Square from) List
+    }
+    class Pawn {
+        +candidateMoves(Board board, Square from) List
+        +attacks(Board board, Square from, Square target) boolean
+    }
+    class Board {
+        -CastlingRights rights
+        -Square enPassantTarget
+        -int halfMoveClock
+        +pieceAt(Square square) Piece
+        +apply(Move move) Undo
+        +revert(Move move, Undo undo)
+        +isAttacked(Square square, Colour by) boolean
+        +kingSquare(Colour colour) Square
+    }
+    class Square {
+        +int file
+        +int rank
+        +offset(int df, int dr) Square
+    }
+    SlidingPiece --|> Piece
+    Queen --|> SlidingPiece
+    Rook --|> SlidingPiece
+    Bishop --|> SlidingPiece
+    King --|> Piece
+    Knight --|> Piece
+    Pawn --|> Piece
+    Board o-- Piece : at most 32
+    Board ..> Square
+`} />
+
+The game layer sits above the board and never touches a square directly.
+
+<Mermaid caption="Game is the facade. A MoveCommand pairs a Move with the Undo record its execution produced, and MoveHistory is the stack the Command pattern needs." chart={`classDiagram
+    class Game {
+        -Colour toMove
+        -GameStatus status
+        +play(Player player, Move requested) MoveResult
+        +legalMoves(Colour side) List
+        +undo()
+        +replay(List moves) Game
+    }
+    class Player {
+        <<interface>>
+        +colour() Colour
+        +chooseMove(Game game) Move
+    }
+    class Move {
+        +Square from
+        +Square to
+        +MoveType type
+        +Piece captured
+        +PieceType promoteTo
+    }
+    class Command {
+        <<interface>>
+        +execute()
+        +undo()
+    }
+    class MoveCommand {
+        -Move move
+        -Undo undo
+    }
+    class MoveHistory {
+        +push(MoveCommand command)
+        +pop() MoveCommand
+        +moves() List
+    }
+    class Board
+    Game *-- Board
+    Game --> Player : two
+    Game *-- MoveHistory
+    MoveHistory o-- MoveCommand
+    MoveCommand ..|> Command
+    MoveCommand --> Move
+    MoveCommand --> Board
+`} />
+
+The hierarchy is right here because there are six types, each rule is a dozen lines, and the rules are fixed by the laws of the game. When piece rules come from configuration, or an engine needs bitboards, the generator becomes a Strategy keyed by piece type and the piece shrinks to data: the deep dive.
+
+## Key interfaces and methods
+
+Geometry first. `candidateMoves` returns **pseudo-legal** moves: every square the piece could reach by its own rule, ignoring whether the move exposes its own king. The default `attacks` reuses it, with two overrides: a pawn attacks diagonally but pushes straight, and a king's castling move is not an attack.
+
+```java
+enum Colour { WHITE, BLACK; Colour opponent() { return this == WHITE ? BLACK : WHITE; } }
+record Square(int file, int rank) {
+    boolean onBoard() { return file >= 0 && file < 8 && rank >= 0 && rank < 8; }
+    Square offset(int df, int dr) { return new Square(file + df, rank + dr); }
+}
+
+abstract class Piece {
+    protected final Colour colour;
+    Piece(Colour colour) { this.colour = colour; }
+    abstract List<Move> candidateMoves(Board board, Square from);   // pseudo-legal: geometry only
+    boolean attacks(Board board, Square from, Square target) {       // King and Pawn override this
+        return candidateMoves(board, from).stream().anyMatch(m -> m.to().equals(target));
+    }
+}
+
+final class Knight extends Piece {
+    private static final int[][] JUMPS = { {1, 2}, {2, 1}, {-1, 2}, {-2, 1}, {1, -2}, {2, -1}, {-1, -2}, {-2, -1} };
+    Knight(Colour c) { super(c); }
+    List<Move> candidateMoves(Board board, Square from) {
+        List<Move> out = new ArrayList<>();
+        for (int[] d : JUMPS) {
+            Square to = from.offset(d[0], d[1]);
+            if (to.onBoard() && !board.hasPieceOf(colour, to)) out.add(Move.normal(from, to, board.pieceAt(to)));
+        }
+        return out;
+    }
+}
+```
+
+A move is a value, and so is the record of what applying it destroyed. `apply` writes the move and returns that record; `revert` consumes it. The three special moves are explicit cases, because each changes a different second square.
+
+```java
+enum MoveType { NORMAL, CASTLE, EN_PASSANT, PROMOTION }
+record Move(Square from, Square to, MoveType type, Piece captured, PieceType promoteTo) {
+    static Move normal(Square from, Square to, Piece captured) { return new Move(from, to, MoveType.NORMAL, captured, null); }
+}
+record Undo(Piece moved, Piece captured, CastlingRights rights, Square enPassantTarget, int halfMoveClock) {}
+
+final class Board {
+    private final Piece[][] grid = new Piece[8][8];
+    private CastlingRights rights;        // four flags: may white or black still castle on each side
+    private Square enPassantTarget;       // set for exactly one move after a double pawn push, else null
+    private int halfMoveClock;            // moves since the last capture or pawn move, for the fifty-move rule
+
+    Undo apply(Move m) {
+        Undo undo = new Undo(pieceAt(m.from()), m.captured(), rights, enPassantTarget, halfMoveClock);
+        switch (m.type()) {
+            case CASTLE -> moveKingAndRook(m);                                        // two pieces move
+            case EN_PASSANT -> { place(m.to(), take(m.from())); clear(m.to().offset(0, undo.moved().colour() == Colour.WHITE ? -1 : 1)); }
+            case PROMOTION -> { take(m.from()); place(m.to(), PieceFactory.create(m.promoteTo(), undo.moved().colour())); }
+            default -> place(m.to(), take(m.from()));
+        }
+        rights = rights.after(m, undo.moved());
+        enPassantTarget = doublePushTarget(m, undo.moved());
+        halfMoveClock = (m.captured() != null || undo.moved() instanceof Pawn) ? 0 : halfMoveClock + 1;
+        return undo;
+    }
+    void revert(Move m, Undo u) { /* put u.moved back on from, u.captured back where it stood, restore the three facts */ }
+}
+```
+
+Legality is one loop, the same for every piece and every special case. The FIDE laws state the rule in one sentence, no piece may be moved that exposes or leaves its own king in check, and the code says exactly that: make, test, unmake.
+
+```java
+List<Move> legalMoves(Colour side) {
+    List<Move> legal = new ArrayList<>();
+    for (Square from : board.squaresOf(side))
+        for (Move m : board.pieceAt(from).candidateMoves(board, from)) {
+            Undo undo = board.apply(m);                                                   // make
+            if (!board.isAttacked(board.kingSquare(side), side.opponent())) legal.add(m);   // test
+            board.revert(m, undo);                                                        // unmake, always
+        }
+    return legal;
+}
+GameStatus statusFor(Colour side) {
+    boolean inCheck = board.isAttacked(board.kingSquare(side), side.opponent());
+    boolean noMoves = legalMoves(side).isEmpty();
+    if (inCheck) return noMoves ? GameStatus.CHECKMATE : GameStatus.CHECK;
+    return noMoves ? GameStatus.STALEMATE : GameStatus.ACTIVE;
+}
+```
+
+Castling is the one generator that needs the attack test itself, so it reads as a checklist:
+
+```text
+castling for side S towards rook R, generated inside King.candidateMoves:
+  rights still allow S to castle with R          (neither the king nor that rook has moved)
+  every square between king and rook is empty
+  the king is not in check now
+  the square the king crosses and the square it lands on are not attacked
+  -> Move(king square, two files towards R, CASTLE)   apply() also moves R next to the king
+```
+
+The command is thin because the board already knows how to reverse itself; `play` is a sequence of refusals followed by one mutation:
+
+```java
+final class MoveCommand implements Command {
+    private final Board board; private final Move move; private Undo undo;
+    MoveCommand(Board board, Move move) { this.board = board; this.move = move; }
+    public void execute() { undo = board.apply(move); }
+    public void undo() { board.revert(move, undo); }     // captured piece, rights, target square and clock come back
+}
+
+MoveResult play(Player player, Move requested) {
+    if (status.isOver()) throw new GameOverException(status);
+    if (player.colour() != toMove) throw new NotYourTurnException(toMove);
+    Move move = legalMoves(toMove).stream().filter(requested::sameSquaresAndPromotion).findFirst()
+        .orElseThrow(() -> new IllegalMoveException(requested));   // match the request, never trust it
+    MoveCommand command = new MoveCommand(board, move);
+    command.execute();
+    history.push(command);
+    toMove = toMove.opponent();
+    status = statusFor(toMove);
+    return new MoveResult(move, status);
+}
+```
+
+The `Move` that executes is the one the generator produced, so its captured piece and type are always right. Undo pops the command, calls `undo()`, flips `toMove` and recomputes the status. Replay is `play` in a loop over the recorded moves against a fresh board, which is also how a saved game loads.
+
+## Interactions
+
+<Mermaid caption="One move, white knight g1 to f3. The simulate-and-test loop runs for every candidate of every white piece and is shown here for the one that matches. Only after the match does a command execute for real." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant W as White player
+    participant G as Game
+    participant B as Board
+    participant P as Knight on g1
+    participant C as MoveCommand
+    participant H as MoveHistory
+    W->>G: play(white, g1 to f3)
+    G->>G: game active and white to move
+    G->>P: candidateMoves(board, g1)
+    P-->>G: g1 to f3, g1 to h3
+    G->>B: apply(g1 to f3)
+    B-->>G: undo record
+    G->>B: isAttacked(e1, BLACK)
+    B-->>G: false, so the move is legal
+    G->>B: revert(g1 to f3, undo)
+    G->>C: new MoveCommand(board, move)
+    G->>C: execute()
+    C->>B: apply(move)
+    G->>H: push(command)
+    G->>G: toMove is now BLACK, status is statusFor(BLACK)
+    G-->>W: MoveResult(move, ACTIVE)
+`} />
+
+The game itself is a small state machine. Check is a flag on whose turn it is rather than a state, because the player in check still has the move.
+
+<Mermaid caption="Turn handling as a lifecycle. Undo walks an arrow backwards: pop the command, revert the board, flip the side to move, and a finished game becomes active again." chart={`stateDiagram-v2
+    state "White to move" as WhiteToMove
+    state "Black to move" as BlackToMove
+    [*] --> WhiteToMove: standard setup
+    WhiteToMove --> BlackToMove: legal move, black can reply
+    BlackToMove --> WhiteToMove: legal move, white can reply
+    WhiteToMove --> Checkmate: black in check with no legal reply
+    BlackToMove --> Checkmate: white in check with no legal reply
+    WhiteToMove --> Stalemate: black has no legal move and is not in check
+    BlackToMove --> Stalemate: white has no legal move and is not in check
+    WhiteToMove --> Draw: claim under fifty-move or repetition rule, or agreement
+    BlackToMove --> Draw: claim under fifty-move or repetition rule, or agreement
+    WhiteToMove --> Resigned: white resigns
+    BlackToMove --> Resigned: black resigns
+    Checkmate --> [*]
+    Stalemate --> [*]
+    Draw --> [*]
+    Resigned --> [*]
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Polymorphism over a hierarchy | Piece.candidateMoves | Six fixed rules, each a dozen lines; a new piece is a new subclass and Game does not change | Rules come from configuration or an engine needs bitboards |
+| Command | MoveCommand with execute and undo | Undo, replay and the legality test all use one make-and-unmake | The game is never undone or replayed |
+| Memento | The Undo record | Captures what a move destroys: the captured piece, castling rights, en passant target, half-move clock | The whole board is copied per move instead |
+| Factory and Facade | PieceFactory.create, Game | One place maps a type and colour to a piece; a user interface calls play, undo and legalMoves and nothing else | Pieces are an enum; the only caller is the test |
+
+The absences matter as much. `GameStatus` is an enum, not the State pattern from the [behavioural patterns lesson](/learn/design-patterns-behavioural): the states have no behaviour beyond "is the game over". There is no Observer: `play` returns a `MoveResult` and the caller decides what to redraw. And `Player` is a Strategy in all but name: a human waits for input, an engine searches `legalMoves`, and `Game` cannot tell them apart.
+
+## Edge cases and error handling
+
+- **Not your turn, or game over.** Refused before anything changes, as distinct exceptions, because the user interface shows different messages.
+- **An illegal request.** Matched against the generated legal list, so a knight sent to a diagonal square gets `IllegalMoveException` and the board is untouched.
+- **Castling.** All four conditions in the checklist. Two subtleties: castling out of check is forbidden, and only the king's squares matter: the rook may be attacked, and in queenside castling the square next to the rook may be attacked.
+- **En passant.** Legal only on the move immediately after the double push, which is why `enPassantTarget` is overwritten on every `apply` and restored on every `revert`. The captured pawn is not on the destination square, so the pawn's generator sets `Move.captured` and `apply` clears the right square.
+- **Promotion.** The pawn's generator emits four moves for a promotion square, one per piece. A request without a choice matches none and is refused; defaulting to a queen is a user-interface decision. Undo restores the pawn, because `Undo.moved` is the pawn, not the new piece.
+- **The attack recursion.** With the default `attacks`, generating castling calls `isAttacked`, which asks the enemy king whether it attacks a square, which generates its castling, which calls `isAttacked`. The king overrides `attacks` with its eight adjacent squares and the recursion never starts.
+- **Checkmate versus stalemate.** Both are "no legal moves"; `statusFor` splits them on the attack test.
+- **Draw claims.** The half-move clock lives on the board and is restored by undo. Threefold repetition needs a position key that includes the side to move, castling rights and the en passant target, counted in a map as moves are made.
+- **Undo with no history** is a no-op; undo after a finished game reopens it. Say both out loud rather than discover them.
+
+<Callout type="analogy" title="The score sheet">
+
+Club players write every move on a score sheet. The sheet is the command log: replaying it from the starting position reproduces the game, and taking a move back is reading the last line backwards. Where the analogy fails: notation marks a capture with an x but not what was captured, and says nothing about castling rights or the en passant square. A human reconstructs those from the whole sheet; the code should not, so each `MoveCommand` carries them in its `Undo` record.
+
+</Callout>
+
+## Concurrency
+
+A game of chess is single-threaded by design, and the honest interview answer is to say so and then say what it implies. Turns alternate, so two moves never race. The one hazard is internal: `legalMoves` mutates the board while simulating, so a user-interface thread reading the board at that moment can see a knight on f3 that was never played. Name the shared mutable state, as [Concurrency and thread safety](/learn/concurrency-basics) asks: the live board during simulation. The fix is to publish an immutable snapshot of the position after each accepted move and let readers use that. A server hosting thousands of games keeps one `Game` per table and serialises calls on each, with a lock or a single-threaded executor per game; games share nothing, so there is no lock order to design and no deadlock.
+
+## Extensibility and trade-offs
+
+- **Board size.** `Square.onBoard` reads width and height from the board instead of the constant 8; pieces already move by offsets, so a 10 by 10 variant touches the board and the starting setup only.
+- **A new piece.** A chancellor that moves as a rook or a knight is one subclass whose `candidateMoves` concatenates the two generators, plus a line in the factory and in the promotion choices. `Game`, `Board` and the legality loop do not change: the pay-off of deciding legality in one place.
+- **Variants that change the rules.** Chess960 shuffles the back rank; the castling checklist reads rook squares from the setup rather than constants, and nothing else moves.
+- **An engine.** A `Player` that searches the legal-move tree with the same `apply` and `revert`. The simulate-and-test loop becomes its inner loop, and the design's one expensive choice starts to bite. Clocks, notation and spectators are a listener on `Game`: the Observer left out until something needs it.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| Simulate and test for legality | One rule covers every piece, pin, check and special move | Two board edits per candidate: nothing for humans, a problem for engines |
+| Position facts on the Board, snapshotted in Undo | Pieces are stateless and shareable | Every apply saves and every revert restores three extra fields |
+| A command stack for undo | Undo, replay and loading share one path | History grows with the game |
+| Class hierarchy for pieces | Readable, polymorphic, open to new pieces | Rules are fixed at compile time |
+
+<Callout type="interview" title="The two-minute version">
+
+"Pieces hold colour and geometry only: `candidateMoves` returns pseudo-legal moves polymorphically, with castling, en passant and promotion as explicit move types. The board holds the position facts and offers `apply`, which returns an undo record, and `revert`. Legality is one loop: make the move, test whether my king is attacked, unmake. Checkmate and stalemate are both no legal moves, split by check. Each executed move is a Command holding its undo record, so undo pops a stack and replay runs the list. To add a piece I add a subclass; to change the board size I change the board." Then ask whether they want the engine conversation.
+
+</Callout>
+
+<DeepDive title="Go deeper: a move generator per piece type">
+
+The alternative keeps the piece as plain data, a type and a colour, and moves the geometry into a `MoveGenerator` Strategy per type held in a map. Two things are gained. Variants become configuration: a fairy piece is a generator registered under a new type, loadable without recompiling. And generators can work on bitboards, 64-bit masks per piece type and colour, where a knight's moves are a table lookup and an attack test is a few bitwise operations. Engines go further and generate only legal moves, handling pins and checks during generation so the simulate-and-test loop leaves the hot path. The cost is readability and polymorphic dispatch: a map lookup replaces the method call, and generators share state through the board rather than through `this`. The condition that decides: if the rules are fixed and the caller is a human, six subclasses; if the rules come from outside or the caller is a search, generators.
+
+</DeepDive>

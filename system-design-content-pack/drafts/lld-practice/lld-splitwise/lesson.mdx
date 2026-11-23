@@ -1,0 +1,277 @@
+A **Splitwise-style expense sharer** records who paid for what, divides each expense among the people it was for, and keeps a **balance sheet** of who owes whom. Two decisions carry the design. A split is a **Strategy** that must produce shares summing *exactly* to the amount, in paise, with the rounding leftovers placed deterministically. And balances are reduced to a few payments by **debt simplification**, a greedy algorithm that is fast, correct about totals, and not guaranteed to use the fewest transfers, which you should be able to say out loud.
+
+## Requirements and assumptions
+
+**Functional**
+
+- Users and groups; a group has two or more members.
+- Add an expense: who paid, how much, who it was for, and how to split it: equally, by exact amounts, or by percentages.
+- Show balances: what each pair owes each other, and each member's net position in a group.
+- Settle up: record a payment from one member to another that reduces the debt.
+- Simplify debts within a group: fewer payments, the same net position for everyone.
+- Show history: every expense and settlement.
+
+**Non-functional**
+
+- Exact to the paisa: the shares of an expense always add up to its amount, and the net balances of a group always sum to zero.
+- History is immutable: an edit or a delete is a new entry that reverses an old one, so balances can be rebuilt from the ledger at any time.
+- Validation at the boundary with errors that say what is wrong ("shares sum to ₹999.99, expense is ₹1,000.00").
+
+**Assumptions and out of scope.** One currency (rupees, stored as integer paise); one payer per expense; groups of up to a few dozen people. Recurring expenses, currency conversion, receipts and reminders are out of scope.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility |
+| --- | --- |
+| `User`, `Group` | A group knows its members; a user is identity only |
+| `Expense` | Knows payer, amount, description, time and its shares; immutable once recorded; refuses to exist if the shares do not sum to the amount |
+| `Share` | A value: one user and the paise they owe for one expense |
+| `SplitStrategy` | Does the arithmetic from amount and participants to shares; one implementation per split type |
+| `Settlement` | Knows who paid whom how much; applied to balances like a reverse expense |
+| `ExpenseLedger` | Does append and replay; the only store, append-only |
+| `BalanceSheet` | Knows each member's net position and each pair's debt; derived by replaying the ledger |
+| `DebtSimplifier` | Does the reduction from net balances to a short list of transfers |
+| `ExpenseService` | Does the use cases: validate, split, append, update balances, answer queries |
+
+The sentence that shapes everything else is `Expense`'s: a record that cannot be constructed in an invalid state, so no later code re-checks it. Each split type is a class with one reason to change, the single responsibility rule from [SOLID principles](/learn/solid), so a new split type is a new class rather than a new branch.
+
+## Class design
+
+<Mermaid caption="Static structure. An expense owns its shares (filled diamond); a group aggregates users who exist without it (hollow diamond); the service creates expenses and asks a strategy for the shares." chart={`classDiagram
+    direction LR
+    class SplitStrategy {
+        <<interface>>
+        +split(long amountPaise, List participants) List
+    }
+    class EqualSplit
+    class ExactSplit {
+        -Map paiseByUser
+    }
+    class PercentSplit {
+        -Map basisPointsByUser
+    }
+    class Expense {
+        -UserId paidBy
+        -long amountPaise
+        -List shares
+        -Instant at
+    }
+    class Share {
+        -UserId user
+        -long paise
+    }
+    class BalanceSheet {
+        +apply(Expense e)
+        +apply(Settlement s)
+        +netOf(UserId u) long
+        +owes(UserId from, UserId to) long
+    }
+    class DebtSimplifier {
+        +simplify(Map netByUser) List
+    }
+    class ExpenseService {
+        +addExpense(GroupId g, UserId payer, long paise, List people, SplitStrategy how) Expense
+        +settle(GroupId g, UserId from, UserId to, long paise) Settlement
+        +simplify(GroupId g) List
+    }
+    class Group {
+        -List members
+    }
+    EqualSplit ..|> SplitStrategy
+    ExactSplit ..|> SplitStrategy
+    PercentSplit ..|> SplitStrategy
+    Expense "1" *-- "1..*" Share : made of
+    Expense "0..*" --> "1" User : paid by
+    Group "1" o-- "2..*" User : members
+    Group "1" --> "0..*" Expense : records
+    Settlement "0..*" --> "2" User : from and to
+    ExpenseService --> SplitStrategy : asks for shares
+    ExpenseService ..> Expense : creates
+    ExpenseService --> BalanceSheet : updates
+    ExpenseService --> DebtSimplifier : uses
+`} />
+
+Read the diamonds with the lifetime test from [Class relationships and UML](/learn/class-relationships-uml): delete an expense and its shares go with it; delete a group and its members remain. `ExpenseLedger` is left off the picture to stay within twelve classes; it sits between the service and the balance sheet.
+
+## Key interfaces and methods
+
+Money is a `long` number of paise. A `double` cannot hold most decimal fractions exactly: `new BigDecimal(0.1)` reveals the stored value as 0.1000000000000000055511151231257827021181583404541015625, and errors like that accumulate across a year of expenses. Integers make the "shares sum to the amount" check exact and cheap.
+
+```java
+record Share(UserId user, long paise) {}
+
+interface SplitStrategy {
+    List<Share> split(long amountPaise, List<UserId> participants);   // shares sum to amountPaise exactly
+}
+
+final class EqualSplit implements SplitStrategy {
+    public List<Share> split(long amount, List<UserId> people) {
+        long base = amount / people.size(), leftover = amount % people.size();  // 100000 / 3 = 33333, leftover 1
+        List<Share> out = new ArrayList<>();
+        for (int i = 0; i < people.size(); i++)
+            out.add(new Share(people.get(i), base + (i < leftover ? 1 : 0)));  // the first `leftover` people pay one paisa more
+        return out;
+    }
+}
+
+final class ExactSplit implements SplitStrategy {
+    private final Map<UserId, Long> paiseByUser;
+    public List<Share> split(long amount, List<UserId> people) {
+        long sum = paiseByUser.values().stream().mapToLong(Long::longValue).sum();
+        if (sum != amount) throw new InvalidSplit("shares sum to " + sum + ", expense is " + amount);
+        return people.stream().map(u -> new Share(u, paiseByUser.get(u))).toList();
+    }
+}
+```
+
+`PercentSplit` stores percentages as basis points (2,550 means 25.50%) so that they too are integers, requires them to sum to 10,000, takes the floor of each share and hands the leftover paise out one each in participant order. Equal split is *not* a special case of it: a third is 3,333.33 basis points, which is why `EqualSplit` is its own class.
+
+The expense checks its own invariant in a compact constructor, so nothing downstream can receive a bad one.
+
+```java
+record Expense(ExpenseId id, UserId paidBy, long amountPaise, List<Share> shares, Instant at) {
+    Expense {                                                   // compact constructor: the invariant cannot be bypassed
+        long sum = shares.stream().mapToLong(Share::paise).sum();
+        if (sum != amountPaise) throw new InvalidSplit("shares " + sum + " != amount " + amountPaise);
+        shares = List.copyOf(shares);                           // defensive copy: immutable from here on
+    }
+}
+```
+
+Balances are a fold over the ledger. The payer is credited the whole amount and every participant, the payer included, is debited their share.
+
+```java
+final class BalanceSheet {
+    private final Map<UserId, Long> net = new HashMap<>();      // positive: is owed, negative: owes
+    void apply(Expense e) {
+        add(e.paidBy(), e.amountPaise());
+        for (Share s : e.shares()) add(s.user(), -s.paise());
+    }
+    void apply(Settlement s) { add(s.from(), s.paise()); add(s.to(), -s.paise()); }
+    private void add(UserId u, long delta) { net.put(u, net.getOrDefault(u, 0L) + delta); }
+}
+```
+
+After every `apply` the values of `net` sum to zero, an invariant worth asserting in tests because it catches a broken strategy faster than the strategy's own tests.
+
+## Interactions
+
+<Mermaid caption="Adding an equal split. The strategy does the arithmetic, the record validates, and the ledger and balance sheet only ever see valid expenses." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client
+    participant S as ExpenseService
+    participant P as SplitStrategy
+    participant L as ExpenseLedger
+    participant B as BalanceSheet
+    C->>S: addExpense(Goa trip, Asha paid ₹1000 for Asha, Bala, Chetan, equal)
+    S->>P: split(100000, Asha, Bala, Chetan)
+    P-->>S: 33334, 33333, 33333
+    Note over S: new Expense checks the shares sum to 100000
+    alt shares valid
+        S->>L: append(expense)
+        S->>B: apply(expense)
+        Note over B: Asha +66666, Bala -33333, Chetan -33333
+        S-->>C: expense recorded
+    else shares do not sum to the amount
+        S-->>C: InvalidSplit with the difference
+    end
+`} />
+
+Simplification runs on demand from the net balances. The algorithm is the greedy one: settle the largest creditor against the largest debtor, and repeat.
+
+```text
+simplify(net):                      # net[u] > 0 is owed money, net[u] < 0 owes it, sum(net) == 0
+    creditors = max-heap of (net[u], u) for net[u] > 0
+    debtors   = max-heap of (-net[u], u) for net[u] < 0
+    transfers = []
+    while creditors and debtors are both non-empty:
+        (c, cu) = pop creditors     # the person owed the most
+        (d, du) = pop debtors       # the person owing the most
+        x = min(c, d)
+        transfers.append(du pays cu x)
+        if c - x > 0: push (c - x, cu) onto creditors
+        if d - x > 0: push (d - x, du) onto debtors
+    return transfers                # at most n - 1 transfers for n people with a non-zero balance
+```
+
+<Mermaid caption="The greedy loop. Each round zeroes at least one person, so it ends within n - 1 transfers." chart={`flowchart TD
+    A["Net balance per person, summing to zero"] --> B["Max-heap of creditors and max-heap of debtors"]
+    B --> C{"Both heaps non-empty?"}
+    C -->|"no"| Z["Done: at most n - 1 transfers"]
+    C -->|"yes"| D["Pop the largest creditor c and the largest debtor d"]
+    D --> E["x = min of c and d, record that d pays c the amount x"]
+    E --> F["Push back whichever of c and d still has a balance"]
+    F --> C
+`} />
+
+Every round zeroes at least one person, so there are at most n − 1 transfers and the loop is O(n log n) with heaps. The result also moves the least total money possible: every transfer goes straight from a debtor to a creditor, and Verhoeff shows that any such bipartite settlement has minimum weight. What it does not guarantee is the fewest *transfers*. Take Asha +400, Bala +300, Chetan −200, Deepa −200, Esha −300. Greedy pairs Asha with Esha first (300), leaving Asha +100, and ends with four transfers; but Esha pays Bala 300, Chetan pays Asha 200 and Deepa pays Asha 200 settles everything in three. Finding the minimum means partitioning people into as many zero-sum groups as possible, which contains the subset-sum problem, so exact minimisation is NP-hard. For a group of friends the greedy answer is the one to ship.
+
+<Callout type="analogy" title="Passing the IOU along">
+
+Anna owes Bob ₹200 and Bob owes Cathy ₹200. Bob hands Anna's IOU to Cathy, and now Anna pays Cathy directly: nobody's net position changed and one payment disappeared. That is all simplification does. Where the analogy fails: in life an IOU from an unreliable friend is worth less than one from a reliable one, and simplification treats every rupee owed as equal. Splitwise makes it a per-group setting for exactly that reason, and its own description of the feature promises only two things: everyone's net amount is unchanged and nobody owes more in total than before.
+
+</Callout>
+
+## Design patterns used and why
+
+- **Strategy** for the split. Three interchangeable algorithms chosen per expense, each three to ten lines and tested alone. The alternative, an enum with a `switch` inside `Expense`, puts every split rule in one method and reopens it for each new type.
+- **Immutable records as the unit of truth.** `Share` and `Expense` cannot change after creation and the ledger is append-only; corrections are new entries. Not a GoF pattern, but the decision that makes balances rebuildable and history trustworthy, the same idea as [event sourcing](/learn/event-sourcing) in miniature.
+- **A static factory** such as `SplitStrategy.of(type, params)` turns API input into a strategy. Call it what it is: a factory method in the small sense, not the GoF Factory Method with subclasses.
+- **Observer, later.** `ExpenseAdded` events for notifications, so the service never learns about email or push.
+- **Not used.** No State pattern: nothing here has a lifecycle. No Singleton for the ledger; it is created once and injected.
+
+## Edge cases and error handling
+
+| Case | Decision |
+| --- | --- |
+| ₹1,000 split three ways | 33334, 33333, 33333 paise, leftover paisa to the first participant in a fixed order, so a replay gives the same answer |
+| Exact amounts do not add up | Reject with the difference; never adjust silently |
+| Percentages do not sum to 100 | Reject; basis points must total 10,000 |
+| Participant not in the group, duplicate participants, nobody in the list | Reject in the constructor with the offending ids |
+| Amount zero or negative | Reject |
+| Payer is also a participant | The normal case: their share cancels part of what they are owed |
+| Edit or delete an expense | Append a reversing entry (and, for an edit, the corrected expense); the history shows both |
+| Settle more than is owed | Reject by default, because the excess would create a debt in the other direction |
+| Simplify changes who you pay | Opt-in per group: a member can be told to pay someone they never dealt with directly |
+| Same expense submitted twice | The client generates the expense id; the ledger ignores a duplicate id, so retries are safe |
+
+Failures are unchecked exceptions named for the rule they break, `InvalidSplit`, `NotAMember`, `InvalidAmount`, thrown from constructors and strategies and turned into responses at the boundary, as the [error handling](/learn/error-handling) lesson sets out; each carries the numbers the user needs to fix the input.
+
+## Concurrency
+
+Two members add expenses to the same group at once. Because the ledger is append-only and net balances are a sum, order does not matter: replaying the ledger in any order gives the same `net`. If balances are cached rather than recomputed, update the cache under a per-group lock or with a version column, exactly as the seat hold does in [Movie ticket booking](/learn/lld-movie-ticket-booking). Simplification reads a snapshot of the balances and never writes, so it needs no lock at all. Client-generated ids make a retried `addExpense` idempotent.
+
+## Extensibility and trade-offs
+
+- **New split types** (by shares, 2:1:1; by item on a bill) are new `SplitStrategy` classes; nothing else changes.
+- **Multiple payers**: `Expense` gains a list of payments, `BalanceSheet.apply` credits each payer, strategies stay untouched.
+- **Currencies**: a `Money(long minor, Currency)` value, one balance sheet per currency, and a rule that an expense never mixes two.
+
+| Decision | You gain | You pay |
+| --- | --- | --- |
+| Integer paise, no `double` | Exact sums, trivial equality | A `BigDecimal` with explicit scale and rounding mode is still needed for interest or three-decimal currencies |
+| Derive balances from the ledger | Always consistent, trivially auditable | Replay cost grows with history, so cache per group |
+| Greedy simplification | Fast, minimum total money moved | Not always the fewest transfers; exact search is exponential in group size |
+| Strategy classes | Each split tested alone, new types without edits | More files than an enum with a switch for a fixed set of three |
+
+If you do reach for `BigDecimal`, two rules from its documentation: `divide` without a rounding mode throws `ArithmeticException` when the quotient does not terminate, as ₹10 by 3 does, so always pass a scale and a `RoundingMode`; and `HALF_EVEN`, banker's rounding, is the mode that statistically minimises cumulative error over many operations, while `HALF_UP` is the one taught in school.
+
+<Callout type="interview" title="The two-minute version">
+
+"Money is a long in paise. An expense is an immutable record whose shares must sum to the amount, checked in its constructor; a SplitStrategy produces the shares, and equal split gives the leftover paise to the first participants in a fixed order. The ledger is append-only, balances are a fold over it, and corrections are reversing entries. Simplify debts is greedy: largest creditor against largest debtor, at most n minus one transfers, minimum total money moved, but not guaranteed the fewest transfers, because the exact version is NP-hard." Then offer the five-person counter-example if they ask.
+
+</Callout>
+
+<DeepDive title="Go deeper: exact minimisation">
+
+Verhoeff's analysis frames the settlement as a graph: people are nodes, transfers are arrows, and any acyclic settlement is a forest in which the number of arrows equals the number of people minus the number of trees. Each tree's balances sum to zero, so minimising transfers means partitioning the group into the largest possible number of zero-sum subsets. Even the special case with only two debtors asks whether some subset of the creditors sums exactly to one debtor's balance, which is the subset-sum problem; the general case reduces from 3-Partition, which is NP-complete in the strong sense, so a dynamic programme over the amounts helps only when the amounts are small. For a dozen people a brute-force search over partitions is feasible and the greedy result is a fine starting point; beyond that, nobody waits for the exact answer.
+
+</DeepDive>
+
+<mark>Shares that sum exactly, in paise, from a Strategy; balances derived from an append-only ledger; a greedy simplification whose limits you can state.</mark>

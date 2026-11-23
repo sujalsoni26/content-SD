@@ -1,0 +1,26 @@
+{
+  "slug": "advanced-revision",
+  "title": "Revision: the advanced tracks",
+  "moduleId": "architecture",
+  "level": "basic",
+  "minutes": 8,
+  "problem": "You have read seven advanced modules, and the next interviewer will name a problem, not a lesson.",
+  "summary": "Flashcards for modules 7 to 13: each card names a problem from the distributed, database, streaming, reliability, security, infrastructure and architecture tracks. Answer with the building block, flip to check, and use the table to find the lesson to reread.",
+  "catTip": "I revise the way I hunt: the problem appears, and the answer must already be in my paws. If I have to think about it, the mouse has left. Flip the card, then say the next one faster.",
+  "recall": {
+    "q": "Problem: \"two nodes both believe they are the leader.\" Which building block, and what stops the old leader doing damage?",
+    "a": "Leader election with fencing: each new leader gets a higher token, and the storage layer rejects writes carrying an older one, so a stale leader cannot corrupt anything even if it keeps running."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without recall practice you recognise every advanced block on the page and still freeze when an interviewer describes the problem and waits, because reading built recognition, not retrieval.",
+    "tradeoffs": "Flashcards are slower and less comfortable than rereading, and the cards you miss keep returning until you know them; that discomfort is the mechanism.",
+    "explainSimply": "This page is a deck of cards. Each one describes something going wrong in a big system, and you say which tool fixes it before turning the card over. The table below the deck shows every answer with the lesson it came from.",
+    "hint": "Think about what a new leader needs that an old one cannot forge."
+  },
+  "meow": "Problem in, block out, faster each lap. Seven tracks, one deck, whiskers up if you knew it.",
+  "quiz": [],
+  "cards": [],
+  "glossary": [],
+  "sources": []
+}

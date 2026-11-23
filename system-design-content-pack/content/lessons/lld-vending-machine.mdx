@@ -1,0 +1,310 @@
+A vending machine is small enough to finish in an interview and awkward enough to expose the mistake that matters: letting *what happens when you press a button* depend on a status field that six methods each check. The decision that carries this case study is to **make each state of the machine a class and have the machine delegate every event to its current state**, the State pattern from the [behavioural patterns lesson](/learn/design-patterns-behavioural). Inventory, cash and the in-flight sale live outside the states, so the state objects hold no data and can be swapped freely.
+
+## Requirements and assumptions
+
+**Functional requirements**
+
+- Up to 40 slots, each holding one product with a price and a count. A keypad selects a slot code such as `B3`.
+- The machine accepts coins of ₹1, ₹2, ₹5 and ₹10 and notes of ₹10, ₹20 and ₹50, and shows the running balance.
+- When the balance covers the price it dispenses the item, returns change and keeps the sale. Cancel refunds exactly what was inserted.
+- It refuses a sale it cannot make change for and shows "exact change only".
+- An operator can restock, collect cash and read the sales count.
+
+**Assumptions**: one customer at a time, because the coin slot and keypad are physically single-file; money as integer paise, never floating point; fixed prices per slot; an abandoned balance is refunded after 60 seconds idle.
+
+**Out of scope**: card and wallet payments (an interface is left for them), remote telemetry, multi-item purchases, refrigeration.
+
+**Non-functional**: two invariants outrank everything else. The machine never dispenses without being paid, and never keeps money without dispensing or refunding. It should also come back to a sane state after a power cut mid-sale.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility | Holds |
+| --- | --- | --- |
+| VendingMachine | The context: owns the current state and delegates insert, select and cancel to it; gives states access to the parts below | state, inventory, register, dispenser, display, transaction |
+| VendingState | What each event does *in this state*, and which state comes next | nothing |
+| IdleState, HasMoneyState, DispensingState, OutOfServiceState | One class per state | nothing |
+| Inventory | Slot code to product and count; reserve and release one unit; mark a slot faulty | slots |
+| Product | Code, name, price | immutable data |
+| CashRegister | Coin and note counts; accepts money, answers "can I make this change", pays out | counts per denomination |
+| Transaction | The in-flight sale: what has been inserted and which product was chosen | inserted, product |
+| Dispenser | Hardware port: eject one unit, pay out coins, return a rejected coin | the motor driver |
+| Display | Hardware port: messages to the customer | the screen driver |
+
+The split that people miss is `Transaction`. The balance is created by an insert while Idle, grown while HasMoney and consumed while Dispensing, so no single state can own it. Data that must survive a transition belongs to the context, and states stay interchangeable rule books.
+
+## Class design
+
+<Mermaid caption="The machine holds one VendingState and delegates to it. States reach the inventory, register and hardware ports only through the machine, and return the next state." chart={`classDiagram
+    class VendingMachine {
+        -VendingState state
+        -Transaction tx
+        +insert(Money money)
+        +select(String slot)
+        +cancel()
+    }
+    class VendingState {
+        <<interface>>
+        +insert(Money money, VendingMachine vm) VendingState
+        +select(String slot, VendingMachine vm) VendingState
+        +cancel(VendingMachine vm) VendingState
+    }
+    class IdleState
+    class HasMoneyState
+    class DispensingState {
+        +run(VendingMachine vm) VendingState
+    }
+    class OutOfServiceState
+    class Inventory {
+        +product(String slot) Optional
+        +count(String slot) int
+        +reserve(String slot)
+        +release(String slot)
+        +markFaulty(String slot)
+    }
+    class Product {
+        +String code
+        +String name
+        +Money price
+    }
+    class CashRegister {
+        +accepts(Money money) boolean
+        +canMakeChange(Money amount) boolean
+        +accept(Money money)
+        +payOut(Money amount)
+    }
+    class Transaction {
+        +inserted() Money
+        +add(Money money)
+        +choose(Product product)
+    }
+    class Dispenser {
+        <<interface>>
+        +eject(String slot)
+        +payOut(Money amount)
+        +returnCoin(Money money)
+    }
+    VendingMachine --> VendingState : current
+    VendingMachine *-- Inventory
+    VendingMachine *-- CashRegister
+    VendingMachine *-- Transaction
+    VendingMachine --> Dispenser : port
+    IdleState ..|> VendingState
+    HasMoneyState ..|> VendingState
+    DispensingState ..|> VendingState
+    OutOfServiceState ..|> VendingState
+    Inventory o-- Product
+`} />
+
+`Dispenser` and `Display` are interfaces because the real ones are motors and a screen. Tests pass a fake dispenser that records what it was asked to eject, and a fake that throws on the third eject exercises the failure path without a screwdriver.
+
+## Key interfaces and methods
+
+Each state method takes the event's data and the machine, and returns the state the machine should be in afterwards. The machine's three public methods are the only entry points, and they are `synchronized` so that one event is processed at a time:
+
+```java
+interface VendingState {
+    VendingState insert(Money money, VendingMachine vm);
+    VendingState select(String slot, VendingMachine vm);
+    VendingState cancel(VendingMachine vm);
+}
+
+final class VendingMachine {
+    private VendingState state = new IdleState();
+    private final Inventory inventory;   private final CashRegister register;
+    private final Dispenser dispenser;   private final Display display;
+    private Transaction tx = Transaction.empty();
+
+    synchronized void insert(Money m) { state = state.insert(m, this); }   // one event at a time
+    synchronized void select(String slot) { state = state.select(slot, this); }
+    synchronized void cancel() { state = state.cancel(this); }
+    // package-private accessors for the states: inventory(), register(), dispenser(), display(), transaction()
+}
+```
+
+`HasMoneyState` is where the rules live, and the order of its checks is the design. Everything that can refuse the sale runs before anything irreversible:
+
+```java
+final class HasMoneyState implements VendingState {
+    public VendingState insert(Money m, VendingMachine vm) {
+        if (!vm.register().accepts(m)) { vm.dispenser().returnCoin(m); return this; }   // foreign coin
+        vm.transaction().add(m);
+        vm.display().show("Balance " + vm.transaction().inserted());
+        return this;
+    }
+    public VendingState select(String slot, VendingMachine vm) {
+        Product p = vm.inventory().product(slot).orElse(null);
+        Money balance = vm.transaction().inserted();
+        if (p == null || vm.inventory().count(slot) == 0) { vm.display().show("Out of stock"); return this; }
+        if (balance.lessThan(p.price())) { vm.display().show("Insert " + p.price().minus(balance)); return this; }
+        if (!vm.register().canMakeChange(balance.minus(p.price()))) { vm.display().show("Exact change only"); return this; }
+        vm.transaction().choose(p);
+        return new DispensingState().run(vm);     // every check passed; now, and only now, act
+    }
+    public VendingState cancel(VendingMachine vm) {
+        vm.dispenser().payOut(vm.transaction().inserted());   // refund exactly what came in
+        vm.clearTransaction();
+        return new IdleState();
+    }
+}
+```
+
+`DispensingState.run` is a transaction written by hand. The steps are ordered so that the one step nobody can undo, the physical eject, happens after the step that protects stock and before the steps that move money:
+
+```java
+final class DispensingState implements VendingState {
+    VendingState run(VendingMachine vm) {
+        Transaction tx = vm.transaction();
+        Product p = tx.product();
+        vm.inventory().reserve(p.code());                          // 1. take the unit off the books
+        try {
+            vm.dispenser().eject(p.code());                        // 2. the irreversible step
+            vm.register().accept(tx.inserted());                   // 3. the money is now ours
+            vm.register().payOut(tx.inserted().minus(p.price()));  // 4. change, already proven makeable
+        } catch (DispenseFailure e) {
+            vm.inventory().release(p.code());                      // compensate step 1
+            vm.inventory().markFaulty(p.code());
+            vm.dispenser().payOut(tx.inserted());                  // full refund: nothing was sold
+        }
+        vm.clearTransaction();
+        return vm.inventory().isEmpty() ? new OutOfServiceState() : new IdleState();
+    }
+    // insert, select and cancel return this: the machine is busy and a coin inserted now is returned
+}
+```
+
+Change-making is the register's job. With the denominations above, taking the largest coin that fits, repeatedly, gives the fewest coins; this greedy rule is optimal for *canonical* coin systems, which many real coin sets, including the one above, are, but not for arbitrary ones. The register has a further constraint: it can only pay out coins it actually holds.
+
+```text
+makeChange(amount, counts):                 # counts: coins in the register by denomination
+  plan = empty
+  for d in denominations, largest first:
+    take = min(amount div d, counts[d])
+    if take > 0: plan[d] = take, amount = amount - take * d
+  return amount == 0 ? plan : NONE          # NONE means "exact change only"
+```
+
+The finite register can defeat greedy even in a canonical system: to pay ₹6 with one ₹5, no ₹1 and three ₹2 coins, greedy takes the ₹5 and fails, while three ₹2 coins would do. Amounts are small, so a bounded search over the denominations costs nothing and is the honest implementation; `canMakeChange` and `payOut` must use the same algorithm, or the check will approve change the pay-out cannot assemble.
+
+## Interactions
+
+<Mermaid caption="A ₹15 sale paid with ₹20. The state object does all the deciding; the machine only holds the lock and stores the returned state." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Customer
+    participant M as VendingMachine
+    participant S as Current state
+    participant I as Inventory
+    participant R as CashRegister
+    participant D as Dispenser
+    C->>M: insert ₹20
+    M->>S: insert(₹20) on Idle
+    S-->>M: HasMoney, balance ₹20
+    C->>M: select B3, priced ₹15
+    M->>S: select(B3) on HasMoney
+    S->>I: count(B3)
+    I-->>S: 4
+    S->>R: canMakeChange(₹5)
+    R-->>S: yes
+    Note over S: enters Dispensing
+    S->>I: reserve(B3)
+    S->>D: eject(B3)
+    D-->>S: ok
+    S->>R: accept ₹20, pay out ₹5
+    S-->>M: Idle
+    M-->>C: item and ₹5 change
+`} />
+
+<Mermaid caption="The machine's lifecycle. Out of service is a state of the whole machine; a single empty slot is an inventory check inside HasMoney, not a state." chart={`stateDiagram-v2
+    state "Has money" as HasMoney
+    state "Out of service" as OutOfService
+    [*] --> Idle
+    Idle --> Idle: select shows the price
+    Idle --> HasMoney: insert accepted
+    HasMoney --> HasMoney: insert, or select refused for stock, balance or change
+    HasMoney --> Idle: cancel or idle timeout, full refund
+    HasMoney --> Dispensing: select passes every check
+    Dispensing --> Idle: item dispensed, change paid out
+    Dispensing --> Idle: eject failed, full refund, slot marked faulty
+    Dispensing --> OutOfService: last unit sold, every slot now empty
+    Idle --> OutOfService: every slot empty or hardware fault
+    OutOfService --> Idle: restocked or serviced
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| State | VendingState and its four classes | Four states, three events, and the behaviour per state is substantial: refusals, compensation, refunds. Each state's rules sit in one class | The states only decide allowed or not allowed; then an enum and a transition table are lighter (see the deep dive) |
+| Ports (interfaces) for hardware | Dispenser, Display | Tests run without motors, and a vendor change touches one adapter | There is one hardware target and no tests, which is never |
+
+Patterns deliberately not used: the machine is not a Singleton (one instance, injected); events are not Command objects, which would earn their place only if we wanted to journal and replay them; change-making is not a Strategy, because there is one algorithm. Say the absences too.
+
+## Edge cases and error handling
+
+- **Insufficient balance.** Stay in HasMoney, show the shortfall. No money moves.
+- **Out of stock for the chosen slot.** Stay in HasMoney, show the message, let the customer choose another slot or cancel. A machine-wide OutOfService state is entered only when every slot is empty or the hardware faults.
+- **Insufficient change.** Refuse before dispensing. The balance stays available to spend on something else or to refund, and the display says "exact change only" so the next customer knows.
+- **Cancel.** Refund exactly what was inserted, read from the transaction, never a recomputed amount.
+- **Rejected or foreign coin.** The register does not recognise it, the dispenser returns it, the balance is unchanged.
+- **Eject fails.** The reservation is released, the slot is marked faulty so it is skipped until serviced, the customer is refunded in full. The sale never happened.
+- **Coin inserted during dispensing.** Returned, because Dispensing is a busy state.
+- **Over-insertion.** Above a cap such as ₹500 the register stops accepting, to limit what a refund has to pay out.
+- **Idle timeout.** A `ScheduledExecutorService` schedules a refund 60 seconds after the last event and the returned `ScheduledFuture` is cancelled by the next event; the task simply calls `cancel()`, so it goes through the same lock and the same state logic as a button press.
+- **Power loss mid-sale.** Before step 2 the machine appends the transaction to a small journal on flash. On boot, a journal entry stuck at "dispensing" with no completion record means the safe action is to refund, unless a drop sensor confirms the item fell.
+
+<Callout type="analogy" title="The shopkeeper and the change drawer">
+
+A careful shopkeeper checks the change drawer *before* taking your ₹500 note for a ₹15 item, not after. If the drawer is short, they say so and you decide whether to pay another way. The machine's `select` does the same: stock, balance and change are all checked while nothing has happened yet. Where the analogy fails: a shopkeeper can take the item back from your hand. A motor cannot, which is why the eject is the step everything else is arranged around.
+
+</Callout>
+
+## Concurrency
+
+The machine serves one customer at a time, but its events still arrive from several threads: the coin acceptor's driver, the keypad's driver, the operator console and the idle-timeout scheduler. The shared mutable state is the current state reference, the transaction, the inventory and the register, and all of it is reached through the three `synchronized` methods on `VendingMachine`. Every object has an intrinsic lock; a `synchronized` method acquires its object's lock on entry and releases it on return, including a return caused by an exception, and the lock is reentrant, so a state calling back into the machine while handling an event is fine. One event runs to completion, the next sees the state it left behind.
+
+That gives a simple argument about the awkward race. The timeout fires in the same instant the customer presses select. Whichever thread takes the lock first wins: if the timeout wins, the refund happens and select arrives in Idle, where it only shows a price; if select wins, the sale completes and the timeout's `cancel()` arrives in Idle, where it is a no-op. There is no interleaving in which the customer is both refunded and served.
+
+The cost is that the lock is held while the motor turns. For a two-second eject that means the keypad is "busy" for two seconds, which is what real machines do. If the hardware reports completion asynchronously instead, Dispensing becomes a genuine waiting state: `run` starts the eject and returns `this`, and a completion callback performs steps 3 and 4 under the same lock.
+
+## Extensibility and trade-offs
+
+- **Card or wallet payments.** A `PaymentSource` behind the balance: cash is "inserted", a card is "authorised", and HasMoney does not care which. A refund becomes a reversal through the same source.
+- **Promotions.** A price is read through a small pricing policy at selection time; the state code does not change.
+- **Multi-item purchases.** The transaction holds a list, and `run` becomes a loop with per-item compensation, which is where you would want Command objects and a journal.
+- **Telemetry.** Observer listeners on `SaleCompleted` and `SlotEmpty` events, published after the lock is released so a slow listener cannot stall a sale.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| One class per state | Rules for a state in one place; adding a state edits no other state | More files than an enum with a switch |
+| Transaction in the context | Stateless, reusable state objects | One more object to keep consistent |
+| Synchronous dispense under the lock | Trivial reasoning about races | Keypad busy for the eject's duration |
+| Check change before dispensing | The two invariants hold | More "exact change only" refusals when the register runs low |
+
+<Callout type="interview" title="The two-minute version">
+
+"The machine is a State pattern: Idle, HasMoney, Dispensing and OutOfService each implement one interface with insert, select and cancel, and each method returns the next state. The VendingMachine context owns the inventory, the cash register and the in-flight transaction, so states hold no data. Select in HasMoney checks stock, balance and whether change can be made from the coins actually in the register, in that order, before anything irreversible; dispensing then reserves the unit, ejects, takes the money and pays change, with compensation and a full refund if the eject fails. The machine's methods are synchronized, so hardware threads and the idle timeout cannot interleave." Then name the one trade-off: the lock is held while the motor turns.
+
+</Callout>
+
+<DeepDive title="Go deeper: the enum transition table">
+
+The lighter alternative is to keep a status enum and a table of allowed transitions:
+
+```java
+enum Status { IDLE, HAS_MONEY, DISPENSING, OUT_OF_SERVICE }
+enum Event { INSERT, SELECT, CANCEL, DONE, FAULT, RESTOCK }
+static final Map<Status, Map<Event, Status>> NEXT = Map.of(
+    Status.IDLE,      Map.of(Event.INSERT, Status.HAS_MONEY, Event.FAULT, Status.OUT_OF_SERVICE),
+    Status.HAS_MONEY, Map.of(Event.INSERT, Status.HAS_MONEY, Event.SELECT, Status.DISPENSING, Event.CANCEL, Status.IDLE),
+    Status.DISPENSING, Map.of(Event.DONE, Status.IDLE, Event.FAULT, Status.IDLE),
+    Status.OUT_OF_SERVICE, Map.of(Event.RESTOCK, Status.IDLE));
+```
+
+Ten lines answer "is this transition allowed", and for a lifecycle that is all you need, say a loan or a ticket, the table beats four classes. What the table cannot answer is "what happens": the refusal messages, the compensation on a failed eject and the refund on cancel still need a home, and when that home is a `switch` on the status inside each method you have rebuilt the problem the State pattern removes. The honest rule is the one from the behavioural lesson: State when behaviour per state is substantial, a table when it is not.
+
+</DeepDive>

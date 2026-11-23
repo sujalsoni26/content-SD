@@ -1,0 +1,73 @@
+Every storage engine answers one question about a changed row: **update it in place**, or **append the change and merge later**? B-trees do the first, log-structured merge trees (LSM trees) do the second, and most of what you can measure about a database follows from that choice. This lesson assumes [Indexing](/learn/indexing) and the pages and buffer pool of [How a database stores data](/learn/storage-engines).
+
+## B-trees: pages, splits and in-place updates
+
+A B-tree (Bayer and McCreight, 1972) is a tree of fixed-size pages: a root, a few levels of internal pages holding separator keys, and sorted leaf pages holding the keys. A page holds hundreds of keys, so the tree is shallow and a lookup reads one page per level.
+
+If an insert finds its leaf full, it is **split** into two half-full pages and a separator is pushed into the parent; if the parent is full the split cascades, and splitting the root adds a level. PostgreSQL leaves 10% of each leaf empty when building an index (fillfactor 90) to absorb inserts before splits begin.
+
+The price is **write amplification**. Changing a 100-byte row rewrites a whole 8 or 16 kB page, plus one leaf in every secondary index, plus the log record, plus (in PostgreSQL) a full-page image after each checkpoint (see [Write-ahead logging](/learn/wal)). Each lives somewhere else on disk, so the writes are random; in exchange, reads are predictable and every key exists once.
+
+## LSM trees: append, flush, merge
+
+The LSM tree (O'Neil and colleagues, 1996) never edits a file on disk. Writes go to the WAL for durability and to a **memtable**, an in-memory sorted structure. When the memtable fills it is frozen and a new one takes writes; a background thread flushes the frozen one to disk as an **SSTable** (sorted string table), an immutable file of key-value pairs in key order with a block index and, usually, a bloom filter. **Compaction** merges SSTables in the background, keeping the newest version of each key and dropping deleted ones.
+
+<Mermaid caption="The LSM write path: every write is a sequential append; the random-access work is deferred to background flushes and compactions." chart={`flowchart LR
+    W["Write key and value"] --> L["WAL append"]
+    W --> M["Memtable, sorted, in RAM"]
+    M -- "full" --> I["Immutable memtable"]
+    I -- "flush" --> S0["SSTables, level 0"]
+    S0 -- "compaction" --> S1["Level 1"]
+    S1 -- "compaction" --> S2["Levels 2 to n"]
+`} />
+
+Reads check the memtable, then SSTables from newest to oldest. The **bloom filter** stored with each SSTable answers "definitely not here" or "maybe here", so most files are skipped; RocksDB's guidance of about 10 bits per key gives roughly a 1% false-positive rate. Bloom filters cannot help a range scan, which must merge every level.
+
+Because files are immutable, a delete writes a **tombstone** that shadows older versions until compaction removes both. Cassandra keeps tombstones for `gc_grace_seconds` (ten days by default) so that a replica which missed the delete can be repaired first; drop the tombstone too early and the deleted row comes back from the dead.
+
+### Two ways to compact
+
+**Size-tiered** compaction (Cassandra's default; RocksDB calls its version universal) waits for several SSTables of similar size and merges them into one bigger file. Little data is rewritten, but a key may live in many files and a merge needs room for old and new files at once. **Leveled** compaction (RocksDB's default; Cassandra's LCS) keeps each level beyond level 0 as one sorted run split into fixed-size files, each level about ten times the one above. A key appears in at most one file per level, so reads touch few files and little space is wasted, but data is rewritten once per level it passes through.
+
+## Three amplifications
+
+RocksDB's tuning guide defines the three numbers that describe any engine: **read amplification** (disk reads per query), **write amplification** (bytes written to storage divided by bytes written by the application) and **space amplification** (bytes on disk divided by bytes of live data).
+
+| | B-tree | LSM, size-tiered | LSM, leveled |
+| --- | --- | --- | --- |
+| Read amplification | Low and predictable: one page per level | Higher: a key may sit in several files | Moderate: one file per level, bloom filters skip most |
+| Write amplification | High per row: whole pages, random I/O, one per index | Lowest: data rewritten rarely | Higher: rewritten at every level it descends |
+| Space amplification | Moderate: half-empty pages after splits | Highest: duplicates until merged, double space during a merge | Lowest: duplicates confined to one level at a time |
+| Write pattern | Random page writes | Sequential appends | Sequential appends |
+
+## Who uses what, and when to choose
+
+| Engine | Structure |
+| --- | --- |
+| InnoDB (MySQL), PostgreSQL, SQLite, WiredTiger (MongoDB) | B-tree |
+| LevelDB, RocksDB, MyRocks (MySQL on RocksDB), Pebble (CockroachDB) | LSM |
+| Cassandra, HBase | LSM-style: memtable, immutable files, compaction |
+
+Choose a B-tree for mixed or read-heavy OLTP where latency must be predictable. Choose an LSM engine when writes dominate (events, messages, metrics, time series), when compression and footprint matter, or when the hardware punishes random writes.
+
+<Callout type="analogy" title="Filing cabinet or inbox tray">
+
+A B-tree is a filing cabinet: each letter goes straight into its folder, and a bulging folder is split in two. An LSM tree is an inbox tray: letters land on top in arrival order, and each evening you sort the tray into a bundle. Each bundle carries a sticky note listing what might be inside; that is the bloom filter, which can say "maybe" when the answer is no but never "no" when the answer is yes.
+
+</Callout>
+
+### When compaction falls behind
+
+The LSM failure mode is **compaction debt**. If writes arrive faster than flushes and merges complete, level 0 fills with overlapping files, read amplification climbs, and RocksDB slows and then stops writes once its level-0 file count or pending-compaction bytes cross their thresholds, so stalls arrive precisely at peak load. B-trees have no equivalent cliff.
+
+<Callout type="interview" title="One sentence each">
+
+"B-trees update in place: predictable reads, write amplification from random page writes. LSM trees append and merge: sequential writes and good compression, at the cost of compaction work and reads that touch several files unless bloom filters help."
+
+</Callout>
+
+<DeepDive title="Go deeper: where leveled compaction's write cost comes from">
+
+A file moving down a level must be merged with every file below that overlaps its key range. With each level about ten times larger than the one above, a file typically overlaps around ten files below, so a byte of new data drags roughly ten bytes of rewriting at each level it passes through. That rule-of-thumb arithmetic is why RocksDB suggests universal compaction when leveled compaction cannot sustain the write rate.
+
+</DeepDive>

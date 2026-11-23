@@ -1,0 +1,43 @@
+| Step | What to produce |
+| --- | --- |
+| 1. Functional requirements | The core user actions, and what is out of scope |
+| 2. Non-functional requirements | Scale, latency, availability vs consistency (with the reason), durability |
+| 3. Estimation | Read and write QPS, storage, bandwidth (see [The formulas](/learn/estimation-formulas)), said out loud |
+| 4. API | Endpoints, requests, responses, error codes |
+| 5. Data model | Tables or documents, keys, indexes |
+| 6. High-level design | Start with one server and one database; add a box only when a requirement forces it |
+| 7. Deep dives | The two or three hardest problems, each with its trade-offs |
+
+<Mermaid caption="The seven steps in order. Each step's output feeds the next." chart={`flowchart LR
+    subgraph SCOPE["Scope it"]
+        direction TB
+        F["1. Functional requirements"] --> N["2. Non-functional requirements"] --> E["3. Estimation"]
+    end
+    subgraph SPEC["Specify it"]
+        direction TB
+        A["4. API"] --> D["5. Data model"]
+    end
+    subgraph BUILD["Design it"]
+        direction TB
+        H["6. High-level design"] --> X["7. Deep dives"]
+    end
+    SCOPE --> SPEC --> BUILD
+`} />
+
+<Callout type="interview" title="Justify every non-functional choice">
+
+"Highly available, eventually consistent" with no reason invites a follow-up you may not survive. Tie it to [CAP and PACELC](/learn/cap): say what goes wrong for users under each choice, and why yours is the lesser harm.
+
+</Callout>
+
+<Callout type="idea" title="Where to practise">
+
+The [case-study module](/learn#hld) applies these seven steps to real systems, starting with the URL shortener. Every case study uses the same template, so the steps become habit rather than a checklist.
+
+</Callout>
+
+<DeepDive title="Go deeper: a rough clock for a 45-minute round">
+
+One reasonable split, to adapt to the interviewer's cues: requirements 5 minutes, estimation 3–5, API and data model 5–10, high-level design about 10, deep dives 10–15, leaving a few minutes for questions. The most common failure is spending 20 minutes on requirements and never reaching the deep dives, which is where most of the signal is.
+
+</DeepDive>

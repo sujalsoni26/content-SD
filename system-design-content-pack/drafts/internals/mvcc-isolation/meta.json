@@ -1,0 +1,69 @@
+{
+  "slug": "mvcc-isolation",
+  "title": "MVCC and isolation levels",
+  "moduleId": "internals",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "Two transactions each check a rule, each write a different row, and both commit, leaving the database in a state neither of them would have allowed.",
+  "summary": "MVCC keeps several versions of a row so readers never block writers, and each transaction reads a snapshot. Snapshot isolation still permits write skew, which serializable snapshot isolation or explicit locks prevent, and old versions must be vacuumed or purged.",
+  "catTip": "Two humans each check the bowl, each see food, each decide the other will refill it. That is snapshot isolation in my own kitchen. Serializable would make one of them wait or retry, and I would eat.",
+  "recall": {
+    "q": "Two on-call doctors each check that at least two are rostered, then each remove themselves; both commit and nobody is on call. Name the anomaly and two ways to prevent it.",
+    "a": "Write skew: disjoint writes after reading overlapping data, which snapshot isolation allows. Prevent it with SERIALIZABLE (serializable snapshot isolation, retrying on SQLSTATE 40001) or by locking the rows the decision depends on with SELECT FOR UPDATE."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without MVCC every reader waits for every writer on the same rows; with MVCC but without understanding write skew, check-then-act rules that span rows silently break under Repeatable Read.",
+    "tradeoffs": "Old versions consume space and must be vacuumed or purged, long transactions block that cleanup, and SERIALIZABLE buys correctness with aborts the application has to retry.",
+    "explainSimply": "The database keeps old copies of a row so that someone reading it never waits for someone changing it; each transaction reads a frozen snapshot, like that morning's newspaper edition. The catch is two people reading the same edition and each making a decision the other did not see. Serializable mode notices that and makes one of them redo their work.",
+    "hint": "Think about two transactions that read the same rows but write different ones, and about what happens to the rows nobody can see any more."
+  },
+  "meow": "New version, old version, snapshot decides who sees what. Write skew sneaks past; serializable says retry, meow.",
+  "quiz": [
+    {
+      "prompt": "Under PostgreSQL's Repeatable Read, which anomaly can still occur?",
+      "options": ["Dirty read", "Phantom read", "Write skew", "Non-repeatable read"],
+      "answer": 2,
+      "explanation": "PostgreSQL's Repeatable Read is snapshot isolation and blocks dirty, non-repeatable and phantom reads, so write skew (disjoint writes after overlapping reads) is what remains and needs Serializable. Phantoms are permitted by the SQL standard's definition but not by PostgreSQL's implementation."
+    },
+    {
+      "prompt": "A nightly report runs one six-hour transaction on the primary. Users notice the orders table keeps growing and scans slow down even though rows are deleted daily. What is the mechanism?",
+      "options": [
+        "The report holds row locks that block the deletes",
+        "The report's snapshot pins old row versions, so VACUUM cannot remove dead tuples created since it began",
+        "Transaction ID wraparound has already happened",
+        "Autovacuum is disabled by default"
+      ],
+      "answer": 1,
+      "explanation": "MVCC keeps every version younger than the oldest snapshot, so the long transaction blocks cleanup rather than the deletes. Autovacuum is on by default, and wraparound would stop the server rather than merely slow scans."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Explain what xmin and xmax on a PostgreSQL row version mean and how an UPDATE changes them.",
+      "a": "xmin is the ID of the transaction that created the version and xmax the ID of the one that deleted or replaced it (zero while live). An UPDATE writes a new version with xmin set to the updater and stamps the old version's xmax with the same ID; visibility is then decided against a snapshot plus the commit status in pg_xact."
+    },
+    {
+      "q": "A booking service must sell each seat once. Compare a unique index, SELECT FOR UPDATE and SERIALIZABLE for enforcing it.",
+      "a": "A unique index on show and seat is cheapest and strongest: the second insert fails at any isolation level. SELECT FOR UPDATE serialises check-then-insert by locking rows that already exist, which does not cover a row not yet inserted. SERIALIZABLE detects the conflict and aborts one transaction, which must retry."
+    }
+  ],
+  "glossary": [
+    { "term": "MVCC", "full": "Multi-Version Concurrency Control", "note": "Keeping several versions of each row so readers see a snapshot while writers create new versions." },
+    { "term": "SSI", "full": "Serializable Snapshot Isolation", "note": "PostgreSQL's serializable mode: snapshot reads plus detection of dangerous read-write dependency patterns, aborting one transaction instead of blocking." },
+    { "term": "XID", "full": "Transaction ID", "note": "PostgreSQL's 32-bit transaction identifier, stamped on row versions as xmin and xmax." }
+  ],
+  "sources": [
+    { "title": "PostgreSQL documentation, Introduction (Concurrency Control)", "url": "https://www.postgresql.org/docs/current/mvcc-intro.html", "accessed": "2026-11-22", "supports": "each statement sees a snapshot; reading never blocks writing and writing never blocks reading", "status": "verified" },
+    { "title": "PostgreSQL documentation, Transaction Isolation", "url": "https://www.postgresql.org/docs/current/transaction-iso.html", "accessed": "2026-11-22", "supports": "Read Committed default; Read Uncommitted behaves as Read Committed; Repeatable Read disallows phantoms and raises the concurrent-update error; Serializable uses SSI, the read/write dependency error and SQLSTATE 40001; applications must retry; snapshot taken at the first statement", "status": "verified" },
+    { "title": "PostgreSQL documentation, System Columns", "url": "https://www.postgresql.org/docs/current/ddl-system-columns.html", "accessed": "2026-11-22", "supports": "definitions of xmin, xmax and row versions", "status": "verified" },
+    { "title": "PostgreSQL documentation, Transactions and Identifiers", "url": "https://www.postgresql.org/docs/current/transaction-id.html", "accessed": "2026-11-22", "supports": "32-bit transaction IDs assigned on first write; commit status marked in pg_xact", "status": "verified" },
+    { "title": "PostgreSQL documentation, Routine Vacuuming", "url": "https://www.postgresql.org/docs/current/routine-vacuuming.html", "accessed": "2026-11-22", "supports": "old row versions kept for MVCC and reclaimed by VACUUM; autovacuum enabled by default; wraparound and the two-billion-transaction rule; visibility map maintenance", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, InnoDB Multi-Versioning", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-multi-versioning.html", "accessed": "2026-11-22", "supports": "6-byte DB_TRX_ID and 7-byte DB_ROLL_PTR; undo records in rollback segments; delete marking and purge; advice to commit regularly", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Transaction Isolation Levels", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html", "accessed": "2026-11-22", "supports": "REPEATABLE READ default with the snapshot from the first read; gap and next-key locks on locking reads; READ COMMITTED fresh snapshot per read; SERIALIZABLE converting SELECT to SELECT ... FOR SHARE", "status": "verified" },
+    { "title": "H. Berenson, P. Bernstein, J. Gray, J. Melton, E. O'Neil, P. O'Neil, \"A Critique of ANSI SQL Isolation Levels\", SIGMOD 1995", "url": "https://arxiv.org/abs/cs/0701157", "accessed": "2026-11-22", "supports": "definition of snapshot isolation and the write skew anomaly", "status": "reference" },
+    { "title": "M. Cahill, U. Röhm, A. Fekete, \"Serializable Isolation for Snapshot Databases\", SIGMOD 2008", "url": "https://courses.cs.washington.edu/courses/csep544/09sp/resources/fekete-sigmod2008.pdf", "accessed": "2026-11-22", "supports": "the SSI technique of detecting dangerous read-write dependency structures", "status": "reference" },
+    { "title": "D. Ports and K. Grittner, \"Serializable Snapshot Isolation in PostgreSQL\", PVLDB 5(12), 2012", "url": "https://arxiv.org/abs/1208.4179", "accessed": "2026-11-22", "supports": "SSI shipping in PostgreSQL 9.1 and its implementation", "status": "reference" },
+    { "title": "Martin Kleppmann, Designing Data-Intensive Applications, ch. 7 \"Transactions\" (O'Reilly, 2017)", "url": "https://dataintensive.net/", "accessed": "2026-11-22", "supports": "the on-call doctors illustration of write skew, retold here in different words", "status": "reference" }
+  ]
+}

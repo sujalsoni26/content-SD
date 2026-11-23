@@ -1,0 +1,70 @@
+**Serverless** means running code, or using a service, without owning, sizing or patching the machines underneath: the provider scales from zero and back, and you pay per use. **Functions as a Service (FaaS)** runs your handler once per event; AWS Lambda and Google Cloud Run functions (renamed from Cloud Functions in 2024) are the reference examples. **Backend as a Service (BaaS)** rents whole backend pieces: authentication, object storage, databases, queues.
+
+## The FaaS execution model
+
+A function is a handler, a runtime and a package, a zip or a container image (see [Containers](/learn/containers)). Nothing runs until an event arrives. Then the platform creates an **execution environment**: Init downloads the code, starts the runtime and runs your initialisation code outside the handler; Invoke runs the handler with the event; afterwards the environment is frozen and kept warm for a while for the next event. On Lambda one environment serves one request at a time, so concurrency is the number of live environments, and the account default is 1,000 concurrent executions per region, raisable on request.
+
+Events come from three kinds of source: HTTP through an API gateway or a function URL (synchronous, the caller waits); storage and bus events such as an object landing in a bucket or a scheduled rule (asynchronous, queued and retried); and queues and streams (SQS, Kinesis, DynamoDB Streams, Kafka), polled by the platform and delivered in batches (see [Message queues](/learn/message-queues)). Cloud Run functions offer the same shape: HTTP, Pub/Sub messages and Cloud Storage changes.
+
+<Mermaid caption="An upload pipeline with no servers: the gateway invokes a function to sign an upload URL, the bucket event invokes a thumbnail function, and a queue feeds a notification function in batches. Each arrow is a trigger, and each box scales independently from zero." chart={`flowchart LR
+    U["Phone app"] -->|"POST /photos"| G["API gateway"]
+    G --> F1["Function: sign upload URL"]
+    F1 --> D[("Managed database")]
+    U -->|"PUT bytes"| S[("Object storage bucket")]
+    S -->|"object created"| F2["Function: make thumbnail"]
+    F2 --> S
+    F2 -->|"enqueue"| Q["Queue"]
+    Q -->|"batch of 10"| F3["Function: notify followers"]
+    F3 --> D
+`} />
+
+## Stateless by contract
+
+Nothing survives reliably between invocations: globals and the `/tmp` directory (512 MB to 10,240 MB on Lambda) persist only while that environment is reused, and environments are recycled every few hours, so treat both as a cache. State belongs in a database, a cache cluster or an object store; the signed-URL upload in the diagram is the pattern from [Object storage](/learn/object-storage). A database connection opened during Init belongs to one environment, so 1,000 concurrent invocations are 1,000 connections, more than most databases accept: use a connection proxy or an HTTP data API, and cap the function with reserved concurrency. Asynchronous invocations are retried and queue batches are redelivered, so handlers must be idempotent (see [Idempotency](/learn/idempotency)).
+
+## Cold starts
+
+A **cold start** is the Init phase running in front of a request because no warm environment existed: after a quiet spell, on every scale-up, after every deploy. AWS's own documentation puts cold starts at under 1 percent of invocations in typical production traffic, lasting from under 100 ms to over a second. What lengthens one: the runtime (a JVM or .NET process initialises more slowly than Node or Python), package size and import count, and initialisation work such as opening connections. Mitigations, cheapest first: trim dependencies and load lazily; **SnapStart**, which snapshots the initialised environment at publish time and restores it on demand (Java, Python, .NET); and **provisioned concurrency**, which keeps a set number of environments initialised for "double-digit millisecond" responses and bills for them while idle.
+
+<Callout type="analogy" title="Taxis, not a car">
+
+A taxi costs nothing while you are not riding, needs no parking or servicing, and is unbeatable for occasional trips. Sometimes you wait for one to arrive: a cold start. A taxi booked to wait outside your door never keeps you waiting but charges while it idles: provisioned concurrency. Ride every day for a long commute and a car is cheaper. Where the analogy fails: taxis do not end the ride after fifteen minutes, and functions have a timeout.
+
+</Callout>
+
+## Limits you design around
+
+| Lambda quota (documented, November 2026) | Value | Design consequence |
+| --- | --- | --- |
+| Memory | 128 MB to 10,240 MB; CPU scales with memory, one vCPU at 1,769 MB | Memory is also how you buy CPU |
+| Timeout | Up to 15 minutes (900 s) for a standard function; it was 5 minutes until 2018, and longer limits exist only for specific configurations such as Lambda Managed Instances, so check the quotas page | Longer work is split or moved to a batch service |
+| Payload | 6 MB synchronous, 1 MB asynchronous | Large inputs travel through object storage, not the event |
+| Package | 50 MB zipped, 250 MB unzipped, 10 GB as a container image | Big dependencies push you to images, and to slower cold starts |
+| Init phase | 10 seconds | Heavy initialisation fails before the handler runs |
+| Concurrency | 1,000 per region by default | Bursts beyond it are throttled |
+
+Callers have clocks of their own: Amazon API Gateway's REST integration waits 29 seconds by default, whatever the function's timeout, so anything longer must become asynchronous, a queue or a job id the client polls.
+
+## The cost model
+
+Price is invocations plus **GB-seconds**, memory multiplied by duration and billed per millisecond: in us-east-1 on x86, $0.20 per million requests and $0.0000166667 per GB-second, with a monthly free tier of one million requests and 400,000 GB-seconds. Assume 10 million invocations a month at 200 ms and 512 MB: one million GB-seconds, roughly $17 plus $2 for requests. Assume instead a steady 1,000 requests per second around the clock: about 259 million GB-seconds and 2.6 billion requests, roughly $4,800 a month before the gateway's own charges, for a load that a few always-on containers would carry. <mark>Per-use pricing wins for spiky or low traffic and loses at steady, high utilisation; find the crossover before you commit.</mark> Provisioned concurrency adds its own per-GB-second charge whether or not the environments are used.
+
+## BaaS: renting the rest
+
+Managed authentication (Cognito, Auth0, Firebase Authentication), object storage (S3), per-request databases (DynamoDB, Firestore), queues and event buses. Functions become the glue between them, and most of the application is configuration rather than code (see [Infrastructure as code](/learn/iac)).
+
+## Lock-in and local testing
+
+Event shapes, permission models, triggers and orchestration services differ between providers, so moving means rewriting the edges; keep handlers thin and the domain code portable. Unit tests are easy because a handler is ordinary code; integration tests are hard because, as Mike Roberts put it, "no local environment can fully simulate the cloud environment", so teams test against per-developer stacks in the cloud. With no server to log into, structured logs and tracing (see [Distributed tracing](/learn/tracing)) are your only eyes, and fifty small functions passing events are a distributed system with every failure mode in [What makes a system distributed](/learn/distributed-fundamentals).
+
+<Callout type="interview" title="Say when, then say what you watch">
+
+"Functions suit spiky or event-driven work such as upload processing and webhooks. I would watch cold starts on the user-facing path, the timeout and payload limits, the database connection count, and the cost crossover at steady load, where containers win." Naming the crossover shows you have done the sum.
+
+</Callout>
+
+<DeepDive title="Go deeper: sizing concurrency and protecting the database">
+
+AWS's rule is concurrency equals average requests per second times average duration: 500 requests per second at 400 ms is 200 environments, and 200 database connections if each holds one. A burst past the account limit is throttled, so put a queue in front of anything bursty (see [Backpressure and load shedding](/learn/backpressure)) and drain it at a rate the database can take. Reserved concurrency caps one function so a runaway trigger cannot starve the others; provisioned concurrency sets a floor of warm environments for the latency-critical one. Both are capacity decisions, the part of operations serverless does not remove.
+
+</DeepDive>

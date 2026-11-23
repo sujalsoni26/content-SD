@@ -1,0 +1,76 @@
+{
+  "slug": "containers",
+  "title": "Containers and images",
+  "moduleId": "infrastructure",
+  "level": "basic",
+  "minutes": 7,
+  "problem": "Software installed by hand on dozens of servers drifts, so the same request behaves differently depending on which machine the load balancer picks.",
+  "summary": "A container is a process the Linux kernel isolates with namespaces and cgroups while sharing its kernel. An image is the immutable, layered filesystem it starts from, so one tested artefact runs identically on every machine.",
+  "catTip": "I nap in a cardboard box. Same box on the sofa, the shelf or the server rack, and I fit exactly the same way every time. That is an image: pack once, run anywhere, and share the floor, the kernel, with the other boxes.",
+  "recall": {
+    "q": "Your service runs fine on one machine and misbehaves on three others. How do containers fix this, and what do they still share with the host?",
+    "a": "The image packages the whole filesystem and its dependencies as immutable layers, so every machine runs identical bytes; namespaces give each container its own process tree, network and mounts and cgroups cap its CPU and memory. Every container still shares the host kernel, so isolation is weaker than a VM's."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a packaged, immutable artefact, every server is configured by hand or by drifting scripts, deployments cannot be reproduced and a rollback means guessing what the previous state was.",
+    "tradeoffs": "Containers share the host kernel, so isolation is weaker than a virtual machine's, and immutability pushes every environment difference into configuration you must inject and manage separately.",
+    "explainSimply": "A container is like a lunchbox packed at home: everything the meal needs is inside, so it is the same lunch whether you eat it at school or in the park. The box is sealed once packed; for a different lunch you pack a new box rather than fiddling with the old one. Every box still shares the same table.",
+    "hint": "Think about what is inside the box (filesystem, dependencies) and what every box borrows from the building it sits in."
+  },
+  "meow": "Meow-tainers: one box, same box, every server. Shared kernel, separate litter trays.",
+  "quiz": [
+    {
+      "prompt": "A team deploys the image tag api:latest to 40 nodes over ten minutes. Why can this leave the fleet running two different versions?",
+      "options": [
+        "Each node unpacks the layers in a different order, producing different filesystems",
+        "A tag is a mutable pointer; if a new build is pushed during the rollout, later nodes pull a different image under the same name",
+        "Registries cache tags for 24 hours, so some nodes receive the old cached copy",
+        "Containers share the host kernel, so nodes on different kernel versions run different application code"
+      ],
+      "answer": 1,
+      "explanation": "A tag can be repointed at any time, whereas a digest names exactly one image. Layers are content-addressed and applied in a fixed order, so the first option cannot happen."
+    },
+    {
+      "prompt": "Which statement about containers and virtual machines is correct?",
+      "options": [
+        "A container runs its own kernel, so a Linux container can run on any host operating system",
+        "A VM isolates with namespaces and a container isolates with a hypervisor",
+        "A container is a process isolated by namespaces and cgroups that shares the host kernel; a VM runs its own kernel on a hypervisor",
+        "Containers and VMs give the same isolation boundary; containers are simply smaller files"
+      ],
+      "answer": 2,
+      "explanation": "Sharing the kernel is what makes containers light and also what makes their isolation weaker than a VM's. The last option is the common misconception: the boundary is not the same, because a kernel bug can cross it."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A Dockerfile copies a secrets file in one step and deletes it in a later step. Is the secret gone from the image?",
+      "a": "No. Each step is a layer and a deletion is recorded as a whiteout entry in the later layer; the earlier layer still contains the file and anyone who pulls the image can read it. Never copy secrets into an image; inject them at run time."
+    },
+    {
+      "q": "Why does pinning an image by digest make a rollback cheap and reliable?",
+      "a": "A digest names exactly one immutable set of layers, so redeploying yesterday's digest restarts precisely the bytes that ran yesterday. There is nothing to uninstall or undo; the previous image is simply started again."
+    }
+  ],
+  "glossary": [
+    { "term": "OCI", "full": "Open Container Initiative", "note": "Standards body (launched 2015) behind the image, runtime and distribution specifications that let Docker, containerd, CRI-O and registries interoperate." }
+  ],
+  "sources": [
+    { "title": "namespaces(7), Linux manual page", "url": "https://man7.org/linux/man-pages/man7/namespaces.7.html", "accessed": "2026-11-22", "supports": "the eight namespace types and what each isolates", "status": "verified" },
+    { "title": "cgroups(7), Linux manual page", "url": "https://man7.org/linux/man-pages/man7/cgroups.7.html", "accessed": "2026-11-22", "supports": "cgroups organise processes into groups whose resource usage can be limited and monitored", "status": "verified" },
+    { "title": "Docker Docs, What is a container?", "url": "https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/", "accessed": "2026-11-22", "supports": "a container is a process that shares the machine's kernel; a VM boots its own operating system and kernel", "status": "verified" },
+    { "title": "Docker, What is a Container? (containers vs virtual machines)", "url": "https://www.docker.com/resources/what-container/", "accessed": "2026-11-22", "supports": "container images are typically tens of MB while VM images run to tens of GB; VMs are run by a hypervisor and are slow to boot", "status": "verified" },
+    { "title": "Docker Docs, Understanding the image layers", "url": "https://docs.docker.com/get-started/docker-concepts/building-images/understanding-image-layers/", "accessed": "2026-11-22", "supports": "layers are immutable changesets stored by digest, shared between images, with a thin writable layer added per container", "status": "verified" },
+    { "title": "Docker Docs, docker image pull reference", "url": "https://docs.docker.com/reference/cli/docker/image/pull/", "accessed": "2026-11-22", "supports": "latest is the default tag; pulling by digest pins exactly one image", "status": "verified" },
+    { "title": "Open Container Initiative, About the OCI", "url": "https://opencontainers.org/about/overview/", "accessed": "2026-11-22", "supports": "the OCI was launched on 22 June 2015 by Docker, CoreOS and others; it holds the runtime, image and distribution specs; Docker donated runC", "status": "verified" },
+    { "title": "OCI Image Format Specification", "url": "https://github.com/opencontainers/image-spec/blob/main/spec.md", "accessed": "2026-11-22", "supports": "an image consists of a manifest, optional index, filesystem layers and a configuration", "status": "verified" },
+    { "title": "OCI Image Specification, Content Descriptors (digests)", "url": "https://github.com/opencontainers/image-spec/blob/main/descriptor.md", "accessed": "2026-11-22", "supports": "content is addressed by digest and implementations must implement SHA-256", "status": "verified" },
+    { "title": "OCI Image Specification, Image Layer Filesystem Changeset", "url": "https://github.com/opencontainers/image-spec/blob/main/layer.md", "accessed": "2026-11-22", "supports": "layers are changesets applied in order; deletions are recorded as whiteout entries", "status": "verified" },
+    { "title": "OCI Runtime Specification, Filesystem Bundle", "url": "https://github.com/opencontainers/runtime-spec/blob/main/bundle.md", "accessed": "2026-11-22", "supports": "a bundle is config.json plus the root filesystem that a runtime consumes", "status": "verified" },
+    { "title": "OCI Runtime Specification, Runtime and Lifecycle", "url": "https://github.com/opencontainers/runtime-spec/blob/main/runtime.md", "accessed": "2026-11-22", "supports": "the create, start, kill, delete and state operations and the created, running and stopped states", "status": "verified" },
+    { "title": "OCI Distribution Specification", "url": "https://github.com/opencontainers/distribution-spec/blob/main/spec.md", "accessed": "2026-11-22", "supports": "the registry HTTP API; manifests are fetched by tag or digest", "status": "verified" },
+    { "title": "opencontainers/runc README", "url": "https://github.com/opencontainers/runc", "accessed": "2026-11-22", "supports": "runc is a CLI tool for spawning and running containers on Linux according to the OCI specification, mostly used by higher-level software", "status": "verified" },
+    { "title": "Kubernetes Docs, Container Runtimes", "url": "https://kubernetes.io/docs/setup/production-environment/container-runtimes/", "accessed": "2026-11-22", "supports": "Kubernetes requires a CRI-conformant runtime such as containerd or CRI-O", "status": "verified" }
+  ]
+}

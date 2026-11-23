@@ -1,0 +1,72 @@
+{
+  "slug": "solid",
+  "title": "SOLID principles",
+  "moduleId": "lld",
+  "level": "intermediate",
+  "minutes": 10,
+  "problem": "Finance, design and the database team all edit the same Invoice class, every new coupon type adds a branch to checkout, and nothing can be tested without MySQL.",
+  "summary": "SOLID is five rules for placing code so that one change lands in one place: single responsibility, open/closed, Liskov substitution, interface segregation and dependency inversion. Each names a smell, a refactoring and a cost, and over-applying them buys indirection without a second case.",
+  "catTip": "Single responsibility: I nap. Open for extension: new naps, same cat. Liskov: any cat fits any lap. Interface segregation: feed() and pet() are separate contracts. Dependency inversion: I depend on Food, not on this particular human.",
+  "recall": {
+    "q": "A `ReportService` constructs `new PostgresReportStore()` in its constructor and nobody can unit-test it. Which SOLID principle is violated, what is the refactoring, and what new cost does it bring?",
+    "a": "Dependency inversion: high-level policy depends on a low-level detail. Declare a `ReportStore` interface owned by the reporting module, take it as a constructor parameter and let the caller pass Postgres or an in-memory fake. The cost is that someone outside must now build and wire the object graph."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a rule for where code belongs, every change ripples: three teams edit one class, each new case reopens working code, subclasses surprise their callers and tests need real infrastructure.",
+    "tradeoffs": "Each principle adds a class, an interface or a layer of indirection, which is pure overhead until the second case or the second team shows up.",
+    "explainSimply": "Think of a well-run kitchen: one cook per station, a new dish is a new recipe card rather than a rewritten menu, any trained cook can cover any station without the diners noticing, the waiter's pad shows only what the waiter needs, and the head chef asks for 'a fridge' rather than one brand of fridge. SOLID is those five habits, for code.",
+    "hint": "Ask who constructs the store and which way the dependency arrow points, then name the principle about arrows."
+  },
+  "meow": "Meow has one responsibility (naps), is open to new naps, substitutes for any cat, exposes only pet() to you, and depends on Food, not on you. SOLID cat.",
+  "quiz": [
+    {
+      "prompt": "Which change most clearly violates the Liskov substitution principle?",
+      "options": [
+        "A subclass adds a new public method that the parent does not have",
+        "A subclass `ReadOnlyAccount extends Account` overrides `withdraw` to throw `UnsupportedOperationException`",
+        "A subclass overrides `toString` to include more fields",
+        "A subclass declares a constructor that requires one more argument than the parent's"
+      ],
+      "answer": 1,
+      "explanation": "Code written against `Account` relies on `withdraw` doing the work, so a subclass that throws breaks every such caller. The constructor is the tempting distractor, but substitutability is about using an instance, not creating one, so a stricter constructor does not violate the principle."
+    },
+    {
+      "prompt": "`ReportService` creates `new PostgresReportStore()` inside its own constructor. Which principle is violated, and what is the fix?",
+      "options": [
+        "Single responsibility: split ReportService into two classes",
+        "Open/closed: add a switch over a store-type enum so that other stores can be chosen",
+        "Dependency inversion: depend on a ReportStore interface that the caller supplies through the constructor",
+        "Interface segregation: split PostgresReportStore's methods into several interfaces"
+      ],
+      "answer": 2,
+      "explanation": "High-level policy is constructing a low-level detail; owning an interface and receiving the implementation inverts the arrow and makes the class testable. The switch is the believable distractor, but it still couples ReportService to every concrete store and reopens it for each new one."
+    }
+  ],
+  "cards": [
+    {
+      "q": "State the single responsibility principle in terms of 'reasons to change', and give the test for a violation.",
+      "a": "A class should have one reason to change, that is, answer to one role or stakeholder. Test: list who could ask you to change the class; if finance, design and the database team all could, it holds three responsibilities."
+    },
+    {
+      "q": "A third `if (coupon.kind() == …)` branch appears in checkout. What is the open/closed move, and what does it cost?",
+      "a": "Extract the varying behaviour behind an interface (a Strategy such as `Discount.apply`) or a new subclass, so new kinds are new classes and checkout stays closed. The cost is one more abstraction and indirection, so do it once the axis of change is proven, not predicted."
+    },
+    {
+      "q": "Name three smells that show SOLID is being over-applied.",
+      "a": "Interfaces with exactly one implementation created 'just in case' (`FooService` and `FooServiceImpl`); `Manager`, `Handler` and `Helper` classes whose responsibility nobody can state; a feature spread across many three-line files, with abstractions built for a second case that never arrives."
+    }
+  ],
+  "glossary": [
+    { "term": "SOLID", "full": "Single responsibility, Open/closed, Liskov substitution, Interface segregation, Dependency inversion", "note": "Five object-oriented design principles collected by Robert C. Martin; the acronym was coined by Michael Feathers." },
+    { "term": "SRP", "full": "Single Responsibility Principle", "note": "A class should have one reason to change: gather what changes together, separate what changes for different reasons." },
+    { "term": "LSP", "full": "Liskov Substitution Principle", "note": "A subtype must work anywhere its parent is expected, without stricter preconditions, weaker postconditions or surprise exceptions." }
+  ],
+  "sources": [
+    { "title": "Robert C. Martin, \"Solid Relevance\" (The Clean Code Blog, 18 October 2020)", "url": "https://blog.cleancoder.com/uncle-bob/2020/10/18/Solid-Relevance.html", "accessed": "2026-11-22", "supports": "Martin's one-line statements of the five principles, including SRP as gathering what changes for the same reasons and DIP as depending in the direction of abstraction", "status": "verified" },
+    { "title": "Robert C. Martin, Clean Architecture (Prentice Hall, 2017), Part III \"Design Principles\", chapters 7 to 11", "url": "https://www.informit.com/store/clean-architecture-a-craftsmans-guide-to-software-structure-9780134494166", "accessed": "2026-11-22", "supports": "each principle's statement, the Square/Rectangle example for LSP, and the direction of dependencies for DIP", "status": "reference" },
+    { "title": "Wikipedia, \"SOLID\"", "url": "https://en.wikipedia.org/wiki/SOLID", "accessed": "2026-11-22", "supports": "the attribution: Martin's 2000 paper \"Design Principles and Design Patterns\" and Michael Feathers coining the acronym around 2004", "status": "secondary" },
+    { "title": "Barbara Liskov and Jeannette Wing, \"A Behavioral Notion of Subtyping\", ACM Transactions on Programming Languages and Systems 16(6), 1994", "url": "https://dl.acm.org/doi/10.1145/197320.197383", "accessed": "2026-11-22", "supports": "the formal substitutability conditions summarised in the DeepDive; Liskov's original statement was a 1987 keynote", "status": "reference" },
+    { "title": "Java SE 21 API, java.util.List (add as an optional operation; unmodifiable lists)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/List.html", "accessed": "2026-11-22", "supports": "List.add being documented as an optional operation that unmodifiable lists reject with UnsupportedOperationException", "status": "verified" }
+  ]
+}

@@ -1,0 +1,85 @@
+A **metric** is a number sampled on a schedule and stored as a time series: a name, a set of labels and a value every few seconds. Metrics are cheap to keep and fast to query, which makes them the right signal for dashboards and alerts and the wrong one for "what happened to this one request" (that is [logging](/learn/logging) and [tracing](/learn/tracing)). Getting value from them comes down to three instruments, two checklists, one discipline about labels and one rule about paging.
+
+## Three instruments
+
+| Instrument | What it holds | How you read it | Examples |
+| --- | --- | --- | --- |
+| Counter | A total that only increases, resetting to zero when the process restarts | As a rate over a window, never raw | requests served, errors, bytes sent |
+| Gauge | A current value that goes up and down | As it is, or its min and max over time | in-flight requests, queue depth, memory in use |
+| Histogram | How many observations fell into each of a set of buckets, plus their sum and count | Percentile estimates; the share of observations under a threshold | request duration, response size |
+
+The counter rule trips everyone once: a raw counter graph is a staircase that drops to zero on each restart. Ask for `rate(requests_total[5m])` and the query engine turns the staircase into requests per second and absorbs the resets. Anything that can fall is a gauge, even "requests in flight", which is really two counters subtracted.
+
+## Percentiles do not add up
+
+Each of your 20 instances can compute its own p99. The service-wide p99 is not their average, nor their median, nor anything else you can do to twenty numbers: a percentile is a position in a distribution, and the twenty distributions have different sizes and shapes. Prometheus's documentation calls averaging quantiles "statistically nonsensical".
+
+What does add up is counts. A histogram records how many observations fell under each bucket boundary, and counts from different instances can be summed. Add the buckets across the fleet, find the bucket where the cumulative count crosses 99%, and interpolate inside it:
+
+```text
+histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))
+```
+
+The price is precision. The estimate assumes observations are spread evenly inside the bucket, so its error is bounded by the bucket's width: with the Go client's default boundaries (5 ms up to 10 s in roughly 2.5× steps) a p99 that lands between 1 s and 2.5 s is known only to that range. Put a boundary exactly at your SLO threshold and the share of requests under it becomes exact, which is what a [latency SLI](/learn/slos-error-budgets) needs.
+
+## RED for a service, USE for a resource
+
+| Checklist | Who | For each... | Ask |
+| --- | --- | --- | --- |
+| RED | Tom Wilkie, 2015 | service | Rate (requests per second), Errors (failures per second), Duration (the latency distribution) |
+| USE | Brendan Gregg | resource: CPU, disk, network, a pool | Utilisation (share of time busy), Saturation (work queued because it could not be served), Errors (count) |
+
+RED is Google's four golden signals (latency, traffic, errors, saturation) minus saturation, applied identically to every service so that anyone can be on call for code they did not write. USE is for the things services run on, and the split between utilisation and saturation is the useful part: a disk that is 90% busy is fine until the queue in front of it grows, and the queue is the saturation. Watch a service's RED and its resources' USE and most incidents show up in one of six numbers.
+
+## Labels: bounded or not at all
+
+Each unique combination of label values is a separate time series. A request counter with labels for method (5 values), route (50) and status (10) is 2,500 series per instance, which is fine. Add a user id and it becomes a series per user per route per status: millions, growing without limit, each costing memory and index space. Prometheus's documentation says it plainly: do not use labels for high-cardinality dimensions such as user ids, email addresses or other unbounded sets. The test for a label is "could I list every value in advance?" If not, it belongs in a log line or a trace attribute.
+
+## Pull or push
+
+<Mermaid caption="A pull-based pipeline: services expose their current values, the server scrapes them on a schedule, evaluates alert rules, and ships older data to cheaper storage." chart={`flowchart LR
+    S["Service instances expose /metrics"] -->|scrape on a schedule| P["Prometheus server and time-series store"]
+    J["Short-lived batch job"] -->|push on completion| G["Pushgateway"]
+    G -->|scrape| P
+    P -->|alert rules| AM["Alertmanager"]
+    AM --> O["Pager and chat"]
+    P -->|queries| D["Dashboards"]
+    P -->|remote write| L["Long-term store"]
+`} />
+
+Prometheus **pulls**: every service exposes its current values on an HTTP endpoint and the server scrapes them (the default interval is one minute). A failed scrape tells you the target is down, you can point a browser at any instance to see what it reports, and you can run a second server on a laptop while debugging. **Push** suits things that do not live long enough to be scraped: batch jobs (hence the Pushgateway), serverless functions, devices behind NAT. The Prometheus FAQ itself says the choice is not a major point.
+
+## Alert on symptoms, not causes
+
+A dashboard can show anything; a page should wake someone only for a problem that is urgent, actionable and visible to users. Rob Ewaschuk's essay "My Philosophy on Alerting", which became the monitoring chapter of Google's SRE book, puts it as symptoms over causes: page on what users feel, and keep the causes on dashboards for whoever answers the page.
+
+| Symptom (page on this) | Causes (dashboard, not pager) |
+| --- | --- |
+| Payment confirmations are failing | the provider's API is timing out, a certificate expired, the connection pool is exhausted |
+| Search takes four seconds | one node's disk is dying, an index is rebuilding, a garbage-collection storm |
+
+Alert as high in the stack as you can, and page on latency at one point only, or every dependency's p99 wakes you for the same incident. Allow a few cause-based alerts for things with no symptom until it is too late: a disk that will be full in four hours, a quota about to run out. The burn-rate rules from the previous lesson are symptom alerts in exactly this sense.
+
+<Callout type="analogy" title="A smoke alarm, not a thermometer on every pan">
+
+A smoke alarm fires on the symptom, smoke, whatever caused it: the toaster, the pan, the wiring. Thermometers on every pan would ring all evening and still miss the toaster. Where the analogy stops: in software you still want the thermometers, on a dashboard, so the person who answers the alarm can find the pan.
+
+</Callout>
+
+<Callout type="interview" title="Three numbers per service">
+
+"Every service exports rate, errors and duration as a counter, a counter and a histogram, with bounded labels only. Dashboards show p99 from the summed buckets, and the pager fires on error-budget burn rate, not on CPU." One breath covers instruments, aggregation, cardinality and alerting philosophy.
+
+</Callout>
+
+## What gets hard
+
+- **Bucket boundaries are forever.** Buckets only aggregate across instances and across time while the boundaries match, so changing them breaks comparisons with history.
+- **Scrape interval versus cost.** A scrape every 15 seconds stores four times as many samples as one a minute; long retention usually means a separate long-term store.
+- **Metrics do not explain.** They say that checkout p99 doubled at 14:02; finding the request that did it is a job for traces and logs.
+
+<DeepDive title="Go deeper: what a histogram costs, and native histograms">
+
+A classic histogram with the Go client's 11 default boundaries exposes 12 bucket series, a sum and a count: 14 series for every label combination, so fifty routes times five methods is 3,500 series for one latency metric on one instance. Prometheus's native histograms keep the whole distribution in a single series with exponential buckets whose resolution you configure rather than boundaries you guess, and the documentation now recommends them over both classic histograms and summaries where client and server support them.
+
+</DeepDive>

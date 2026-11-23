@@ -1,0 +1,59 @@
+{
+  "slug": "lld-vending-machine",
+  "title": "LLD: Vending machine",
+  "moduleId": "lld-practice",
+  "level": "intermediate",
+  "minutes": 12,
+  "problem": "Press a button on a machine whose behaviour is a status field checked in six places and you get a product without paying, or pay without a product.",
+  "summary": "Model the vending machine with the State pattern: one class per state decides what insert, select and cancel do and which state comes next, while inventory, cash and the in-flight transaction live in the context and every check runs before the irreversible dispense.",
+  "catTip": "I am a two-state machine: Asleep and Demanding Food. Poke me while Asleep and nothing happens; poke me while Demanding and you had better have the kibble, because I do not give change.",
+  "recall": {
+    "q": "What is the key design decision in the vending-machine case study, and where do the balance and the stock live?",
+    "a": "Each machine state (Idle, HasMoney, Dispensing, OutOfService) is a class behind one VendingState interface, and the machine delegates every event to its current state, which returns the next state. The inserted balance lives in a Transaction and the stock in an Inventory, both owned by the VendingMachine context, so the state objects hold no data and are interchangeable."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A machine whose insert, select and cancel methods each switch on a status field scatters one state's rules across the class, so a new state or a failed dispense edits every method and one missed branch gives away stock or swallows money.",
+    "tradeoffs": "One class per state and an explicit transaction object are more files than an enum and a switch, and holding the machine's lock through a slow dispense keeps the keypad busy until the item drops.",
+    "explainSimply": "A good shopkeeper behaves differently depending on where you are in the sale: before you have paid, after you have paid, while they fetch the item. Here each of those moods is its own little rule book, and the till and the shelf stay the same whichever rule book is open. The shopkeeper also checks the change drawer before handing anything over.",
+    "hint": "One class per state, then ask which object must remember the money when the state changes."
+  },
+  "meow": "Idle: meow. Has money: louder meow. Dispensing: silence, then crunch. Out of service: the saddest state, no way out until the human restocks.",
+  "quiz": [
+    {
+      "prompt": "In a State-pattern vending machine, where should the inserted balance and the slot counts live?",
+      "options": [
+        "Inside HasMoneyState, because it is the state that checks the balance",
+        "In the VendingMachine context, as a Transaction and an Inventory that every state reaches through the machine",
+        "In static fields shared by all the state classes",
+        "Copied into each state object when it is created"
+      ],
+      "answer": 1,
+      "explanation": "States are interchangeable rule books, so data that must survive a transition belongs to the context. Keeping the balance in HasMoneyState is tempting, but the balance is created by Idle's insert and consumed by Dispensing, so the state that checks it cannot be the state that owns it."
+    },
+    {
+      "prompt": "A customer inserts ₹20 for a ₹15 item and the register has no ₹5 in coins. What should the machine do?",
+      "options": [
+        "Dispense the item and keep the ₹5",
+        "Dispense the item and pay out a ₹10 coin to be safe",
+        "Refuse the sale before dispensing, show 'exact change only' and keep the ₹20 as balance to spend or refund",
+        "Dispense the item, then refund the whole ₹20"
+      ],
+      "answer": 2,
+      "explanation": "Every check, including whether change can be made from the coins actually in the register, runs before the irreversible eject. Dispensing and then refunding the ₹20 sounds customer-friendly but gives the item away, because an eject cannot be undone."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Why does DispensingState reserve the unit in Inventory before ejecting it, and what happens if the eject fails?",
+      "a": "Reserving first takes the unit off the books before the irreversible step, so a retried event or an operator action can never sell the last unit twice. If the eject fails, the reservation is released, the slot is marked faulty and the customer is refunded exactly what was inserted, so no step is left half-done."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994), ch. 5 State", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "the State pattern: an object alters its behaviour when its internal state changes by delegating to a state object; the intents of Command, Strategy, Observer and Singleton as discussed", "status": "reference" },
+    { "title": "The Java Tutorials: Intrinsic Locks and Synchronization", "url": "https://docs.oracle.com/javase/tutorial/essential/concurrency/locksync.html", "accessed": "2026-11-22", "supports": "every object has an intrinsic lock; a synchronized method acquires it on entry and releases it on return, including a return caused by an uncaught exception; release happens-before a later acquire; reentrant synchronization", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ScheduledExecutorService", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html", "accessed": "2026-11-22", "supports": "schedule submits a one-shot task enabled after a delay and returns a ScheduledFuture that can be used to cancel it, used for the idle-timeout refund", "status": "verified" },
+    { "title": "Wikipedia: Change-making problem", "url": "https://en.wikipedia.org/wiki/Change-making_problem", "accessed": "2026-11-22", "supports": "the greedy largest-coin-first method is optimal for canonical coin systems, which most real currencies are, and fails for some sets such as the withdrawn 5, 10, 20, 25 paise coins; dynamic programming solves the general case", "status": "secondary" }
+  ]
+}

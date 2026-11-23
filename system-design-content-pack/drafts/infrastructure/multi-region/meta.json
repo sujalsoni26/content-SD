@@ -1,0 +1,73 @@
+{
+  "slug": "multi-region",
+  "title": "Multi-region deployment",
+  "moduleId": "infrastructure",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "One region serves the whole world, so distant users pay a cross-continent round trip on every request and a regional outage takes the entire product down for hours.",
+  "summary": "Running in several regions cuts latency and survives a regional failure, but every design reduces to a data decision: single writer, geo-partitioned, multi-leader with conflicts, or cross-region consensus. Users are steered by GeoDNS, anycast or a global load balancer, and failover costs the replication lag.",
+  "catTip": "I keep two napping spots, one at each end of the house. The sunny one is primary. If the humans vacuum there I move, but the mouse I half-buried in the sunny cushion does not come with me. That is the replication lag.",
+  "recall": {
+    "q": "A primary database in Mumbai replicates asynchronously to Frankfurt with about one second of lag, and Mumbai fails. What is lost, and what must you do before Frankfurt takes writes?",
+    "a": "Roughly the last second of committed writes (the RPO equals the replication lag) are missing in Frankfurt. Fence the old Mumbai primary so it cannot accept writes if it comes back, then promote Frankfurt and reroute users; otherwise you have two writers and unresolved conflicts."
+  },
+  "archNodes": ["gateway", "dns"],
+  "guide": {
+    "breaks": "A single region makes every distant user pay a cross-continent round trip and turns a regional outage into a total outage, while a second region added without a data strategy produces conflicting writes or silent data loss at failover.",
+    "tradeoffs": "Each data strategy pays somewhere: single-writer makes far users wait, geo-partitioning punishes travellers, multi-leader loses conflicting updates and consensus adds a cross-region round trip to every write, on top of doubled infrastructure and transfer cost.",
+    "explainSimply": "Running in two regions is like a shop chain with branches in two cities: customers go to the nearest branch, and if one burns down the other keeps trading. The hard question is the ledger: one master book the far branch phones into, separate books per customer, two books reconciled later, or no sale recorded until both branches agree.",
+    "hint": "Think about who is allowed to write each kind of data, and what happens to the last second of writes when a region disappears."
+  },
+  "meow": "Meow-ltiple regions, one question: who holds the pen? Two cats writing the same line is a conflict; one cat and a slow photocopier is a data-loss window.",
+  "quiz": [
+    {
+      "prompt": "A booking system must never sell the same seat twice and must survive the loss of a region. Which data strategy fits, and what does it cost?",
+      "options": [
+        "Multi-leader with last-writer-wins, costing occasional duplicate sales",
+        "Cross-region consensus, where a majority of replicas in three or more regions acknowledges each write, costing at least one cross-region round trip per write",
+        "A single-writer region with asynchronous replicas, costing nothing extra because reads stay local",
+        "Geo-partitioning by the customer's home region, costing a slower experience for travellers"
+      ],
+      "answer": 1,
+      "explanation": "Only consensus keeps the invariant and survives a region: a single writer with asynchronous replicas can lose the last second of bookings at failover, which is the strongest distractor. Last writer wins would silently double-sell, and the seat rather than the customer is the contended record, so home-region partitioning does not help."
+    },
+    {
+      "prompt": "Why does DNS-based failover between regions take minutes to take effect even when the health check fails within seconds?",
+      "options": [
+        "Route 53 only re-evaluates health once an hour",
+        "Resolvers and clients keep the old answer until its TTL expires, so traffic keeps arriving at the failed region until caches time out",
+        "The passive region must first copy all the data before DNS will point to it",
+        "Anycast routes must be withdrawn manually by the cloud provider"
+      ],
+      "answer": 1,
+      "explanation": "DNS caching cuts both ways: the TTL that makes lookups fast delays every change, which is why teams keep failover records on short TTLs or use anycast or a global load balancer instead. Replication state does not gate DNS answers, so the third option confuses routing with data readiness."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Why is a round trip between two availability zones so much cheaper than between two regions, and what does that allow?",
+      "a": "Zones in a region are separate data centres within about 100 km of each other, so the round trip is a millisecond or two and synchronous replication is routine. Regions are hundreds or thousands of kilometres apart, so synchronous replication costs tens to hundreds of milliseconds per write and most designs replicate asynchronously."
+    },
+    {
+      "q": "A traffic-steering design uses anycast instead of GeoDNS. What problem does that remove, and what does it not solve?",
+      "a": "Anycast announces one IP from many sites and routing delivers each packet to the nearest site immediately, so there is no DNS TTL to wait out during failover. It does not decide who owns the data: a user routed to Frankfurt still needs a write strategy, and the nearest site by routing is not always the lowest-latency one."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "AWS, Regions and Availability Zones", "url": "https://aws.amazon.com/about-aws/global-infrastructure/regions_az/", "accessed": "2026-11-22", "supports": "an AZ is one or more discrete data centres with redundant power and networking; AZs are many kilometres apart but within 100 km of each other", "status": "verified" },
+    { "title": "AWS Whitepaper, Disaster Recovery of Workloads on AWS: Disaster recovery options in the cloud", "url": "https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html", "accessed": "2026-11-22", "supports": "backup and restore, pilot light, warm standby, hot standby and multi-site active/active; active/active as the most complex and costly; write global, write local and write partitioned strategies; caution about automatic failover and preference for data-plane operations; Global Accelerator anycast IPs", "status": "verified" },
+    { "title": "AWS Docs, Using Amazon Aurora Global Database", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-global-database.html", "accessed": "2026-11-22", "supports": "one primary region and up to 10 read-only secondary regions, replication latency typically under a second, switchover and failover, write forwarding", "status": "verified" },
+    { "title": "AWS Docs, DynamoDB global tables: multi-active, multi-Region replication", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html", "accessed": "2026-11-22", "supports": "multi-Region eventual consistency is the default with last-writer-wins conflict resolution; a multi-Region strong consistency mode exists", "status": "verified" },
+    { "title": "Google Cloud Docs, Spanner replication", "url": "https://docs.cloud.google.com/spanner/docs/replication", "accessed": "2026-11-22", "supports": "synchronous Paxos-based replication, a write commits when a majority of voting replicas agree, one leader per replica set, read-write, read-only and witness replicas, read-only replicas never add write latency", "status": "verified" },
+    { "title": "CockroachDB Docs, Table localities", "url": "https://docs.cockroachlabs.com/docs/stable/table-localities", "accessed": "2026-11-22", "supports": "REGIONAL BY ROW gives each row a home region via a hidden crdb_region column; GLOBAL tables trade higher write latency for low-latency reads everywhere", "status": "verified" },
+    { "title": "CockroachDB Docs, Multi-region survival goals", "url": "https://docs.cockroachlabs.com/docs/stable/multiregion-survival-goals", "accessed": "2026-11-22", "supports": "zone survival is the default; region survival needs at least three regions and raises write latency by at least the round trip to the nearest region", "status": "verified" },
+    { "title": "AWS Docs, Route 53: Choosing a routing policy", "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html", "accessed": "2026-11-22", "supports": "failover, geolocation, geoproximity, latency, weighted and multivalue routing policies", "status": "verified" },
+    { "title": "AWS Docs, Route 53 latency-based routing", "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy-latency.html", "accessed": "2026-11-22", "supports": "Route 53 answers with the region of lowest measured latency from the user's network; measurements change over time so the chosen region can change", "status": "verified" },
+    { "title": "AWS Docs, Creating Amazon Route 53 health checks", "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover.html", "accessed": "2026-11-22", "supports": "health checks drive DNS failover from an unhealthy resource to a healthy one", "status": "verified" },
+    { "title": "RFC 4786, Operation of Anycast Services (BCP 126)", "url": "https://www.rfc-editor.org/rfc/rfc4786", "accessed": "2026-11-22", "supports": "anycast makes one service address available from multiple autonomous locations; the routing system picks the node, and topological nearness does not always mean the best round-trip time", "status": "verified" },
+    { "title": "Cloudflare Docs, Load Balancing: Dynamic steering", "url": "https://developers.cloudflare.com/load-balancing/understand-basics/traffic-steering/steering-policies/dynamic-steering/", "accessed": "2026-11-22", "supports": "dynamic steering routes to the pool with the lowest round-trip time measured by health monitors", "status": "verified" },
+    { "title": "Cloudflare Docs, Load Balancing: Geo steering", "url": "https://developers.cloudflare.com/load-balancing/understand-basics/traffic-steering/steering-policies/geo-steering/", "accessed": "2026-11-22", "supports": "geo steering routes by the region of the Cloudflare data centre that answered the client's DNS query, with fallback to default pools", "status": "verified" },
+    { "title": "Cloudflare Docs, Load Balancing overview", "url": "https://developers.cloudflare.com/load-balancing/", "accessed": "2026-11-22", "supports": "Cloudflare Load Balancing distributes traffic across endpoints with health monitoring, failover and traffic steering", "status": "verified" }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "slug": "composition-over-inheritance",
+  "title": "Composition over inheritance",
+  "moduleId": "lld",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "A subclass that counts additions to a set reports six after adding three, because the parent's addAll calls the overridden add: the child depends on the parent's internals.",
+  "summary": "Prefer holding an object and forwarding to it over extending its class: a subclass is coupled to its parent's internals (the fragile base class problem); a wrapper depends only on the contract. Varying behaviour becomes a composed strategy; inheritance stays for true, designed-for subtypes.",
+  "catTip": "I do not extend Sofa to gain its warmth; I compose with it by sitting on top. When the humans replace the sofa, my behaviour forwards to the new one unchanged.",
+  "recall": {
+    "q": "`CountingSet extends HashSet` overrides `add` and `addAll` to count elements, and `addAll` of three elements reports six. What is the problem called, why does it happen, and what is the fix?",
+    "a": "The fragile base class problem: `HashSet` inherits an `addAll` that calls `add` for each element, so the overridden `add` counts again, and the subclass depends on the parent's undocumented self-use. Fix by composition: hold a `Set` in a field, count in your own methods and forward the rest."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A subclass inherits its parent's internals as well as its contract, so a parent that calls its own overridable methods, or gains a method in the next release, silently changes what the subclass does.",
+    "tradeoffs": "Composition costs forwarding boilerplate, an extra object to construct and wire, and one more interface to read, which is pure overhead when the behaviour never varies.",
+    "explainSimply": "Extending a class is like building your extension on a neighbour's foundation: when they re-lay the floor, your walls crack. Holding the class in a field is like building next door with a corridor between the houses: you only depend on where their front door is. The corridor still breaks if they move the door, but not when they redecorate.",
+    "hint": "Who calls the overridden add when addAll runs, and whose code does the wrapper version call instead?"
+  },
+  "meow": "Meow does not extend Human to get fed. Meow holds a reference to Human and delegates feeding. Has-a, not is-a.",
+  "quiz": [
+    {
+      "prompt": "`CountingSet extends HashSet` overrides `add` and `addAll` so that each increments a counter by the number of elements. After `addAll(List.of(1, 2, 3))` the counter is 6. Why?",
+      "options": [
+        "HashSet rejects duplicates, so each element is attempted twice before it is stored",
+        "HashSet's inherited addAll calls add for each element, so the overridden add counts each element a second time",
+        "Generic type erasure causes the counter to be incremented once per type parameter",
+        "addAll is final in HashSet, so the override is ignored and the default behaviour runs"
+      ],
+      "answer": 1,
+      "explanation": "The subclass depends on the parent's self-use, an undocumented implementation detail; a wrapper that holds a Set and forwards to it never sees the inner add calls. The duplicates story is believable but wrong: no element here is a duplicate, and HashSet checks membership rather than retrying."
+    },
+    {
+      "prompt": "In which case is inheritance still the right choice?",
+      "options": [
+        "Two classes share a few utility methods and you want to avoid duplicating them",
+        "The subclass is a true subtype and the parent is designed and documented for extension, with its self-use and hook methods specified",
+        "The parent class lives in a third-party library whose next version you do not control",
+        "The subclass needs to remove a parent method that does not apply to it"
+      ],
+      "answer": 1,
+      "explanation": "Inheritance is safe when substitutability holds and the parent promises how it calls its own methods. Shared utilities are the tempting case, but reuse without is-a is exactly what produced Stack extends Vector; removing a method breaks substitutability outright."
+    }
+  ],
+  "cards": [
+    {
+      "q": "State the fragile base class problem in one sentence, then name the two fixes.",
+      "a": "A subclass's correctness depends on undocumented details of how its parent implements its methods (self-use, hooks, methods added later), so a parent change breaks the child without touching it. Fix by holding the parent in a field and forwarding (composition), or by designing and documenting the parent for extension and making everything else final."
+    },
+    {
+      "q": "`Stack extends Vector` in the JDK: what is wrong with it, and how would you design a stack today?",
+      "a": "A stack is not a vector: callers can insert or remove in the middle and break last-in-first-out. Compose instead: a `Stack` holds a private list and exposes only push, pop and peek, or use `Deque`, which the JDK's own documentation recommends over the Stack class."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Joshua Bloch, Effective Java, 3rd ed. (Addison-Wesley, 2018), Item 18 \"Favor composition over inheritance\" and Item 19 \"Design and document for inheritance or else prohibit it\"", "url": "https://www.informit.com/store/effective-java-9780134685991", "accessed": "2026-11-22", "supports": "the InstrumentedHashSet/addAll example, the forwarding-class fix, Stack and Properties as JDK violations, and the rule to design for inheritance or prohibit it", "status": "reference" },
+    { "title": "Java SE 21 API, java.util.AbstractCollection, addAll(Collection)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/AbstractCollection.html", "accessed": "2026-11-22", "supports": "the documented implementation of addAll, which iterates over the argument and calls add for each element; HashSet inherits it through AbstractSet", "status": "verified" },
+    { "title": "Java SE 21 API, java.util.Stack", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Stack.html", "accessed": "2026-11-22", "supports": "Stack extends Vector, and the documentation's recommendation to use Deque instead", "status": "verified" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns (Addison-Wesley, 1994), ch. 1, \"Favor object composition over class inheritance\"", "url": "https://www.informit.com/store/design-patterns-elements-of-reusable-object-oriented-9780201633610", "accessed": "2026-11-22", "supports": "composition over inheritance as a stated design principle, and Decorator and Strategy as its pattern forms", "status": "reference" }
+  ]
+}

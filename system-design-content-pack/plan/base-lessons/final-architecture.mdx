@@ -1,0 +1,23 @@
+Starting from one user and one server, each problem added one building block. Together they form this architecture. Each box lights up once you have finished the lessons behind it. Select a box to see what it solves and which lessons it comes from.
+
+<Interactive name="architecture-map" />
+
+## Read it top to bottom
+
+<Steps>
+
+1. DNS finds the gateway (see [DNS](/learn/dns)).
+2. Static files come from the CDN, backed by object storage (see [CDN](/learn/cdn) and [Object storage](/learn/object-storage)).
+3. API calls pass the gateway (TLS, auth, rate limits) to stateless services (see [Monolith vs microservices](/learn/microservices) and [Rate limiting](/learn/rate-limiting)).
+4. Services read the cache before the database (see [Caching](/learn/caching)).
+5. Slow side effects go onto queues for workers (see [Message queues](/learn/message-queues)).
+
+</Steps>
+
+Timeouts, backoff, circuit breakers and idempotency keys guard every call (see [Performance and Reliability](/learn#reliability)).
+
+<Callout type="idea" title="Key takeaway">
+
+Every component adds complexity and cost. Add one only when its problem appears, and in interviews <mark>justify each box by the problem it solves</mark>.
+
+</Callout>

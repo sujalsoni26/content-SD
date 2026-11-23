@@ -1,0 +1,97 @@
+A **trace** is the record of one request's journey across services, assembled from **spans**: each span is one unit of work (an HTTP handler, a database query, a message publish) with a name, a start and end time, some attributes, and the id of the span that caused it. The span with no parent is the root; the rest form a tree. Google described this model in its 2010 Dapper paper, which recorded a span id and a parent id for every span and rebuilt the causal tree from them, and the industry has used the shape ever since. Metrics tell you that checkout p99 doubled at 14:02 (see [Metrics and monitoring](/learn/metrics-monitoring)); a trace tells you which of nine [microservices](/learn/microservices) spent the time.
+
+## Spans and the tree
+
+OpenTelemetry defines a span by its name, its context (trace id and span id), its parent span id (empty for the root), start and end timestamps, attributes such as the HTTP route or the SQL table, events, links to other traces, and a status. A span also has a **kind**: `SERVER` for handling an incoming call, `CLIENT` for making one, `INTERNAL` for work that stays in the process, and `PRODUCER` and `CONSUMER` for a message published now and handled later.
+
+## Context propagation
+
+Spans created in different processes can only join one tree if the trace id and the current span id travel with the request. The W3C **Trace Context** recommendation standardises the carrier, a `traceparent` header:
+
+```text
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+             ^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^^ ^^
+             version   trace-id (16 bytes)      parent-id (8 bytes) flags
+```
+
+Four hex fields separated by dashes. The version is `00`. The trace id is 16 bytes (32 hex characters) and identifies the whole request. The parent id is the 8-byte id of the caller's span, which becomes the parent of the span the receiver creates. The lowest bit of the flags byte is **sampled**: `01` means the caller is recording this trace and expects you to as well. An all-zero trace id or parent id is invalid and must be ignored, and a companion `tracestate` header carries vendor-specific key-value pairs.
+
+<Mermaid caption="One trace id, three services. Each hop reads the incoming traceparent, starts a child span whose parent is the caller's span id, and writes a new traceparent carrying its own span id." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client app
+    participant G as API gateway
+    participant O as Order service
+    participant P as Payment service
+    C->>G: POST /checkout
+    Note over G: New trace 4bf9…, root span g1
+    G->>O: traceparent 00-4bf9…-g1-01
+    Note over O: Span o1, parent g1
+    O->>P: traceparent 00-4bf9…-o1-01
+    Note over P: Span p1, parent o1
+    P-->>O: 200 OK
+    O-->>G: 200 OK
+    G-->>C: 200 OK
+    Note over G,P: Each service exports its spans and the backend stitches g1, o1, p1 by trace id
+`} />
+
+Propagation is the fragile part. Every hop must forward the header: HTTP clients, gRPC interceptors, and message producers, which put it in message headers so that the consumer's span can link back even though it runs seconds later. One library that drops the header splits the trace in two, and the second half appears as a mysterious new root.
+
+## Sampling
+
+At 10,000 requests per second and 20 spans each, recording everything is 200,000 spans a second, which few teams can store or afford. Dapper's authors found that a sampling rate as low as 1 in 1,024 still gave adequate data for high-volume services. The question is who decides.
+
+| | Head-based | Tail-based |
+| --- | --- | --- |
+| Decision made | At the root, when the trace starts | After the trace completes, in a collector |
+| Based on | Nothing yet known about the outcome: a ratio, a route, a tenant | The whole trace: keep every error, every slow trace, 1% of the rest |
+| Propagated how | The sampled flag in traceparent; children follow the parent | Every span is exported; the collector drops whole traces |
+| Cost | Cheap and stateless | Collectors buffer all spans of every trace until they decide |
+| Blind spot | Misses the rare error, which is often the one you want | Needs all spans of a trace to reach the same collector instance |
+
+OpenTelemetry's SDK default is parent-based with the root always sampled, that is, record everything and honour the caller's flag, which is right for development and wrong for production volume; a ratio sampler on the trace id is the usual head-based choice. The Collector's tail-sampling processor waits a configurable time (30 seconds by default) for a trace's spans to arrive before applying policies such as "status is error" or "latency above a threshold", and because all spans of a trace must land on one instance, scaling it means a first tier of collectors routing by trace id to a second tier that decides.
+
+## OpenTelemetry
+
+**OpenTelemetry (OTel)** is the CNCF project formed by merging OpenTracing and OpenCensus, and it is the vendor-neutral way to produce traces, metrics and logs. It has three parts: an **API** that application code and libraries call, an **SDK** per language that implements it, and the **Collector**, a separate process that receives spans, processes them (batching, sampling, redaction) and exports them to whichever backend you choose. It is deliberately not a backend; storage and the waterfall view are Jaeger's, Tempo's, Zipkin's or a vendor's job. Instrument once, change backends later.
+
+## Reading a waterfall
+
+A waterfall shows the spans of one trace as bars on a shared time axis, indented by depth. Three patterns account for most slow traces:
+
+```text
+GET /orders/42  (gateway)     |==================================| 480 ms
+  verify token                |==|                                  20 ms
+  select order                |  ==|                               25 ms
+  select item 1               |     =|                             12 ms
+  select item 2               |      =|                            12 ms
+  ... 28 more identical rows  |       =================|          340 ms
+  payment status (client)     |                        ====|       50 ms
+```
+
+- **The N+1 staircase.** Dozens of identical short spans in a row under one parent: one query per item in a loop. Batch them into one query or one bulk call, and 340 ms becomes 15.
+- **Serial calls that could be parallel.** Children that start only when the previous one ends although they do not depend on each other.
+- **The gap.** Time inside a parent not covered by any child is waiting: a queue, a connection pool, a garbage-collection pause. The slow hop is the span with the most *self time*, not the widest bar.
+
+<Callout type="analogy" title="A parcel's tracking number">
+
+Every depot scans the same tracking number, and the tracking page lists each scan with a time, so you can see which depot held the parcel for two days. A trace id is the tracking number and the waterfall is the tracking page. Where the analogy stops: a parcel takes one path, while a request fans out into parallel calls, which is why a trace is a tree rather than a list.
+
+</Callout>
+
+<Callout type="interview" title="The one-breath version">
+
+"Every service uses the OpenTelemetry SDK, propagates W3C traceparent on every call including message headers, exports to a collector that tail-samples errors and slow traces and keeps 1% of the rest, and writes the trace id into every log line so logs and traces join." Then name the N+1 staircase as the first thing you look for.
+
+</Callout>
+
+<DeepDive title="Go deeper: why the sampling decision must be consistent">
+
+A trace with half its spans missing is worse than no trace, so every service must reach the same decision about the same request. Head-based sampling achieves this by propagation: the root decides and sets the sampled flag, and children follow their parent. A ratio sampler therefore has to be deterministic, deciding from the trace id rather than a random number, so that two services that both believe they are the root (because a hop dropped the header) still agree. OpenTelemetry's specification requires exactly this determinism and recommends applying the ratio only at the root, with everything below inheriting the decision.
+
+</DeepDive>

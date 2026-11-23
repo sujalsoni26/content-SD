@@ -1,0 +1,78 @@
+{
+  "slug": "cdn-internals",
+  "title": "CDN architecture in depth",
+  "moduleId": "infrastructure",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Static files are cached at the edge, yet the origin still melts under a viral object, personalised pages leak between users and a stale copy cannot be removed.",
+  "summary": "Inside a CDN, anycast routes users to the nearest edge, tiers and origin shields funnel misses, the cache key and Vary decide what is the same object, Cache-Control, stale-while-revalidate and purges decide how long it lives, and signed URLs and edge functions handle private content.",
+  "catTip": "Every house on the street has a bowl with my name on it, so I eat at the nearest one. If a bowl is empty, the neighbour checks one shared pantry instead of bothering the humans. One pantry, many bowls: that is an origin shield.",
+  "recall": {
+    "q": "A viral image expires at the same instant on 200 edges. Which two CDN mechanisms keep the origin from receiving thousands of simultaneous fetches?",
+    "a": "Request collapsing at each edge forwards one request per cache key and holds the identical ones until the response arrives, and an origin shield funnels the misses from all edges through one caching tier near the origin so it sees roughly one request per object."
+  },
+  "archNodes": ["cdn"],
+  "guide": {
+    "breaks": "Without deliberate cache keys, tiers and freshness rules, every edge fetches popular objects from the origin independently, a cookie or query string silently splits the cache into useless variants, and an origin outage becomes an immediate user-facing error.",
+    "tradeoffs": "Every mechanism trades hit ratio against correctness or latency: a richer cache key means more misses, a longer TTL means staler pages, a shield adds a hop, and edge functions add their run time to every request they touch.",
+    "explainSimply": "A CDN is a chain of branch libraries with a regional depot behind them. Each branch keeps popular books for a set loan period, borrows from the depot rather than the publisher when it runs out, and files books by catalogue number, so if two branches use different numbers for the same book they both order copies. A recall notice pulls a book early.",
+    "hint": "Think about what makes two requests count as the same object, and who talks to the origin when the copy is missing."
+  },
+  "meow": "Meow-cache key: same key, same bowl, same kibble. Different cookie? Different bowl, empty, sad. Stale kibble beats no kibble when the human, the origin, is asleep.",
+  "quiz": [
+    {
+      "prompt": "Your origin returns personalised pages and the CDN caches them with the default cache key. What goes wrong, and what is the fix?",
+      "options": [
+        "Nothing: CDNs detect the Set-Cookie header and skip caching automatically",
+        "The first user's page is served to everyone who requests the same path; mark the response private or no-store, or put the identifying value in the cache key",
+        "The hit ratio drops because every user gets a separate variant",
+        "The origin shield rejects personalised responses"
+      ],
+      "answer": 1,
+      "explanation": "The default key (domain and path on CloudFront) ignores cookies, so one user's rendered page becomes the cached copy for that path; personalised responses must be declared off-limits to shared caches or keyed on the identifying value. The third option describes the opposite misconfiguration, an over-specific key."
+    },
+    {
+      "prompt": "Which directive lets an edge keep serving a copy when the origin returns 503, and for how long?",
+      "options": [
+        "s-maxage: for its full value, because shared caches ignore origin errors",
+        "stale-if-error: for up to its value in seconds after the copy went stale",
+        "stale-while-revalidate: indefinitely, until the origin recovers",
+        "private: because the browser keeps its own copy"
+      ],
+      "answer": 1,
+      "explanation": "RFC 5861's stale-if-error permits a stale response on a 500, 502, 503 or 504 for up to the stated number of seconds. stale-while-revalidate hides revalidation latency rather than errors and is bounded by its own value, which is the strongest distractor."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Why is adding Accept-Language to the cache key often worse than putting the language in the URL path?",
+      "a": "Clients send many spellings of the same preference (en-US,en versus en,en-US versus en-US), so each becomes a separate cached variant and the hit ratio collapses. A path such as /en/story.html is already part of the default key and has exactly one spelling per language."
+    },
+    {
+      "q": "When should you purge instead of relying on TTLs and versioned file names?",
+      "a": "When the URL cannot change and the content must update before the TTL expires: an HTML page, a price, a news story. Assets with content-hashed names never need purging, and a purge clears only the CDN, not browser caches, so it cannot replace versioning."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "RFC 4786, Operation of Anycast Services (BCP 126)", "url": "https://www.rfc-editor.org/rfc/rfc4786", "accessed": "2026-11-22", "supports": "anycast makes one service address available from multiple autonomous locations and the routing system selects the node; topological nearness does not always correlate with round-trip performance", "status": "verified" },
+    { "title": "Cloudflare Docs, How Cloudflare works", "url": "https://developers.cloudflare.com/fundamentals/concepts/how-cloudflare-works/", "accessed": "2026-11-22", "supports": "Cloudflare acts as a reverse proxy and uses anycast IP addresses to distribute traffic across its network", "status": "verified" },
+    { "title": "Cloudflare Docs, Tiered Cache", "url": "https://developers.cloudflare.com/cache/how-to/tiered-cache/", "accessed": "2026-11-22", "supports": "lower-tier data centres ask an upper tier before the origin; Smart Tiered Cache selects the single closest upper tier to each origin", "status": "verified" },
+    { "title": "AWS Docs, Use Amazon CloudFront Origin Shield", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/origin-shield.html", "accessed": "2026-11-22", "supports": "Origin Shield is an additional caching layer between regional edge caches and the origin, consolidating simultaneous requests into as few as one origin request, chosen in the region with lowest latency to the origin, at an extra charge", "status": "verified" },
+    { "title": "Cloudflare Docs, Cache keys", "url": "https://developers.cloudflare.com/cache/how-to/cache-keys/", "accessed": "2026-11-22", "supports": "the default cache key is scheme, host, URI with query string and the Origin header; custom keys add or remove query strings, headers, cookies, device type and geo", "status": "verified" },
+    { "title": "AWS Docs, Understand the cache key", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/understanding-the-cache-key.html", "accessed": "2026-11-22", "supports": "the default key is the distribution domain name plus the URL path; adding query strings, headers or cookies lowers the hit ratio; the Accept-Language and User-Agent examples", "status": "verified" },
+    { "title": "RFC 9111, HTTP Caching", "url": "https://www.rfc-editor.org/rfc/rfc9111", "accessed": "2026-11-22", "supports": "the max-age, s-maxage, no-store, private and public directives and the Vary matching rule including Vary: *", "status": "verified" },
+    { "title": "Cloudflare Docs, Cache-Control", "url": "https://developers.cloudflare.com/cache/concepts/cache-control/", "accessed": "2026-11-22", "supports": "Cloudflare's handling of s-maxage, no-store, private, stale-while-revalidate (background revalidation with UPDATING status) and stale-if-error (5xx only); Vary is not considered by default except accept-encoding and configured rules", "status": "verified" },
+    { "title": "AWS Docs, Request and response behavior for custom origins", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/RequestAndResponseBehaviorCustomOrigin.html", "accessed": "2026-11-22", "supports": "request collapsing of simultaneous requests sharing a cache key and the directives that disable it; CloudFront's handling of the Vary header", "status": "verified" },
+    { "title": "RFC 5861, HTTP Cache-Control Extensions for Stale Content", "url": "https://www.rfc-editor.org/rfc/rfc5861", "accessed": "2026-11-22", "supports": "the stale-while-revalidate and stale-if-error directives, their semantics and the max-age=600 examples", "status": "verified" },
+    { "title": "AWS Docs, Invalidate files to remove content", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html", "accessed": "2026-11-22", "supports": "invalidation versus versioned file names; invalidation does not reach copies cached in browsers or proxies", "status": "verified" },
+    { "title": "AWS Docs, Pay for file invalidation", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/PayingForInvalidation.html", "accessed": "2026-11-22", "supports": "the first 1,000 invalidation paths per month are free and a wildcard path counts as one path", "status": "verified" },
+    { "title": "Cloudflare Docs, Purge cache", "url": "https://developers.cloudflare.com/cache/how-to/purge-cache/", "accessed": "2026-11-22", "supports": "purge by single-file URL, everything, hostname, prefix or cache-tag", "status": "verified" },
+    { "title": "AWS Docs, Decide to use signed URLs or signed cookies", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-choosing-signed-urls-cookies.html", "accessed": "2026-11-22", "supports": "signed URLs for individual files and cookie-less clients, signed cookies for many files without changing URLs; signed URLs take precedence", "status": "verified" },
+    { "title": "AWS Docs, Customize at the edge with Lambda@Edge", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-at-the-edge.html", "accessed": "2026-11-22", "supports": "Lambda@Edge runs Node.js or Python functions at AWS locations closer to the viewer", "status": "verified" },
+    { "title": "AWS Docs, CloudFront events that can trigger a Lambda@Edge function", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-cloudfront-trigger-events.html", "accessed": "2026-11-22", "supports": "the viewer request, origin request, origin response and viewer response triggers, and that the function must finish before CloudFront continues", "status": "verified" },
+    { "title": "AWS Docs, Customize at the edge with CloudFront Functions", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cloudfront-functions.html", "accessed": "2026-11-22", "supports": "lightweight JavaScript functions with submillisecond startup on viewer request and viewer response events", "status": "verified" },
+    { "title": "Cloudflare Docs, How Workers works", "url": "https://developers.cloudflare.com/workers/reference/how-workers-works/", "accessed": "2026-11-22", "supports": "Workers run in V8 isolates rather than per-function virtual machines, eliminating VM cold starts, across Cloudflare's global network", "status": "verified" },
+    { "title": "Fastly Docs, Request collapsing", "url": "https://www.fastly.com/documentation/guides/concepts/edge-state/cache/request-collapsing/", "accessed": "2026-11-22", "supports": "request collapsing combines simultaneous requests for the same object into one origin request; private responses and pass requests are not collapsed", "status": "verified" }
+  ]
+}

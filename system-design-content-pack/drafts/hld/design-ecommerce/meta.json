@@ -1,0 +1,126 @@
+{
+  "slug": "design-ecommerce",
+  "title": "Design an e-commerce platform",
+  "moduleId": "hld",
+  "level": "advanced",
+  "minutes": 18,
+  "problem": "Two million shoppers press buy on ten thousand phones while a lost payment response makes the app retry, and the shop must neither oversell nor charge twice.",
+  "summary": "Four services with four stores: a cached, CDN-fronted catalogue, an inventory that reserves stock with a TTL behind a counter gate, an order service running checkout as a saga with compensations, and a payment service that charges once under an idempotency key.",
+  "catTip": "I hand out numbered tokens at the door, one per paw, and they melt after ten minutes. Pay with a token and I never sell a phone I do not have. Tap the buy button twice and I charge you once: same key, same answer.",
+  "recall": {
+    "q": "A flash sale offers 10,000 phones and 2M shoppers press buy within a minute. Why does the checkout reserve stock behind an atomic counter before charging, instead of charging first and allocating later?",
+    "a": "The contested thing is one inventory row, which takes a few thousand serialized updates a second, so a Redis counter gate admits only the 10,000 attempts that can succeed and the rest are told sold out from cache. Reserving with a short TTL before the payment pivot means a confirmed order always has its unit, where pay-then-allocate would take money for phones that do not exist and refund it; the condition is scarcity and the cost of the apology."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Checking stock, charging the card and confirming the order as independent writes lets a crash between them oversell, double-charge or lose a paid order, and a flash sale pointed at one inventory row melts the database for everyone.",
+    "tradeoffs": "Separate services with separate consistency rules mean a saga with compensations instead of one transaction, holds that block real buyers for their TTL, a reconciler for lost webhooks and a cache that may say in stock a few seconds too long.",
+    "explainSimply": "Picture a shop that hands out numbered tokens at the door for the one item everyone wants and only takes money from token holders, so nobody pays for a phone that is not there; an unused token goes back in the bowl after ten minutes. The shelves may carry an old price sticker for a minute, but the till rings the real one. If the card machine prints a receipt twice, the shop looks up the receipt number and charges you once.",
+    "hint": "Ask where the single contested number lives, who is allowed to touch it, and what makes a repeated request look identical to the first."
+  },
+  "meow": "Token at the door, meow, melts in ten minutes. Charge once per key, one order per receipt. Shelves may fib, the till never does.",
+  "quiz": [
+    {
+      "prompt": "A checkout service calls the payment provider, the provider charges the card, and the response is lost to a network timeout. The client retries. Which design prevents a second charge and a second order?",
+      "options": [
+        "Make payment the first step of the saga, so that inventory is only reserved for orders that have already paid",
+        "Send the retry with the same idempotency key, derived from the order id, so that the provider returns the saved result, and keep a unique constraint on the provider's charge reference so a late duplicate webhook is a no-op",
+        "Run two-phase commit across the order database and the payment provider so that both commit or neither does",
+        "Run a nightly reconciliation job that compares charges with orders by amount and time and refunds any duplicates"
+      ],
+      "answer": 1,
+      "explanation": "Idempotency makes the retry indistinguishable from the original to the provider and to the payment table, so nothing is charged or recorded twice. Nightly reconciliation is the strongest distractor because reconciliation is a necessary backstop for lost webhooks, but it finds a double charge hours after the shopper has seen it rather than preventing it; two-phase commit fails because a payment provider cannot prepare and would hold inventory locks across a seconds-long network call."
+    },
+    {
+      "prompt": "A festival-sale drop of 10,000 phones expects 2M shoppers to press buy within a minute, and the item must not be oversold. Which design holds?",
+      "options": [
+        "Charge every shopper first and allocate stock asynchronously, refunding the unlucky ones",
+        "Scale the inventory database vertically and lengthen the row-lock timeout so that all 33,000 attempts a second eventually commit",
+        "A waiting room that bounds admissions, an atomic counter seeded with 10,000 that gates which attempts reach the database, reservations with a ten-minute TTL and a sweeper that returns abandoned holds",
+        "Reservations without an expiry, so that a shopper who reaches checkout is guaranteed the phone until they pay"
+      ],
+      "answer": 2,
+      "explanation": "The counter lets the database see only the attempts that can succeed, the waiting room keeps the burst below capacity and the TTL returns abandoned units to sale. Pay-first-then-allocate is the strongest distractor because it also avoids the hot row, but for a scarce item it takes money for phones that do not exist and turns the oversell into refunds, which is the failure the requirement forbids."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: the app retries a checkout after a lost response, and the payment provider's webhook for the charge arrives twice, once before and once after the synchronous reply. Decision and why?",
+      "a": "Three invariants, three mechanisms: a client-generated idempotency key stored under a unique constraint on the order, so a retried click finds the same order; the order id as the idempotency key sent to the provider, so a retried charge is the same charge; and a unique constraint on the provider's charge reference, so a duplicate webhook inserts nothing. A reconciler fetches the status of PENDING payments older than a few minutes to cover the webhook that never arrives, and a payment reported failed is kept open for a late authorisation rather than closed."
+    },
+    {
+      "q": "Problem: 10,000 units, 2M shoppers in one minute, and one inventory row that takes a few thousand serialized updates a second. Decision and why?",
+      "a": "Level the burst with a waiting room that admits a bounded number of shoppers a minute (random admission for fairness), gate reservations with an atomic Redis counter seeded with the stock so that only the 10,000 attempts that can succeed reach the row and the rest see sold out from cache, reserve with a ten-minute TTL and one hold per shopper, and sweep expired holds back to the counter. Reserve-then-pay is chosen over pay-then-allocate because the item is scarce and a refund is the outcome the requirement forbids; the row's reserved-at-most-on-hand check stays the final truth if the counter over-admits."
+    }
+  ],
+  "glossary": [
+    { "term": "SKU", "full": "Stock Keeping Unit", "note": "One sellable variant of a product, such as a phone in one colour and storage size." },
+    { "term": "UPI", "full": "Unified Payments Interface", "note": "India's real-time bank-to-bank payment system, in which the payer approves a request in their bank app." },
+    { "term": "PCI DSS", "full": "Payment Card Industry Data Security Standard", "note": "The card schemes' security rules for anyone who stores, processes or transmits card data." }
+  ],
+  "sources": [
+    {
+      "title": "Stripe API reference, \"Idempotent requests\"",
+      "url": "https://docs.stripe.com/api/idempotent_requests",
+      "accessed": "2026-11-22",
+      "supports": "the Idempotency-Key header; the status code and body of the first request are saved and returned to retries with the same key; keys up to 255 characters; keys may be pruned after at least 24 hours; a reused key with different parameters is an error; only POST requests take keys",
+      "status": "verified"
+    },
+    {
+      "title": "Razorpay docs, \"Payment states and late authorisation\" (server-to-server best practices)",
+      "url": "https://razorpay.com/docs/payments/payment-gateway/s2s-integration/test-s2s/best-practices/payment-states-and-late-authorisation",
+      "accessed": "2026-11-22",
+      "supports": "payment states created, authorized, captured, failed, refunded; a payment with no bank response is marked failed after about 10 minutes but may become authorized up to 3 days later (late authorisation, under 0.5% of live payments); keep the order open after payment.failed; fulfil on captured or order.paid, not on authorized; reconcile orders still created or attempted after 15 minutes",
+      "status": "verified"
+    },
+    {
+      "title": "Razorpay docs, \"Order-payment relationship\" (server-to-server best practices)",
+      "url": "https://razorpay.com/docs/payments/payment-gateway/s2s-integration/test-s2s/best-practices/order-payment-relationship",
+      "accessed": "2026-11-22",
+      "supports": "create one provider order per purchase; an order can carry several payment attempts; order states created, attempted, paid; fulfil only when the order reaches paid",
+      "status": "verified"
+    },
+    {
+      "title": "Cloudflare Waiting Room docs, \"Configuration settings\"",
+      "url": "https://developers.cloudflare.com/waiting-room/reference/configuration-settings/",
+      "accessed": "2026-11-22",
+      "supports": "total active users and new users per minute as the two required limits (each over 200); session duration of 1 to 30 minutes, default 5, after which an idle spot is freed; guidance to size the limits against origin capacity",
+      "status": "verified"
+    },
+    {
+      "title": "Cloudflare Waiting Room docs, \"Queueing methods\"",
+      "url": "https://developers.cloudflare.com/waiting-room/reference/queueing-methods/",
+      "accessed": "2026-11-22",
+      "supports": "first-in-first-out ordering by a timestamp in the visitor's cookie; random admission recommended \"when you want to distribute products or services more equitably\"; passthrough and reject modes",
+      "status": "verified"
+    },
+    {
+      "title": "Elastic docs, \"Near real-time search\"",
+      "url": "https://www.elastic.co/docs/manage-data/data-store/near-real-time-search",
+      "accessed": "2026-11-22",
+      "supports": "Elasticsearch refreshes indices every second by default (for indices that received a search in the last 30 seconds), so a newly indexed document becomes searchable within about a second; a refresh opens a new Lucene segment from the filesystem cache",
+      "status": "verified"
+    },
+    {
+      "title": "Redis documentation, \"EXPIRE\"",
+      "url": "https://redis.io/docs/latest/commands/expire/",
+      "accessed": "2026-11-22",
+      "supports": "EXPIRE sets a timeout after which the key is deleted; the timeout is cleared only by commands that delete or overwrite the key, so operations that alter a value in place such as HSET leave it untouched and it must be refreshed explicitly; expires are synthesised as DEL to replicas and the AOF",
+      "status": "verified"
+    },
+    {
+      "title": "DeCandia et al., \"Dynamo: Amazon's Highly Available Key-value Store\", SOSP 2007",
+      "url": "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf",
+      "accessed": "2026-11-22",
+      "supports": "the shopping cart as the motivating always-writeable workload: customers must be able to add items while disks fail and data centres are destroyed (§1); the cart service reconciles divergent versions by merging them, so an add is never lost but deleted items can resurface (§4.4, §6); the cart service handled tens of millions of requests and over three million checkouts in a day (§1)",
+      "status": "verified"
+    },
+    {
+      "title": "Flipkart Stories, \"#TBBD throwback: The Big Billion Day 2015\"",
+      "url": "https://stories.flipkart.com/tbbd-throwback-the-big-billion-day-2015/",
+      "accessed": "2026-11-22",
+      "supports": "the 2015 sale was spread over five days (6 to 12 October) instead of one; load testing at five times the projected numbers for almost a month; systems throttling just below the tested limits; 99.997% of orders reported safe and healthy",
+      "status": "verified"
+    }
+  ]
+}

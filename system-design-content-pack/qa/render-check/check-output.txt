@@ -1,0 +1,5 @@
+
+> system-design-next@0.1.0 validate:content
+> node scripts/validate-content.mjs
+
+OK: 143 lessons match 143 curriculum slugs; 51 <Interactive> (25 kinds), 23 <Diagram>, 158 <Mermaid>; all compile.

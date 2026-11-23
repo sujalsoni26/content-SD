@@ -1,0 +1,329 @@
+An elevator system is the low-level design problem with a scheduler inside it, and the one where candidates most often tangle three decisions that should stay apart. The decision that carries this case study is to **separate which car takes a call, which floor a car stops at next, and whether the car may move at all**. The first is a dispatcher, the second a scheduling policy, the third a safety mode on the car. Each sits behind its own small interface, so swapping SCAN for LOOK or adding a maintenance mode touches one class.
+
+## Requirements and assumptions
+
+**Functional requirements**
+
+- A building with 20 floors, numbered 0 to 19, and 4 cars. Each landing has an up and a down button; each car has a button per floor, a door-open button and an emergency stop.
+- A hall call (floor plus direction) is assigned to exactly one car, which stops there on its way in that direction. A car call (a destination pressed inside) is served by that car.
+- Doors open on arrival, close after a dwell time, and reopen if the obstruction sensor trips. A car over its load limit keeps its doors open and does not move.
+- A technician can take a car out of service; its pending hall calls are reassigned.
+- Landing displays show each car's floor and heading.
+
+**Assumptions**: one controller process per building; motion in discrete ticks of one floor per tick, with doors open for three ticks; pressing a button twice is the same request.
+
+**Out of scope**: destination dispatch (typing your floor on the landing), express zones, fire-service recall, and real acceleration curves; the tick model stands in for the physics.
+
+**Non-functional**: safety overrides scheduling; a call is assigned within one tick; no call waits forever; one failed car must not stop the others.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility | State |
+| --- | --- | --- |
+| ElevatorController | Receives hall calls, asks the dispatcher for a car, hands the call over; runs the tick; reassigns calls from a car leaving service | cars, dispatcher, unassigned calls |
+| Dispatcher | Chooses a car for a hall call | none |
+| NearestCarDispatcher | Scores each in-service car by estimated ticks to reach the call | none |
+| ElevatorCar | Floor, heading, mode and door; two sorted sets of pending stops; one `step()` per tick | floor, heading, mode, upStops, downStops |
+| SchedulingPolicy | Given position, heading and the stop sets, names the next stop | none |
+| LookPolicy, ScanPolicy | The two sweep rules | none |
+| HallCall | A floor and a direction, as a value | floor, direction |
+| Door | Open, closing or closed; dwell countdown; obstruction handling | state, dwell |
+| Sensors | Hardware port for load and obstruction readings | the drivers |
+
+The detail that makes the rest simple is the pair of stop sets. A car heading up serves the stops above it in ascending order and ignores the down calls until it turns, so "next stop above me" is one `ceiling` lookup on a sorted set, and "where do I turn" is the highest down stop.
+
+## Class design
+
+<Mermaid caption="Three interfaces for three decisions. The controller depends on Dispatcher, the car on SchedulingPolicy, and the car's mode guards every move." chart={`classDiagram
+    class ElevatorController {
+        +request(HallCall call)
+        +tick()
+        +takeOutOfService(ElevatorCar car)
+    }
+    class Dispatcher {
+        <<interface>>
+        +choose(HallCall call, List cars) Optional
+    }
+    class NearestCarDispatcher
+    class ElevatorCar {
+        -int floor
+        -Direction heading
+        -CarMode mode
+        -NavigableSet upStops
+        -NavigableSet downStops
+        +addStop(int floor, Direction wanted)
+        +step()
+        +ticksToReach(HallCall call) int
+        +inService() boolean
+    }
+    class SchedulingPolicy {
+        <<interface>>
+        +nextStop(int floor, Direction heading, NavigableSet up, NavigableSet down, int topFloor) Optional
+    }
+    class LookPolicy
+    class ScanPolicy
+    class HallCall {
+        +int floor
+        +Direction direction
+    }
+    class Door {
+        +open()
+        +tick()
+        +isOpen() boolean
+    }
+    class Sensors {
+        <<interface>>
+        +loadKg() int
+        +obstructed() boolean
+    }
+    class Direction {
+        <<enumeration>>
+        UP
+        DOWN
+        IDLE
+    }
+    class CarMode {
+        <<enumeration>>
+        NORMAL
+        OVERLOADED
+        MAINTENANCE
+        EMERGENCY_STOP
+    }
+    ElevatorController *-- ElevatorCar
+    ElevatorController --> Dispatcher : uses
+    NearestCarDispatcher ..|> Dispatcher
+    ElevatorCar --> SchedulingPolicy : uses
+    ElevatorCar *-- Door
+    ElevatorCar --> Sensors : reads
+    LookPolicy ..|> SchedulingPolicy
+    ScanPolicy ..|> SchedulingPolicy
+    ElevatorController ..> HallCall
+    ElevatorCar --> Direction
+    ElevatorCar --> CarMode
+`} />
+
+The mode is an `enum` with one guard in `step()`, not four State classes. The [behavioural patterns lesson](/learn/design-patterns-behavioural) drew the line: State earns its place when behaviour per state is substantial. Here every non-normal mode does the same thing, refuse to move, so a table-sized enum is the honest choice, and the contrast with the vending machine, where each state has real behaviour, is worth saying aloud.
+
+## Key interfaces and methods
+
+```java
+enum Direction { UP, DOWN, IDLE }
+enum CarMode { NORMAL, OVERLOADED, MAINTENANCE, EMERGENCY_STOP }
+record HallCall(int floor, Direction direction) {}
+record Stop(int floor, Direction thenHeading) {}
+
+interface Dispatcher {
+    Optional<ElevatorCar> choose(HallCall call, List<ElevatorCar> cars);
+}
+interface SchedulingPolicy {
+    Optional<Stop> nextStop(int floor, Direction heading, NavigableSet<Integer> up,
+                            NavigableSet<Integer> down, int topFloor);
+}
+```
+
+The car owns its stops and its lock. `addStop` is called by button threads, `step` by the ticker, and both go through the same lock. The safety guard is the first line of `step`: a car that is overloaded, in maintenance or stopped does nothing but tick its door.
+
+```java
+final class ElevatorCar {
+    private final ReentrantLock lock = new ReentrantLock();
+    private final NavigableSet<Integer> upStops = new TreeSet<>();     // stop here while heading up
+    private final NavigableSet<Integer> downStops = new TreeSet<>();   // stop here while heading down
+    private int floor = 0;
+    private Direction heading = Direction.IDLE;
+    private CarMode mode = CarMode.NORMAL;
+    private final Door door;  private final SchedulingPolicy policy;  private final int topFloor;
+
+    void addStop(int target, Direction wanted) {       // hall call: the passenger's direction
+        lock.lock();                                   // car call: the direction of target from here
+        try { (wanted == Direction.UP ? upStops : downStops).add(target); }
+        finally { lock.unlock(); }
+    }
+
+    void step() {                                      // one tick
+        lock.lock();
+        try {
+            if (mode != CarMode.NORMAL || door.isOpen()) { door.tick(); return; }   // safety first
+            Optional<Stop> next = policy.nextStop(floor, heading, upStops, downStops, topFloor);
+            if (next.isEmpty()) { heading = Direction.IDLE; return; }
+            Stop s = next.get();
+            if (s.floor() == floor) { heading = s.thenHeading(); arrive(); return; }
+            heading = s.floor() > floor ? Direction.UP : Direction.DOWN;
+            floor += heading == Direction.UP ? 1 : -1;                                // one floor per tick
+        } finally { lock.unlock(); }
+    }
+
+    private void arrive() { upStops.remove(floor); downStops.remove(floor); door.open(); }
+}
+```
+
+LOOK is the behaviour you expect from a lift: keep going while there is a pending stop ahead, turn at the last one. With two sorted sets it is a handful of navigation calls:
+
+```java
+final class LookPolicy implements SchedulingPolicy {
+    public Optional<Stop> nextStop(int floor, Direction heading, NavigableSet<Integer> up,
+                                   NavigableSet<Integer> down, int topFloor) {
+        if (heading != Direction.DOWN) {                                   // UP, or IDLE: look upwards first
+            Integer above = up.ceiling(floor);                             // nearest up-stop at or above us
+            if (above != null) return Optional.of(new Stop(above, Direction.UP));
+            if (!down.isEmpty()) return Optional.of(new Stop(down.last(), Direction.DOWN));  // turn at the top call
+        }
+        Integer below = down.floor(floor);                                 // nearest down-stop at or below us
+        if (below != null) return Optional.of(new Stop(below, Direction.DOWN));
+        if (!up.isEmpty()) return Optional.of(new Stop(up.first(), Direction.UP));           // turn at the bottom call
+        return Optional.empty();
+    }
+}
+```
+
+SCAN differs in one line: it does not turn at the last pending stop but sweeps on to the terminal floor, the way the disk-scheduling algorithm that borrowed the lift's name runs the head to the edge of the platter.
+
+```text
+SCAN, heading UP:   next = up.ceiling(floor)
+                    if none and floor < topFloor: next = topFloor      # sweep on, even with nothing to do
+                    if floor == topFloor: heading = DOWN and mirror the rule with down.floor(floor) and floor 0
+
+LOOK, heading UP:   next = up.ceiling(floor)
+                    if none: next = highest pending down stop, then heading = DOWN
+```
+
+The dispatcher picks a car for a hall call. The default scores each car by estimated ticks to reach the call: the plain distance for an idle car or one approaching in the call's direction, otherwise the distance to its turning point and back.
+
+```java
+final class NearestCarDispatcher implements Dispatcher {
+    public Optional<ElevatorCar> choose(HallCall call, List<ElevatorCar> cars) {
+        return cars.stream()
+            .filter(ElevatorCar::inService)
+            .min(Comparator.comparingInt(car -> car.ticksToReach(call)));   // a Comparator is a Strategy too
+    }
+}
+```
+
+The controller drives time with a single-threaded scheduler. Each tick steps every car, and a failing car is isolated rather than allowed to kill the tick:
+
+```java
+ScheduledExecutorService ticker = Executors.newSingleThreadScheduledExecutor();
+ticker.scheduleAtFixedRate(() -> {
+    for (ElevatorCar car : cars) {
+        try { car.step(); } catch (RuntimeException e) { car.emergencyStop(e); }   // one bad car, not a dead building
+    }
+}, 0, 1, TimeUnit.SECONDS);
+```
+
+That `try` is not decoration. If a periodic task throws, the executor suppresses all later executions, so an unguarded exception in one car would silently freeze every lift in the building.
+
+## Interactions
+
+<Mermaid caption="A down call at floor 7 while car 2 is idle at floor 4. The dispatcher chooses once; from then on the car's own policy decides each tick." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant P as Passenger
+    participant L as Landing 7
+    participant C as Controller
+    participant D as Dispatcher
+    participant E as Car 2
+    participant S as LookPolicy
+    participant T as Ticker
+    P->>L: press Down
+    L->>C: request(HallCall 7 DOWN)
+    C->>D: choose(call, cars)
+    D-->>C: car 2, idle at floor 4, 3 ticks away
+    C->>E: addStop(7, DOWN)
+    T->>E: step()
+    E->>S: nextStop(4, IDLE)
+    S-->>E: Stop(7, DOWN)
+    Note over E: three ticks, one floor each
+    E->>E: arrive(), doors open, heading DOWN
+    P->>E: press 3
+    E->>E: addStop(3, DOWN)
+    T->>E: step()
+    E->>S: nextStop(7, DOWN)
+    S-->>E: Stop(3, DOWN)
+`} />
+
+<Mermaid caption="The car's mode and motion lifecycle. Every non-normal mode refuses to move; getting back to Idle always passes through a technician or a sensor clearing." chart={`stateDiagram-v2
+    state "Doors open" as DoorsOpen
+    state "Emergency stop" as EmergencyStop
+    [*] --> Idle
+    Idle --> Moving: a stop is pending
+    Moving --> DoorsOpen: arrived at a stop
+    DoorsOpen --> Moving: dwell over, stops pending
+    DoorsOpen --> Idle: dwell over, no stops
+    DoorsOpen --> DoorsOpen: obstruction, reopen and restart the dwell
+    DoorsOpen --> Overloaded: load above the limit
+    Overloaded --> DoorsOpen: load back under the limit
+    Idle --> Maintenance: technician key, hall calls reassigned
+    DoorsOpen --> Maintenance: technician key, hall calls reassigned
+    Moving --> EmergencyStop: stop button or fault
+    EmergencyStop --> Maintenance: technician reset
+    Maintenance --> Idle: returned to service
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Strategy | Dispatcher | Nearest-car tends to bunch cars together under heavy traffic; a load-balancing or zone-aware dispatcher is a one-class swap | One building, one rule, forever |
+| Strategy | SchedulingPolicy | SCAN and LOOK differ in one decision and should be testable against the same simulated traffic | You will only ever ship LOOK |
+| Enum guard instead of State | CarMode | Every non-normal mode does the same thing, refuse to move, so four classes would hold one line each | Modes gain real behaviour, such as fire-service recall driving the car to a floor |
+| Hardware ports | Sensors, Door | Tests run a thousand simulated days in a second without a shaft | Never |
+
+Not used: Observer for landing displays (they read each car's floor and heading once per tick, which is simpler than subscribing), Command for calls (a call is a value with nothing to undo), and a Singleton controller (one instance, injected into the panels).
+
+## Edge cases and error handling
+
+- **Repeated presses.** The stop sets make a second press idempotent; nothing to debounce.
+- **Up and down pressed on the same landing.** Two hall calls, dispatched independently; the same car may serve both on successive sweeps.
+- **A call at the car's current floor with doors open.** Reopen or extend the dwell; do not add a stop the car is already serving.
+- **A call for the floor the car is about to pass.** In the tick model the next floor is always reachable. A real controller has a commitment point beyond which it cannot decelerate; the stop is accepted for the next sweep instead.
+- **A car leaves service with pending calls.** The controller re-dispatches its hall calls. Car calls cannot be re-dispatched, because nobody else knows who pressed them; the car drives to the nearest floor, opens, and tells passengers to step out.
+- **Every car is out of service.** Calls wait in the controller's unassigned queue and landings display "out of service"; the first car back takes them.
+- **The chosen car gets stuck.** Overloaded or obstructed for too long, a call makes no progress. Give each assignment a deadline in ticks and re-dispatch when it passes.
+- **Starvation.** Serving the nearest request first leaves a far floor waiting as long as nearer traffic keeps arriving. Sweeping policies bound the wait to roughly two sweeps, which is why SCAN exists at all.
+- **Repeated obstruction.** After a few reopen cycles, hold the doors open and raise an alarm rather than keep slamming.
+- **Emergency stop.** Freeze, alarm, and require a technician reset; the car does not rejoin dispatch on its own.
+
+<Callout type="analogy" title="Bus, taxi, and the bus that knows its passengers">
+
+A nearest-request-first lift is a taxi: it takes whoever is closest, and the person at the far end of town waits as long as closer fares keep appearing. SCAN is a bus on a fixed route: it drives to the terminus whether or not anyone is left aboard, which is predictable and sometimes wasteful. LOOK is a bus whose driver turns round after the last passenger's stop. Where the analogy fails: a bus has one driver deciding where to go next, while the building also has a dispatcher deciding which bus answers you, and the two decisions are not the same job.
+
+</Callout>
+
+## Concurrency
+
+Name the shared mutable state, as [Concurrency and thread safety](/learn/concurrency-basics) insists: each car's floor, heading, mode and two stop sets. Button handlers (many threads), the ticker (one), and the technician console all reach them. `TreeSet` is not synchronised, so unguarded concurrent `add` and `remove` corrupt it; the per-car `ReentrantLock` is the cheapest correct tool, taken with `lock()` and released in `finally` on both paths.
+
+The dispatcher runs on a button thread and asks every car for `ticksToReach`, which takes that car's lock briefly to read a consistent floor and heading. The estimate is stale the moment the lock is released and that is fine: dispatch is a heuristic, and a slightly wrong choice costs a few ticks, not correctness. No thread ever holds two car locks, and the controller's own lock on the unassigned-call queue is never held while a car lock is taken, so there is no cycle and no deadlock to reason about.
+
+Time is one thread. `scheduleAtFixedRate` never runs two executions of the tick concurrently: if a tick runs long, the next starts late rather than overlapping. That is what makes "one floor per tick" a safe statement.
+
+## Extensibility and trade-offs
+
+- **Destination dispatch.** Passengers type their floor on the landing. `HallCall` gains a destination, the dispatcher groups by destination, and the scheduling policy does not change.
+- **Express zones.** The dispatcher filters cars by the floors they serve; a car's policy is unaware.
+- **Energy saving.** An idle-parking rule sends empty cars to the lobby; it is one more decision, so one more small interface rather than a branch in `step`.
+- **Fire-service recall.** A mode that clears every stop and drives to the recall floor, which is the point at which `CarMode` would grow real behaviour and State classes would start to earn their place.
+- **Real hardware.** `step` becomes a handler for position events from the drive, and the tick model is left to the tests.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| LOOK over SCAN | Less empty travel, shorter average wait | Less predictable waits for the far floors |
+| Nearest-car dispatch | Fast assignment, simple to explain | Cars tend to bunch under heavy traffic |
+| One lock per car | Cars never wait for each other | Dispatch reads slightly stale state |
+| Discrete ticks | Deterministic tests, trivial reasoning | Hides acceleration and door timing |
+
+<Callout type="interview" title="The two-minute version">
+
+"Three decisions, three objects. A Dispatcher strategy chooses the car for a hall call; nearest estimated arrival by default. Each car has a SchedulingPolicy that picks its next stop from two sorted sets of pending floors, LOOK by default: serve the nearest stop ahead, turn at the last pending one, which bounds every wait to about two sweeps where nearest-first can starve a floor. A CarMode enum guards the top of the car's step: overloaded, maintenance or emergency means the car does not move, and its hall calls are re-dispatched. Each car has one lock shared by the button threads and the ticker; the ticker is a single-threaded scheduled executor whose task catches exceptions so one car cannot stop the building." Then offer SCAN versus LOOK as the follow-up you are ready for.
+
+</Callout>
+
+<DeepDive title="Go deeper: one thread, no locks">
+
+The alternative to a lock per car is to make the controller an event loop. Every button press, sensor reading and tick becomes an event on one `BlockingQueue`; a single controller thread takes events one at a time and mutates the cars without any locks, because nothing else can touch them. The queue is thread-safe and gives the happens-before guarantee that whatever a producer did before `put` is visible to the consumer after `take`. The design is deterministic, which makes a day of simulated traffic replayable in a test, and it mirrors how embedded controllers are actually written. The costs are that one slow handler delays every car, and that the dispatcher's "ask each car how far it is" becomes a plain method call that must stay cheap. For four cars it is arguably the better design; the lock-per-car version is the one interviewers ask you to defend.
+
+</DeepDive>

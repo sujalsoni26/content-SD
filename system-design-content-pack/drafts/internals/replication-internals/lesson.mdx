@@ -1,0 +1,79 @@
+[Replication](/learn/replication) drew one arrow from primary to replica. This lesson opens the arrow: what travels along it, how lagging replicas are fed, what failover costs, how two leaders settle a disagreement, and how the stream becomes an event feed.
+
+## Three things you can ship
+
+<Mermaid caption="Three replication styles differ in what crosses the wire: the statement, the physical log, or decoded row changes." chart={`flowchart LR
+    P["Primary"] --> S["SQL text"]
+    P --> W["WAL bytes"]
+    P --> L["Decoded row changes"]
+    S --> R1["Replica re-executes each statement"]
+    W --> R2["Standby replays blocks, byte for byte"]
+    L --> R3["Subscriber applies inserts, updates, deletes"]
+    L --> K["Kafka topic via CDC"]
+`} />
+
+**Statement-based** replication forwards the SQL. It is compact, but statements are not deterministic: `RAND()`, `UUID()`, `SYSDATE()` and `USER()` give different answers on each server, and an `UPDATE` with `LIMIT` but no `ORDER BY` picks different rows.
+
+**Physical** replication ships the [write-ahead log](/learn/wal) itself. PostgreSQL's streaming replication sends WAL records to the standby as they are generated, and the standby replays them as crash recovery would, producing a byte-identical copy. That exactness is also the limit: it replicates the whole server, needs the same major version, and the standby is read-only.
+
+**Logical** replication decodes the WAL into row changes identified by primary key (the *replication identity*) and applies them as ordinary writes on the subscriber. PostgreSQL's version is publish and subscribe, built on logical decoding and the `pgoutput` plugin; MySQL's binary log in `ROW` format (the default) carries the same kind of events. Because the subscriber executes writes, it can take a subset of tables, run a different major version, keep extra indexes, or be a different system. The costs: more bytes for bulk changes, and schema changes are not carried, so DDL must be applied on both sides by hand.
+
+| | Statement | Physical (WAL shipping) | Logical (row-based) |
+| --- | --- | --- | --- |
+| Unit shipped | SQL text | Log records with block addresses | Row images keyed by primary key |
+| Replica is | An independent server | An exact read-only copy | Writable, selective, cross-version |
+| Fails on | Non-deterministic statements | A different version or platform | DDL, sequences, large objects |
+
+## Keeping replicas fed
+
+The primary normally recycles WAL after a checkpoint, so a replica that disconnects for an hour would lose its place. A **replication slot** is the primary's promise to keep WAL (and, for physical standbys, old row versions they may need) until that consumer has received it, even while disconnected. A forgotten slot retains WAL forever and fills the disk unless `max_slot_wal_keep_size` (unlimited by default) caps it.
+
+<Interactive name="replication-lag" />
+
+Synchronous replication fits in one sentence: `synchronous_standby_names = 'ANY 2 (s1, s2, s3)'` makes each commit wait until two of the three standbys confirm they have flushed its WAL, a write quorum (see [Quorums](/learn/quorums)). If too few standbys are up, commits hang until an operator shortens the list.
+
+## Failover and the data-loss window
+
+<Steps>
+
+1. **Detect.** Heartbeats to the primary time out. A slow primary and a dead one look identical (see [What makes a system distributed](/learn/distributed-fundamentals)), so the timeout is a bet.
+2. **Choose.** Pick the standby that has received the most WAL; any other would lose more.
+3. **Promote.** `pg_ctl promote` or `pg_promote()` turns the standby into a primary that accepts writes.
+4. **Repoint.** Clients find the new primary through DNS, a virtual IP or a proxy.
+5. **Fence.** Make sure the old primary cannot come back believing it is still primary. PostgreSQL's documentation calls this STONITH, Shoot The Other Node In The Head.
+
+</Steps>
+
+The **data-loss window** is everything the old primary acknowledged but had not yet shipped: with asynchronous replication, every commit after the chosen standby's last received position is gone. Synchronous replication closes the window at the price of commit latency. Orchestrators such as Patroni automate the sequence and keep the leader decision in a distributed store (etcd, ZooKeeper, Consul or Kubernetes): [leader election](/learn/leader-election) in practice.
+
+## Two leaders, one row
+
+Accept writes in several regions (see [Multi-region](/learn/multi-region)) and two leaders will eventually change the same row at once.
+
+- **Last writer wins (LWW).** Timestamp each write and keep the latest. DynamoDB global tables reconcile this way per item, Cassandra per mutation. Simple, but it discards a write and trusts clocks that [disagree](/learn/time-and-ordering).
+- **Application merge.** Keep both versions and hand them to the application: two edits to a shopping cart become a union of items.
+- **CRDTs.** Conflict-free replicated data types (Shapiro, Preguiça, Baquero and Zawirski, 2011) are counters, sets, maps and registers whose concurrent updates merge identically on every replica.
+
+Cheapest of all is avoiding conflicts: route each user's writes to one home region.
+
+## The log as an event stream
+
+**Change data capture (CDC)** ships the log to everyone else. Debezium reads PostgreSQL through logical decoding (it creates a replication slot and needs `wal_level = logical`) or MySQL's binlog (which must be in `ROW` format), snapshots first, then emits one event per row insert, update or delete into a Kafka topic per table, in commit order. Caches, search indexes and warehouses consume the stream instead of polling; the pattern is in [Change data capture](/learn/cdc).
+
+<Callout type="analogy" title="Recipe, frozen kitchen or shopping list">
+
+Statement-based replication mails the recipe, and every kitchen cooks it slightly differently. Physical replication freezes the whole kitchen, shelf by shelf, and ships it: identical, but only to a kitchen of the same model. Logical replication sends a list of changes, two eggs added to shelf 3, that any kitchen can apply.
+
+</Callout>
+
+<Callout type="interview" title="Name the window">
+
+"Asynchronous replication gives fast commits and a data-loss window on failover equal to the replication lag; synchronous replication closes the window at the cost of latency and of commits hanging when a standby is down. I'd fence the old primary, promote the most advanced standby, and keep the leader decision in a consensus store."
+
+</Callout>
+
+<DeepDive title="Go deeper: why the old primary cannot just reconnect">
+
+A promoted standby starts a new timeline, and WAL the old primary wrote after the fork exists only there, so it cannot simply rejoin. `pg_rewind` copies back only the blocks changed since the fork and lets WAL replay bring the old primary forward as a standby; it needs `wal_log_hints` or data checksums (the initdb default) to detect changed pages.
+
+</DeepDive>

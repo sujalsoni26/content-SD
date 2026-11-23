@@ -1,0 +1,73 @@
+{
+  "slug": "delivery-semantics",
+  "title": "Delivery semantics and exactly-once",
+  "moduleId": "streaming",
+  "level": "advanced",
+  "minutes": 9,
+  "problem": "A consumer inserted five payments, crashed before committing its offset, restarted and inserted the same five again; the retry nobody saw became a double charge.",
+  "summary": "At-most-once, at-least-once and exactly-once follow from whether retries can duplicate and whether a consumer commits before or after the work. Kafka adds an idempotent producer and transactions inside the log; outside it, exactly-once is an effect you get only from idempotent sinks.",
+  "catTip": "I tick my chore list after I do the chore, so a nap in between means doing it twice. Fine for naps, bad for payments. The trick is making the second go change nothing, which is a plan, not a hope.",
+  "recall": {
+    "q": "A consumer commits its offset after processing a batch and crashes between the two steps. What happens on restart, and what makes it harmless?",
+    "a": "It re-reads the batch from the last committed offset and processes it again: at-least-once. It is harmless only if the processing is idempotent, through an event id or natural key that the sink checks, or if the offset was stored in the same transaction as the output so the restart can skip what was done."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Retries after lost acknowledgements and restarts after crashes replay work, so without idempotence or transactions a payment is taken twice, or, if offsets are committed early, a record is silently skipped.",
+    "tradeoffs": "Every stronger guarantee costs something: idempotence needs state to remember what was seen, transactions add coordinator round trips and hold readers at the last stable offset, and effectively-once needs every sink to cooperate.",
+    "explainSimply": "Delivering a message is like a chore list and a pen: tick before doing and you may skip one, tick after and you may do one twice, and no pen trick gives you exactly once. The only way out is making the repeat harmless, like noticing the bin is already empty.",
+    "hint": "Where was the offset when the crash happened, and what would make the second attempt a no-op?"
+  },
+  "meow": "Meow, lost ack. Meow again. Two meows, one cat: the human must recognise the repeat, or feed me twice.",
+  "quiz": [
+    {
+      "prompt": "A Kafka consumer runs with enable.auto.commit=true, hands each record to a thread pool and polls again immediately. The process is killed while 200 records are still being processed. What is the most likely outcome?",
+      "options": [
+        "The 200 records are processed again after restart, because offsets are only committed after processing",
+        "Some of the 200 records are never processed, because auto-commit may already have committed offsets past them",
+        "Kafka detects the unprocessed records and redelivers them to another consumer",
+        "The producer's idempotence guarantees the records are processed exactly once"
+      ],
+      "answer": 1,
+      "explanation": "Auto-commit commits what the last poll returned regardless of whether your threads finished with it, so offsets can run ahead of the work: at-most-once in disguise. Producer idempotence only removes duplicates on the write path and says nothing about consumers."
+    },
+    {
+      "prompt": "Which duplicate does the idempotent producer (enable.idempotence=true) prevent?",
+      "options": [
+        "A consumer reprocessing a batch after crashing before its offset commit",
+        "The same business event sent twice by the application after it restarted and lost track of what it had sent",
+        "A batch written twice because the producer retried after the broker's acknowledgement was lost",
+        "Two services publishing the same event from their outboxes"
+      ],
+      "answer": 2,
+      "explanation": "The broker deduplicates retried batches by producer id and sequence number within one producer session. An application-level resend after a restart arrives from a new producer id as a new record, so it needs an event id the consumer can check."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A Kafka Streams job runs with exactly_once_v2 and, for each input record, also sends an email through an SMTP gateway. Which part is exactly-once and which is not?",
+      "a": "The Kafka side: output records and offset commits are atomic, and read_committed consumers see each result once. The email is a side effect outside the transaction, so a crash after sending but before the commit replays the record and sends it again; the gateway call needs an idempotency key."
+    },
+    {
+      "q": "Why does a transactional producer need a stable transactional.id, and what is a zombie?",
+      "a": "The id lets the transaction coordinator recognise the same logical producer across restarts and bump its epoch. Any older instance still running under that id is a zombie: its writes are fenced, so a stalled instance cannot commit after its replacement has, which would otherwise duplicate output."
+    }
+  ],
+  "glossary": [
+    { "term": "EOS", "full": "Exactly-Once Semantics", "note": "Kafka's name for processing in which each record's effect appears once in the output; built from the idempotent producer and transactions, and scoped to Kafka topics and state stores." }
+  ],
+  "sources": [
+    { "title": "Apache Kafka 4.4 documentation, Design: Message Delivery Semantics", "url": "https://kafka.apache.org/44/design/design/", "accessed": "2026-11-22", "supports": "definitions of at-most-once, at-least-once and exactly-once; saving the position before processing gives at-most-once and after gives at-least-once; producer id and sequence number deduplication; offsets stored in an internal topic and written in the same transaction; read_committed; at-least-once by default", "status": "verified" },
+    { "title": "Confluent documentation, Kafka Message Delivery Guarantees (mirror of the Kafka design text)", "url": "https://docs.confluent.io/kafka/design/delivery-semantics.html", "accessed": "2026-11-22", "supports": "the same semantics text, including that Kafka stores the consumer position in the same place as the consumed data and that at-most-once is obtained by disabling retries and committing before processing", "status": "verified" },
+    { "title": "Apache Kafka 4.4 producer configuration reference", "url": "https://kafka.apache.org/44/generated/producer_config.html", "accessed": "2026-11-22", "supports": "enable.idempotence default true and its requirements (acks=all, retries > 0, at most 5 in-flight requests); silent disabling on conflicting settings versus ConfigException when explicitly enabled; the broker retains at most 5 batches per producer; transactional.id semantics and the three-broker default for transactions", "status": "verified" },
+    { "title": "Apache Kafka 4.4 consumer configuration reference", "url": "https://kafka.apache.org/44/generated/consumer_config.html", "accessed": "2026-11-22", "supports": "enable.auto.commit default true; auto.commit.interval.ms default 5000; isolation.level default read_uncommitted and the last-stable-offset behaviour of read_committed", "status": "verified" },
+    { "title": "KafkaProducer Javadoc (Apache Kafka 4.4)", "url": "https://kafka.apache.org/44/javadoc/org/apache/kafka/clients/producer/KafkaProducer.html", "accessed": "2026-11-22", "supports": "idempotent and transactional producer modes since 0.11; application-level re-sends cannot be de-duplicated; transactional.id enables recovery across producer sessions; ProducerFencedException when another producer with the same id is active; enable.idempotence defaults to true from 3.0", "status": "verified" },
+    { "title": "KafkaConsumer Javadoc (Apache Kafka 4.4)", "url": "https://kafka.apache.org/44/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html", "accessed": "2026-11-22", "supports": "committed position as the recovery point; committing after processing gives at-least-once and the failure after the database insert but before the commit; automatic offset committing; read_committed and the last stable offset", "status": "verified" },
+    { "title": "Apurva Mehta and Jason Gustafson, Transactions in Apache Kafka, Confluent blog (17 November 2017)", "url": "https://www.confluent.io/blog/transactions-apache-kafka/", "accessed": "2026-11-22", "supports": "read-process-write motivation; transactional.id, epochs and zombie fencing; offsets committed in the same transaction as the output; transaction coordinator and transaction log; read_committed; side effects on other systems are not covered", "status": "verified" },
+    { "title": "Apache Kafka 4.4 documentation, Kafka Streams: Core Concepts (Processing Guarantees)", "url": "https://kafka.apache.org/44/streams/core-concepts/", "accessed": "2026-11-22", "supports": "processing.guarantee default at_least_once; exactly_once_v2 requires brokers 2.5 or newer; exactly-once scoped to output topics and state stores", "status": "verified" },
+    { "title": "Apache Kafka 4.4 broker configuration reference", "url": "https://kafka.apache.org/44/generated/kafka_config.html", "accessed": "2026-11-22", "supports": "transaction.state.log.replication.factor default 3", "status": "verified" },
+    { "title": "KIP-679: Producer will enable the strongest delivery guarantee by default", "url": "https://cwiki.apache.org/confluence/display/KAFKA/KIP-679%3A+Producer+will+enable+the+strongest+delivery+guarantee+by+default", "accessed": "2026-11-22", "supports": "idempotence and acks=all became producer defaults in Kafka 3.0", "status": "verified" },
+    { "title": "Chris Richardson, Pattern: Transactional outbox (microservices.io)", "url": "https://microservices.io/patterns/data/transactional-outbox.html", "accessed": "2026-11-22", "supports": "outbox table written in the local transaction, a separate relay publishes, and the relay may publish a message more than once so consumers must be idempotent", "status": "verified" },
+    { "title": "Piotr Nowojski and Mike Winters, An Overview of End-to-End Exactly-Once Processing in Apache Flink (28 February 2018)", "url": "https://flink.apache.org/2018/02/28/an-overview-of-end-to-end-exactly-once-processing-in-apache-flink-with-apache-kafka-too/", "accessed": "2026-11-22", "supports": "two-phase commit sinks: pre-commit at the checkpoint, commit on completion, abort on failure; external systems must support transactions or idempotent commits", "status": "verified" }
+  ]
+}

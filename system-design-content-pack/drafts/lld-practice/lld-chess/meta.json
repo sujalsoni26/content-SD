@@ -1,0 +1,60 @@
+{
+  "slug": "lld-chess",
+  "title": "LLD: Chess",
+  "moduleId": "lld-practice",
+  "level": "advanced",
+  "minutes": 15,
+  "problem": "Six piece types, three history-dependent special moves and a rule about the whole board: a design that checks legality inside each piece drowns in special cases.",
+  "summary": "Give pieces geometry only, keep the position facts on the board, and decide legality once by simulating the move and testing whether the king is attacked. Record each move as a Command with an undo record, so undo, replay and legality share one mechanism.",
+  "catTip": "I only know where I can jump; whether the jump is wise is a question for the whole room. Pieces work the same way: geometry in the piece, legality on the board, and every move written down so it can be taken back.",
+  "recall": {
+    "q": "What is the key design decision in the chess case study, and how does it make check, pins and the special moves fall out of one rule?",
+    "a": "Split where a piece could go (pseudo-legal moves, polymorphic per Piece subclass) from whether the move is legal (decided once by the Board: apply the move, test whether the mover's king is attacked, revert). Castling rights, the en passant target and the half-move clock live on the Board and are snapshotted in an Undo record, so a MoveCommand can reverse any move, including captures and promotions."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "If each piece decides its own legality, pins, discovered checks and castling through check become special cases scattered across six classes, and undo cannot restore a captured piece or a lost castling right.",
+    "tradeoffs": "Simulating every candidate move costs two board edits per candidate, fine for human play and too slow for an engine, and the board must save and restore three extra position facts on every move.",
+    "explainSimply": "Each piece only knows the shapes it can move in, like a dancer who knows the steps but not the stage. The board checks each proposed move by trying it, looking whether the king is in danger, and putting everything back. Every accepted move is written on a list with enough detail to undo it.",
+    "hint": "Ask which question belongs to the piece and which belongs to the board, then ask what one move destroys that undo must bring back."
+  },
+  "meow": "Knight says meow-to-f3. Board tries it, peeks at the king, purrs or puts it back. Undo stack remembers the mouse I captured.",
+  "quiz": [
+    {
+      "prompt": "Where should the fact that a rook has already moved, which forbids castling on that side, be stored?",
+      "options": [
+        "As a hasMoved flag on the Rook object, set the first time it moves",
+        "As castling rights on the Board, copied into each move's Undo record",
+        "Nowhere: scan the move history for rook moves when castling is requested",
+        "On the Move that first moved the rook, flagged as rightsLost"
+      ],
+      "answer": 1,
+      "explanation": "Castling rights are a fact about the position, so they live on the Board and are snapshotted into the Undo record, which is what lets undo restore them and lets pieces stay stateless and shareable. A flag on the Rook is the tempting answer, but undo must then also reverse the flag, a promoted or shared piece object confuses it, and it still says nothing about the king being attacked while crossing."
+    },
+    {
+      "prompt": "A player tries to move a bishop that is pinned against its own king. Which design catches this with the fewest special cases?",
+      "options": [
+        "Each Piece subclass detects whether it is pinned before generating moves",
+        "Board.isAttacked is checked on the destination square before the move",
+        "Apply the move provisionally, test whether the mover's king is attacked, then revert",
+        "Reject any move by a piece standing on the same line as its king"
+      ],
+      "answer": 2,
+      "explanation": "Make, test, unmake handles pins, discovered checks, en passant removing a defender and castling through check with one loop. Per-piece pin detection also works and is what engines do for speed, but it needs separate code for each geometry and still misses cases such as the horizontal pin after en passant."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In the chess design, why can MoveCommand.undo not simply move the piece from its destination back to its origin?",
+      "a": "Because a move destroys more than a position: the captured piece (which for en passant stood on a third square), the castling rights, the en passant target square, the half-move clock, and for promotion the pawn itself. The Undo record returned by Board.apply carries all of these so revert restores the exact prior position."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "FIDE Laws of Chess, in force from 1 January 2023 (FIDE Handbook E.01)", "url": "https://handbook.fide.com/chapter/E012023", "accessed": "2026-11-22", "supports": "castling conditions (king and rook unmoved, squares between empty, king not in check and not crossing or landing on an attacked square), en passant only on the move immediately after the double push, promotion as part of the same move with a choice of queen, rook, bishop or knight, no move may expose or leave the own king in check, checkmate and stalemate, fifty-move rule and threefold repetition as claims", "status": "verified" },
+    { "title": "Chess Programming Wiki: Legal Move", "url": "https://www.chessprogramming.org/Legal_Move", "accessed": "2026-11-22", "supports": "a legal move is a pseudo-legal move that does not leave its own king in check; programs test legality by an attacked-square test after making the move, or generate only legal moves by handling pins and checks during generation", "status": "verified" },
+    { "title": "Chess Programming Wiki: Unmake Move", "url": "https://www.chessprogramming.org/Unmake_Move", "accessed": "2026-11-22", "supports": "the irreversible aspects of a position (en passant state, castling rights, half-move clock) must be restored from a stack or carried with the move when unmaking", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.ArrayDeque", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/ArrayDeque.html", "accessed": "2026-11-22", "supports": "the move history as a stack of commands with push and pop", "status": "reference" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Command, Memento, Strategy, Factory Method, Facade, State and Observer as used and as deliberately not used here", "status": "reference" }
+  ]
+}

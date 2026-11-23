@@ -1,0 +1,70 @@
+{
+  "slug": "failure-modes",
+  "title": "Fault tolerance: how systems fail",
+  "moduleId": "operations",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Redundant copies that share a rack, a dependency or a deploy fail together, and a server that passes its health check while dropping packets keeps receiving traffic.",
+  "summary": "Faults become errors become failures, and tolerance means breaking that chain. Spread copies across failure domains they do not share, pick a redundancy shape for the failure you expect, keep the blast radius small, and detect the grey failures that health checks miss.",
+  "catTip": "Two naps in the same sunbeam are not redundancy. When the cloud rolls in, both naps fail at once. I keep a spare nap spot by the radiator in a different room, and I test it on Tuesdays.",
+  "recall": {
+    "q": "What is a failure domain, and how should redundancy relate to it?",
+    "a": "A failure domain is a set of things that fail together: a host, a rack, an availability zone, a region, or everything behind one deploy. Redundant copies only protect against failures of domains they do not share, so place them across the domain you want to survive."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Two replicas in one rack die together when the switch fails, one config service takes down both regions, and a host that answers health checks while timing out real requests keeps getting traffic.",
+    "tradeoffs": "Every failure domain you span adds latency, replication lag or cost, active-active copies need headroom to absorb a lost peer, and catching grey failure means measuring from the caller's side instead of trusting a health check.",
+    "explainSimply": "Things break in layers: a flaw turns into a wrong state, which turns into something a user notices. Keeping spare copies only helps if the copies cannot break for the same reason, like keeping a spare house key with a neighbour instead of on the same keyring. Some breakages are sneaky: the server says it is fine while quietly doing a terrible job.",
+    "hint": "Ask what the copies have in common: the rack, the zone, the dependency, the deploy."
+  },
+  "meow": "Two meows on one keyring. Lose the ring, lose both. Spare meow lives next door.",
+  "quiz": [
+    {
+      "prompt": "A service runs two replicas on two hosts in the same rack, behind a load balancer. Which event does this redundancy not protect against?",
+      "options": [
+        "One host's disk fails",
+        "One process is killed for running out of memory",
+        "The rack's top-of-rack switch fails",
+        "One host is rebooted for a kernel patch"
+      ],
+      "answer": 2,
+      "explanation": "Both hosts share the rack's switch and power, so a rack-level fault takes both replicas at once: redundancy only covers failure domains the copies do not share. The other three are single-host faults that the second replica absorbs."
+    },
+    {
+      "prompt": "What makes a grey failure hard to detect?",
+      "options": [
+        "The process crashes so quickly that no log line is written",
+        "The component passes the health checks the system relies on while callers see errors or slowness",
+        "It only affects the passive standby, which receives no traffic",
+        "It corrupts the metrics pipeline so no alerts can fire"
+      ],
+      "answer": 1,
+      "explanation": "Grey failure is defined by differential observability: the failure detector sees a healthy component while applications see a failing one, so the fix is to measure from the caller's side. A fast crash is the easy case, since the health check fails and the process is replaced."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A disk sector goes bad, the database returns a corrupted row, and the app shows a blank page. Label the fault, the error and the failure, and say why the chain matters.",
+      "a": "Fault: the bad sector. Error: the corrupted row in the database's state. Failure: the blank page the user sees (the database's failure was itself a fault for the app). Fault tolerance means breaking the chain at some link, for example a checksum that catches the error before it becomes a failure."
+    },
+    {
+      "q": "A primary runs in zone A with a hot standby in zone B, and both load their configuration from one config service in zone A. What is wrong?",
+      "a": "The config service is a shared dependency, so a zone-A outage takes down both copies: a correlated failure. Redundancy needs the copies to share nothing in the domain you want to survive, so the config must be cached locally or served from both zones."
+    }
+  ],
+  "glossary": [
+    { "term": "AZ", "full": "Availability Zone", "note": "One or more data centres with independent power, cooling and networking inside a cloud region; replicas spread across AZs survive the loss of a data centre." }
+  ],
+  "sources": [
+    { "title": "Avižienis, Laprie, Randell, Landwehr, \"Basic Concepts and Taxonomy of Dependable and Secure Computing\", IEEE Transactions on Dependable and Secure Computing 1(1), 2004", "url": "https://ieeexplore.ieee.org/document/1335465", "accessed": "2026-11-22", "supports": "the fault, error, failure vocabulary and the chain in which a component's failure is a fault for the system containing it", "status": "reference" },
+    { "title": "Wikipedia, \"Dependability\" (fault, error, failure chain)", "url": "https://en.wikipedia.org/wiki/Dependability", "accessed": "2026-11-22", "supports": "the fault-error-failure chain and the four means (prevention, tolerance, removal, forecasting), read as coverage of the taxonomy paper", "status": "secondary" },
+    { "title": "Lamport, Shostak, Pease, \"The Byzantine Generals Problem\", ACM TOPLAS 4(3), 1982", "url": "https://dl.acm.org/doi/10.1145/357172.357176", "accessed": "2026-11-22", "supports": "the origin and naming of Byzantine faults; bibliographic details confirmed via Wikipedia's 'Byzantine fault' article", "status": "reference" },
+    { "title": "AWS whitepaper, \"AWS Fault Isolation Boundaries: Availability Zones\"", "url": "https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/availability-zones.html", "accessed": "2026-11-22", "supports": "an AZ is one or more discrete data centres with independent power, networking and connectivity; zones up to 60 miles (about 100 km) apart, close enough for synchronous replication; generators and cooling not shared; AWS deployments to zones in one region are separated in time", "status": "verified" },
+    { "title": "Huang et al., \"Gray Failure: The Achilles' Heel of Cloud-Scale Systems\", HotOS 2017", "url": "https://www.microsoft.com/en-us/research/publication/gray-failure-achilles-heel-cloud-scale-systems/", "accessed": "2026-11-22", "supports": "the term grey failure, the HotOS 2017 venue, and differential observability as its key feature (the publication page lists the first author as Ryan Huang)", "status": "verified" },
+    { "title": "Amazon Builders' Library, \"Implementing health checks\"", "url": "https://builder.aws.com/content/3Ev53O39izHCtWLzp4XU6t8PC1O/implementing-health-checks", "accessed": "2026-11-22", "supports": "liveness, local and dependency health checks; correlated false positives from dependency checks; fail-open load balancers; anomaly detection by comparing a server with its peers", "status": "verified" },
+    { "title": "AWS Well-Architected guidance, \"Reducing the Scope of Impact with Cell-Based Architecture: What is a cell-based architecture?\"", "url": "https://docs.aws.amazon.com/wellarchitected/latest/reducing-scope-of-impact-with-cell-based-architecture/what-is-a-cell-based-architecture.html", "accessed": "2026-11-22", "supports": "a failure in one of ten cells leaves 90% of requests unaffected; fault-isolation boundaries limit the scope of impact of bad deployments and poison-pill requests", "status": "verified" },
+    { "title": "Google SRE Book, ch. 22 \"Addressing Cascading Failures\"", "url": "https://sre.google/sre-book/addressing-cascading-failures/", "accessed": "2026-11-22", "supports": "the N+2 provisioning example (six clusters for a 19,000 QPS peak when each breaks at 5,000 QPS)", "status": "verified" },
+    { "title": "AWS whitepaper, \"Disaster Recovery of Workloads on AWS: Disaster recovery options in the cloud\"", "url": "https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html", "accessed": "2026-11-22", "supports": "active/passive versus active/active definitions (the passive site serves no traffic until failover)", "status": "verified" }
+  ]
+}

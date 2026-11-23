@@ -1,0 +1,120 @@
+A **race condition** is a bug whose outcome depends on the order in which threads happen to run. It needs two ingredients: state that is **shared** between threads, and at least one thread **mutating** it. Remove either and the bug cannot exist, which is the whole strategy of this lesson; locks, atomics and queues are for the cases where you cannot.
+
+The classic example: two threads each call `hit()` a million times:
+
+```java
+class HitCounter {
+    private long hits = 0;
+    void hit() { hits++; }          // read, add one, write back: three steps another thread can interleave
+    long hits() { return hits; }
+}
+```
+
+The final count is almost never two million: `hits++` is a read, an add and a write, and between the read and the write another thread can do all three.
+
+<Mermaid caption="The lost update: both threads read 5, both write 6, and one increment vanishes." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant A as Thread A
+    participant M as Shared field hits
+    participant B as Thread B
+    A->>M: read
+    M-->>A: 5
+    B->>M: read
+    M-->>B: 5
+    Note over A: 5 + 1 = 6
+    Note over B: 5 + 1 = 6
+    A->>M: write 6
+    B->>M: write 6
+    Note over M: Two increments happened. The value is 6.
+`} />
+
+Databases call this a lost update (see [MVCC and isolation](/learn/mvcc-isolation)). In code you have three tools, from cheapest to most expensive.
+
+## Three fixes, in order of preference
+
+**Immutability first.** An object that never changes after construction can be shared by any number of threads with no coordination, because there is nothing to interleave. Records, `List.copyOf`, and replacing whole objects instead of editing them remove most races before they exist; a configuration that changes is a new immutable object in an `AtomicReference`.
+
+**Atomics for a single variable.** `AtomicLong.incrementAndGet()` performs the read, add and write as one indivisible operation, via the processor's compare-and-swap (CAS) instruction rather than a lock:
+
+```java
+class HitCounter {
+    private final AtomicLong hits = new AtomicLong();
+    void hit() { hits.incrementAndGet(); }
+    long hits() { return hits.get(); }
+}
+```
+
+The primitive underneath is `compareAndSet(expected, next)`: set the value to `next` only if it still equals `expected`. A loop that reads, computes and calls `compareAndSet`, retrying when another thread won, is how lock-free code is written. Atomics cover one variable, not two that must stay consistent.
+
+**Locks for compound state.** When several fields must change together, or a check must be followed by an act with no gap, one lock must guard the whole operation. `synchronized` is built in; `ReentrantLock` adds timed and interruptible acquisition, and must be released in `finally`:
+
+```java
+private final ReentrantLock lock = new ReentrantLock();
+void transfer(Account from, Account to, long paise) {
+    lock.lock();
+    try { from.debit(paise); to.credit(paise); }     // both changes, or neither, become visible
+    finally { lock.unlock(); }
+}
+```
+
+A lock only protects fields that *every* access goes through. One unsynchronised read elsewhere and the protection is gone.
+
+## Threads, pools and queues
+
+A thread per request fails under load: each platform thread owns a stack and an operating-system scheduling slot, so a traffic spike becomes memory exhaustion and context-switch thrash. An `ExecutorService` runs tasks, each a `Runnable` Command (see [Design patterns III](/learn/design-patterns-behavioural)), on a fixed set of threads:
+
+```java
+ExecutorService pool = Executors.newFixedThreadPool(8);
+pool.submit(() -> handle(request));
+```
+
+`newFixedThreadPool` caps threads but queues waiting tasks on an *unbounded* queue, and `newCachedThreadPool` creates a thread whenever none is idle; under sustained overload the first grows memory and the second grows threads. A `ThreadPoolExecutor` with a bounded `ArrayBlockingQueue` and a rejection policy makes the limit explicit; `CallerRunsPolicy`, which makes the submitting thread run the task itself, is [backpressure](/learn/backpressure) in miniature.
+
+The same queue is the producer–consumer pattern: a `BlockingQueue` blocks `put()` when full and `take()` when empty, so producers slow down when consumers fall behind and consumers never spin:
+
+```java
+BlockingQueue<Order> queue = new ArrayBlockingQueue<>(1_000);
+queue.put(order);              // producer: waits when full, which is back-pressure rather than an OutOfMemoryError
+Order next = queue.take();     // consumer: waits when empty, no busy loop
+```
+
+It is a [message queue](/learn/message-queues) in one process, with the same questions: how big, and what happens when it fills.
+
+## Deadlock and lock ordering
+
+Thread A locks account 1 then waits for account 2; thread B does the reverse. Neither can proceed and neither will time out. That is **deadlock**: each thread holds one lock while waiting for another, taken in opposite orders.
+
+| Defence | How | Cost |
+| --- | --- | --- |
+| Lock ordering | Acquire locks in one global order, for example ascending account id | Every code path must follow the rule |
+| One coarser lock | Guard both accounts with a single lock | Less parallelism |
+| Timed acquisition | `tryLock(timeout)`, release and retry | Livelock possible; needs jittered backoff |
+| Hold one at a time | Debit under one lock, enqueue the credit, apply it under the other | Intermediate state briefly visible |
+
+<Callout type="analogy" title="One key on the counter">
+
+A `synchronized` block is a shop with one washroom key: whoever holds it is inside, everyone else waits. Deadlock is two keys, kitchen and store room, each held by someone waiting for the other. Where the analogy fails: the key only works if everyone agrees to use it; a thread that reads a field without taking the lock walks straight through the wall.
+
+</Callout>
+
+## Visibility
+
+Mutual exclusion is not the only problem: without synchronisation a thread may keep reading a stale copy of a field from a register or cache, so a flag set by one thread is never noticed by another. Java's memory model defines **happens-before**: a write is guaranteed visible to a read only if it happens-before that read, and the relation comes from unlocking then locking the same monitor, writing then reading the same `volatile` field, `Thread.start()` and `join()`, and passing an object through a `java.util.concurrent` collection or executor. `volatile` gives visibility and ordering for one variable, not atomicity: `volatile long hits` with `hits++` is still a race. The same two words order events across machines in [Time and ordering](/learn/time-and-ordering); same idea, different mechanism.
+
+<Callout type="interview" title="Name the shared state, then the cheapest tool">
+
+Point at what is shared and mutated, then choose in order: immutable, atomic, lock. If you take two locks, say in which order. In the [in-memory cache](/learn/lld-in-memory-cache), [rate limiter](/learn/lld-rate-limiter) and [task scheduler](/learn/lld-task-scheduler) case studies, this is the paragraph the interviewer waits for.
+
+</Callout>
+
+<DeepDive title="Go deeper: virtual threads">
+
+Java 21 added virtual threads, scheduled by the JVM rather than the operating system and cheap enough that `Executors.newVirtualThreadPerTaskExecutor()` starts one per task with no bound. They make a thread per request affordable for code that mostly waits on I/O, and remove none of the races, deadlocks or visibility rules, which come from shared mutable state, not scheduling. Bounding concurrency then becomes a `Semaphore` around the shared resource rather than a pool size.
+
+</DeepDive>

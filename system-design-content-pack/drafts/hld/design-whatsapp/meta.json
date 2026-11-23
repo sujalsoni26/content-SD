@@ -1,0 +1,114 @@
+{
+  "slug": "design-whatsapp",
+  "title": "Design WhatsApp",
+  "moduleId": "hld",
+  "level": "advanced",
+  "minutes": 18,
+  "problem": "A message sent to a phone that is offline, or to a 1,024-member group, must arrive exactly once and in order, while the server never holds a readable copy.",
+  "summary": "A store-and-forward messenger: persistent connections on dumb gateways, a per-device inbox written before any push, a session registry to find the connection, receipts carried as ordinary messages, and end-to-end encryption that leaves the server holding only ciphertext.",
+  "catTip": "I never read the letters, I only carry them. One tick when the envelope is safe in my pigeonhole, two when the other cat has it, blue when it looks. Asleep for thirty days? I drop the letter, because I cannot ask for a copy.",
+  "recall": {
+    "q": "A WhatsApp-style server stores only ciphertext and deletes each envelope the moment the recipient's phone acks it. Where does the \"two ticks for everyone\" state of a 1,024-member group live, and why can the server not keep it?",
+    "a": "On the sender's phone: each member's delivered and read receipts are routed back to the sender as ordinary inbox entries and the phone counts them. The server keeps only per-device inboxes of undelivered ciphertext, so it has no per-message, per-recipient table and nothing it could search or recover."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Pushing a message straight to a live connection loses it the moment a gateway dies after the sender saw a tick, and a per-recipient delivery table for 1,024-member groups collapses under eleven million deliveries a second.",
+    "tradeoffs": "Writing every delivery to an inbox before pushing it costs hundreds of terabytes of short-lived writes a day, and end-to-end encryption forbids server-side search, link previews and cloud recovery of chats.",
+    "explainSimply": "Think of a post office that only handles sealed envelopes. Every letter goes into the addressee's pigeonhole before anyone tries to hand it over, so nothing is lost if the courier trips. The clerk cannot read the letters, so there is no search desk, only \"give me everything in my pigeonhole, in order\".",
+    "hint": "Ask where a message lives between the sender's tick and the recipient's ack, and whose device counts the receipts in a group."
+  },
+  "meow": "Mrrp. Inbox first, push second. One tick, two ticks, blue. Sealed envelopes only, I cannot read them, meow.",
+  "quiz": [
+    {
+      "prompt": "A recipient's phone reconnects to gateway G2 at the same moment the chat service is delivering a new message through G1, the gateway the registry still names. Which order of operations guarantees the message is neither lost nor shown twice?",
+      "options": [
+        "Push to G1 first and write the message to the inbox only if G1 reports a failure, so that the common case costs no disk write",
+        "Write the envelope to the recipient's inbox, ack the sender, then push through the registry's gateway; the phone acks and deduplicates on message id, and its drain on reconnect returns anything still unacked",
+        "Hold the message in the chat service's memory until the registry shows a stable connection for at least one keepalive interval, then push",
+        "Push through both G1 and G2 and let the phone keep whichever copy arrives first"
+      ],
+      "answer": 1,
+      "explanation": "Only a durable inbox write before the push survives every outcome of the race, and the message id makes a double delivery harmless. Pushing first and storing on failure is the strongest distractor: G1 can report success and die before the phone acks, and nothing then holds the message."
+    },
+    {
+      "prompt": "A member of a 1,000-person end-to-end encrypted group sends a 2 MB video. How many times is the video encrypted and uploaded, and what does the server do with it?",
+      "options": [
+        "1,000 times, once per member over each pairwise session, because end-to-end encryption means a separate ciphertext for every recipient",
+        "Once: the phone encrypts the file with a fresh random key, uploads one blob, and sends the key, a hash and the blob pointer in one Sender-Key-encrypted message that the server fans out to 1,000 inboxes",
+        "Once, encrypted with a group key the server holds so that it can re-encrypt the blob for members who join later",
+        "Twice: once to the blob store and once to the CDN, each copy encrypted for that store"
+      ],
+      "answer": 1,
+      "explanation": "Sender Keys turn a group send into one ciphertext that the server fans out, and media is one encrypted blob whose key travels inside the message. The first option describes client fan-out, which is used once to distribute the Sender Key, not for every message; the third would hand the server a key and so would not be end-to-end encryption."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: 33M deliveries a second must each reach one connection among 500M spread over 500 gateways, and a gateway can die in the middle of a push. Decision and why?",
+      "a": "Write each delivery to the recipient's per-device inbox (two of three replicas) before acking the sender or attempting a push; use an in-memory session registry to find the gateway; treat the push as an optimisation and the ack as the delete; on reconnect the phone drains its inbox by cursor and deduplicates on message id. Durability must never depend on a live connection, so the inbox plus the drain is the protocol."
+    },
+    {
+      "q": "Problem: one message, or one 200 KB photo, to a 1,024-member group under end-to-end encryption. Decision and why?",
+      "a": "Use a Sender Key: the sender distributes one chain key over the pairwise sessions once, then each message is a single ciphertext the server fans out on write to every member's inbox; media is one encrypted blob whose key rides in the message. Client fan-out would mean 1,024 ciphertexts and uploads per message, and a server-held group key would break the encryption promise. When a member leaves everyone re-keys, which is why the group size is capped, and past a few thousand mostly silent members the right answer flips to a per-channel log that members pull."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "E2E",
+      "full": "End-to-End (encryption)",
+      "note": "Only the sender's and recipients' devices hold the keys, so every server in between stores and forwards ciphertext it cannot read."
+    }
+  ],
+  "sources": [
+    {
+      "title": "WhatsApp, \"WhatsApp Encryption Overview\", technical white paper, version 10 (30 October 2026)",
+      "url": "https://www.whatsapp.com/security/WhatsApp-Security-Whitepaper.pdf",
+      "accessed": "2026-11-22",
+      "supports": "Signal Protocol as the basis and the server having no plaintext access; pairwise sessions with client fan-out per device; messages may arrive delayed, out of order or be lost without breaking the ratchet; media encrypted with an ephemeral AES256 key, uploaded to a blob store, with key, HMAC key, SHA256 hash and pointer sent in the message; Sender Keys distributed over pairwise sessions, one ciphertext per group message with server-side fan-out, and all participants clearing the Sender Key when a member leaves; sender side backfill (server compares device-list hashes and asks the sender to re-send); transport via Noise Pipes with the server storing only a client's public authentication key; communications with Cloud API businesses not considered end-to-end encrypted",
+      "status": "verified"
+    },
+    {
+      "title": "WhatsApp Privacy Policy",
+      "url": "https://www.whatsapp.com/legal/privacy-policy",
+      "accessed": "2026-11-22",
+      "supports": "undelivered messages are kept in encrypted form on WhatsApp's servers for up to 30 days and then deleted; forwarded media is stored temporarily in encrypted form to make further forwards efficient",
+      "status": "verified"
+    },
+    {
+      "title": "WhatsApp Help Center, \"How to check if a message has been read\"",
+      "url": "https://faq.whatsapp.com/665923838265756",
+      "accessed": "2026-11-22",
+      "supports": "one grey tick = sent, two grey ticks = delivered to the recipient's phone or a linked device, two blue ticks = read; in groups the second tick appears when everyone has received the message and blue when everyone has read it",
+      "status": "verified"
+    },
+    {
+      "title": "WhatsApp blog, \"Communities now available\" (3 November 2022)",
+      "url": "https://blog.whatsapp.com/communities-now-available",
+      "accessed": "2026-11-22",
+      "supports": "groups of up to 1,024 users",
+      "status": "verified"
+    },
+    {
+      "title": "TechCrunch, \"WhatsApp is now delivering roughly 100 billion messages a day\" (29 October 2020)",
+      "url": "https://techcrunch.com/2020/10/29/whatsapp-is-now-delivering-roughly-100-billion-messages-a-day/",
+      "accessed": "2026-11-22",
+      "supports": "the 100 billion messages a day figure, stated by Meta's CEO on an earnings call; used here only as the basis of an assumption",
+      "status": "secondary"
+    },
+    {
+      "title": "High Scalability, \"The WhatsApp Architecture Facebook Bought For $19 Billion\" (26 February 2014)",
+      "url": "http://highscalability.com/blog/2014/2/26/the-whatsapp-architecture-facebook-bought-for-19-billion.html",
+      "accessed": "2026-11-22",
+      "supports": "more than 2 million TCP connections on a single server in 2012 on an Erlang/FreeBSD stack; messages queued on the server until the client reconnects and wiped once the client has accepted them",
+      "status": "secondary"
+    },
+    {
+      "title": "WhatsApp blog, \"1 million is so last year\" (2012)",
+      "url": "https://blog.whatsapp.com/1-million-is-so-last-year",
+      "accessed": "2026-11-22",
+      "supports": "the original announcement of 2 million connections on one server; the page could not be re-read in full and is cited through the High Scalability summary above",
+      "status": "reference"
+    }
+  ]
+}

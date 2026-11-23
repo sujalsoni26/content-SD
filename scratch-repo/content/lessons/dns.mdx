@@ -1,0 +1,66 @@
+Computers find each other by **IP address** (`203.0.113.10`); people type names (`instagram.com`). DNS (Domain Name System) is the internet's phone book, mapping <mark>names → IPs</mark>.
+
+## How a lookup works
+
+<Steps>
+
+1. **Check the browser and OS cache.** If you visited recently, you're done.
+2. **Ask a resolver**: your ISP's, or a public one like `8.8.8.8`.
+3. The **root server** points to the `.com` servers.
+4. The **TLD server** (top-level domain, here `.com`) points to the domain's name server.
+5. The **authoritative server** returns the IP: an **A record** for IPv4, an **AAAA record** for IPv6.
+6. The resolver **caches** the answer for its TTL (time to live).
+
+</Steps>
+
+<Mermaid caption="A cold lookup: the resolver walks the root, TLD and authoritative servers, then caches the answer." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant B as Browser
+    participant R as Resolver
+    participant Root as Root
+    participant TLD as .com TLD
+    participant A as Authoritative
+    Note over B: No cached answer
+    B->>R: instagram.com?
+    R->>Root: instagram.com?
+    Root-->>R: Ask .com servers
+    R->>TLD: instagram.com?
+    TLD-->>R: Ask the domain's name server
+    R->>A: instagram.com?
+    A-->>R: A record 203.0.113.10
+    Note over R: Cache for the TTL
+    R-->>B: 203.0.113.10
+`} />
+
+<Interactive name="dns-lookup" />
+
+## Caching cuts both ways
+
+- Caching makes lookups near-instant, but **DNS changes spread slowly** until old TTLs expire. Before a planned migration, teams lower the TTL days in advance.
+- DNS can hand **different IPs to different users**, such as the nearest data center. This is <mark>geo-routing</mark>, and CDNs rely on it (see [CDN](/learn/cdn)).
+- The same lookup pattern runs **inside** a data center to find services rather than websites (see [Service discovery and internal DNS](/learn/service-discovery)); CDNs push it further with anycast (see [CDN architecture in depth](/learn/cdn-internals)).
+
+<Callout type="analogy" title="Your phone's contacts">
+
+You don't memorise phone numbers; you tap a name. If the contact isn't saved, you ask a friend who knows someone who knows. Once you have the number, you save it, and if your friend changes it you keep dialling the old one until you update.
+
+</Callout>
+
+<DeepDive title="Go deeper: common record types">
+
+| Record | Maps | Example use |
+| --- | --- | --- |
+| A | name → IPv4 address | `instagram.com → 203.0.113.10` |
+| AAAA | name → IPv6 address | The same, for IPv6 |
+| CNAME | name → another name | `www.example.com → example.com`, or pointing at a CDN hostname |
+| MX | domain → mail servers | Where to deliver email |
+| NS | domain → its name servers | How the TLD knows who is authoritative |
+| TXT | domain → free text | Domain ownership checks, email anti-spoofing (SPF) |
+
+</DeepDive>

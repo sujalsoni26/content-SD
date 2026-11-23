@@ -1,0 +1,79 @@
+{
+  "slug": "replication-internals",
+  "title": "Replication strategies in depth",
+  "moduleId": "internals",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "The primary dies with acknowledged commits still unsent, a forgotten replication slot fills the disk, or two regions update the same row and one write quietly disappears.",
+  "summary": "Replication ships statements, physical WAL or logical row changes, each with different limits. Slots keep lagging replicas fed, failover trades a data-loss window against commit latency, multi-leader setups need LWW, merges or CRDTs, and CDC turns the log into events.",
+  "catTip": "I follow the human from room to room by the sound of footsteps: that is physical replication, exact but same-house only. A note saying the bowl moved to the kitchen works in any house. That is logical.",
+  "recall": {
+    "q": "A primary with asynchronous standbys crashes. What exactly is lost, and which setting would have prevented it, at what cost?",
+    "a": "Every transaction the primary acknowledged after the promoted standby's last received WAL position: the data-loss window equals the replication lag. A non-empty synchronous_standby_names makes commits wait for standby confirmation, closing the window at the price of latency and of commits hanging if the standbys are down."
+  },
+  "archNodes": ["db"],
+  "guide": {
+    "breaks": "Ship statements and non-deterministic functions make replicas diverge; recycle WAL a lagging replica still needs and it must be rebuilt; promote a standby without fencing the old primary and two servers accept conflicting writes.",
+    "tradeoffs": "Physical replication is exact but version-locked, logical replication is flexible but skips DDL and bloats on bulk changes, slots can fill disks, and synchronous commits buy zero loss with latency and availability risk.",
+    "explainSimply": "Keeping a copy of a database means sending every change somewhere else, and you can send the instruction, the exact bytes, or a plain description of what changed, like mailing a recipe, a frozen kitchen, or a shopping list. If the original fails, a copy takes over, and whatever had not arrived yet is lost. If two copies both accept changes, you need a rule for who wins.",
+    "hint": "Think about what was acknowledged but not yet sent, and about what crosses the wire in each style."
+  },
+  "meow": "Statement, WAL bytes, or row changes: three ways to copy. Fence the old primary before the new one purrs, or two cats claim the same bowl.",
+  "quiz": [
+    {
+      "prompt": "Why is statement-based replication unsafe for UPDATE accounts SET token = UUID() WHERE id = 7?",
+      "options": [
+        "UPDATE statements cannot be written to a binary log",
+        "UUID() is non-deterministic, so each replica computes a different value; row-based replication ships the resulting row instead",
+        "The WHERE clause is not replicated",
+        "Replicas cannot execute functions"
+      ],
+      "answer": 1,
+      "explanation": "Statement replay re-evaluates the function on each server, while row-based logging records the resulting row image so every copy matches. The WHERE clause is sent fine; it is the computed value that differs."
+    },
+    {
+      "prompt": "A team ran a Debezium connector for a week-long test, then stopped it without dropping its PostgreSQL replication slot. What happens over the following weeks?",
+      "options": [
+        "Nothing; unused slots are removed automatically",
+        "The primary retains all WAL the slot has not consumed, and with the default unlimited max_slot_wal_keep_size the disk eventually fills",
+        "Logical replication to other subscribers speeds up",
+        "The primary refuses new connections immediately"
+      ],
+      "answer": 1,
+      "explanation": "A slot is a promise to keep WAL until its consumer reads it, connected or not, and only max_slot_wal_keep_size caps that, defaulting to unlimited. Slots are never dropped automatically for being idle."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Compare physical and logical replication in PostgreSQL on three axes: what is shipped, version compatibility, and what the replica can do.",
+      "a": "Physical ships WAL records addressed by block and produces a byte-identical read-only standby that must run the same major version. Logical ships row changes keyed by replication identity to a subscriber that can run another major version, hold a subset of tables, keep its own indexes and accept writes, but DDL is not replicated."
+    },
+    {
+      "q": "Two regions each accept writes to the same shopping cart while the link between them is down. Give three ways to reconcile when it returns and one drawback of each.",
+      "a": "Last writer wins by timestamp (simple, but discards a write and trusts clocks); keep both versions and let the application merge (correct but pushes complexity to developers, and deleted items can reappear); use a CRDT such as a set type (merges automatically, but only for data that fits a CRDT shape)."
+    }
+  ],
+  "glossary": [
+    { "term": "CDC", "full": "Change Data Capture", "note": "Reading a database's log and publishing each row change as an event for other systems." },
+    { "term": "CRDT", "full": "Conflict-free Replicated Data Type", "note": "A data structure whose concurrent updates on different replicas merge deterministically without coordination." }
+  ],
+  "sources": [
+    { "title": "PostgreSQL documentation, Log-Shipping Standby Servers", "url": "https://www.postgresql.org/docs/current/warm-standby.html", "accessed": "2026-11-22", "supports": "streaming replication sends WAL as generated; replication slots retain WAL and rows even while a standby is disconnected; synchronous replication semantics, FIRST and ANY, remote_write, on and remote_apply; commits may never complete if a synchronous standby crashes; pg_ctl promote and pg_promote()", "status": "verified" },
+    { "title": "PostgreSQL documentation, Failover", "url": "https://www.postgresql.org/docs/current/warm-standby-failover.html", "accessed": "2026-11-22", "supports": "STONITH and the need to stop the old primary returning as primary; heartbeat and witness servers", "status": "verified" },
+    { "title": "PostgreSQL documentation, Replication settings", "url": "https://www.postgresql.org/docs/current/runtime-config-replication.html", "accessed": "2026-11-22", "supports": "max_slot_wal_keep_size default -1 (unlimited); synchronous_standby_names syntax and empty default; hot_standby_feedback default off and primary bloat", "status": "verified" },
+    { "title": "PostgreSQL documentation, Logical Replication", "url": "https://www.postgresql.org/docs/current/logical-replication.html", "accessed": "2026-11-22", "supports": "logical versus physical replication definition, publish and subscribe model, replication identity, cross-major-version and subset use cases, changes applied in publisher order", "status": "verified" },
+    { "title": "PostgreSQL documentation, Logical Replication Restrictions", "url": "https://www.postgresql.org/docs/current/logical-replication-restrictions.html", "accessed": "2026-11-22", "supports": "schema and DDL, incremental sequence changes and large objects are not replicated", "status": "verified" },
+    { "title": "PostgreSQL documentation, Comparison of Different Solutions", "url": "https://www.postgresql.org/docs/current/different-replication-solutions.html", "accessed": "2026-11-22", "supports": "SQL-based middleware and non-deterministic random(), CURRENT_TIMESTAMP and sequences; WAL shipping covers the entire server; logical replication constructs changes from the WAL", "status": "verified" },
+    { "title": "PostgreSQL documentation, Logical Decoding Concepts", "url": "https://www.postgresql.org/docs/current/logicaldecoding-explanation.html", "accessed": "2026-11-22", "supports": "slots as replayable change streams that retain WAL; output plugins", "status": "verified" },
+    { "title": "PostgreSQL documentation, pg_rewind", "url": "https://www.postgresql.org/docs/current/app-pgrewind.html", "accessed": "2026-11-22", "supports": "rewinding an old primary to follow the new one after timelines diverge; copies only changed blocks; requires wal_log_hints or data checksums (the initdb default)", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Replication Formats", "url": "https://dev.mysql.com/doc/refman/8.4/en/replication-formats.html", "accessed": "2026-11-22", "supports": "statement-based, row-based and mixed formats; row-based logging is the default", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Advantages and Disadvantages of Statement-Based and Row-Based Replication", "url": "https://dev.mysql.com/doc/refman/8.4/en/replication-sbr-rbr.html", "accessed": "2026-11-22", "supports": "UUID(), RAND(), SYSDATE(), USER() and LIMIT without ORDER BY are unsafe for statement-based replication; row-based logs more data for bulk changes", "status": "verified" },
+    { "title": "Debezium documentation, PostgreSQL connector", "url": "https://debezium.io/documentation/reference/stable/connectors/postgresql.html", "accessed": "2026-11-22", "supports": "logical decoding, automatic replication slot creation, pgoutput, wal_level = logical, one change event per row operation, per-table topics, initial consistent snapshot", "status": "verified" },
+    { "title": "Debezium documentation, MySQL connector", "url": "https://debezium.io/documentation/reference/stable/connectors/mysql.html", "accessed": "2026-11-22", "supports": "reads the binlog, which records operations in commit order and must be in ROW format with FULL row image", "status": "verified" },
+    { "title": "Amazon DynamoDB Developer Guide, How global tables work", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/V2globaltables_HowItWorks.html", "accessed": "2026-11-22", "supports": "last writer wins per item using the latest internal timestamp in multi-Region eventual consistency mode", "status": "verified" },
+    { "title": "Apache Cassandra documentation, Dynamo", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html", "accessed": "2026-11-22", "supports": "last-write-wins with every mutation timestamped", "status": "verified" },
+    { "title": "M. Shapiro, N. Preguiça, C. Baquero, M. Zawirski, \"Conflict-free Replicated Data Types\", SSS 2011", "url": "https://doi.org/10.1007/978-3-642-24550-3_29", "accessed": "2026-11-22", "supports": "attribution and definition of CRDTs", "status": "reference" },
+    { "title": "Riak KV documentation, Data Types", "url": "https://docs.riak.com/riak/kv/latest/developing/data-types/index.html", "accessed": "2026-11-22", "supports": "background for the CRDT bullet: a production store whose counters, sets and maps are CRDT-based", "status": "verified" },
+    { "title": "Patroni documentation", "url": "https://patroni.readthedocs.io/en/latest/", "accessed": "2026-11-22", "supports": "Patroni as a PostgreSQL high-availability template using ZooKeeper, etcd, Consul or Kubernetes as its distributed configuration store", "status": "verified" }
+  ]
+}

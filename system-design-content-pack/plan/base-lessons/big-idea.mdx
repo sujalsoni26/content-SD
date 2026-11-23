@@ -1,0 +1,61 @@
+<Callout type="idea" title="The one rule">
+
+Every component exists because a problem forced it in. Don't ask *"what is this box?"* Ask *"what problem does this box solve?"*
+
+</Callout>
+
+## One app, growing up
+
+This course grows **one system**, an Instagram-like app, from one user and one server to millions of users. Each stage adds a building block at the moment a new problem appears:
+
+<Steps>
+
+1. **1 user, 1 server.** The phone has to find the server and talk to it safely: [DNS](/learn/dns), [TCP](/learn/tcp-udp), [HTTP and TLS](/learn/http).
+2. **Tens of thousands of users.** One server can't keep up, so you add [load balancers](/learn/load-balancing), [horizontal scaling](/learn/scaling) and a [CDN](/learn/cdn).
+3. **Many pieces talking.** You split the app into services and give them contracts: [REST](/learn/rest), [gRPC](/learn/grpc), [WebSockets](/learn/websockets), [microservices](/learn/microservices).
+4. **Data piles up.** You choose databases, then add [indexes](/learn/indexing), [replicas](/learn/replication) and [shards](/learn/sharding).
+5. **Millions of reads of one celebrity post.** You add [caches](/learn/caching) and [object storage](/learn/object-storage).
+6. **Many teams, many events.** You stop services from waiting on each other with [queues](/learn/message-queues) and [events](/learn/pubsub).
+7. **Failure becomes normal.** You add [timeouts](/learn/timeouts-retries), [circuit breakers](/learn/circuit-breaker), [rate limits](/learn/rate-limiting) and [idempotency keys](/learn/idempotency).
+
+</Steps>
+
+By the end of the course, those blocks together form [a complete architecture](/learn/final-architecture), and you'll know why each box is there.
+
+## Start simple, then find what breaks
+
+One server and one database is cheap, quick to build and fine for thousands of users. Good design isn't building for millions on day one. <mark>It's knowing what breaks first as load grows.</mark>
+
+That is usually the **database**, because nearly every request becomes a query: a select, insert, update or delete.
+
+<Callout type="analogy" title="Think of a chai stall">
+
+One person can take orders, brew and serve when ten customers show up. At a hundred, you don't build a factory. You first notice the bottleneck (the single stove), then add exactly what fixes it. System design works the same way.
+
+</Callout>
+
+## How a design interview flows
+
+<Steps>
+
+1. **Clarify requirements**: functional (what users do) and non-functional (scale, latency, availability, consistency).
+2. **Estimate the scale** with quick back-of-the-envelope maths (covered in the [estimation lessons](/learn/estimation-numbers)).
+3. **Design the architecture**: start with one server and one database, then add boxes.
+4. **Deep-dive** into the two or three hardest parts.
+
+</Steps>
+
+<Callout type="interview" title="Why estimate first">
+
+The estimates decide which boxes you need. Ten writes per second and a billion writes per second lead to very different diagrams.
+
+</Callout>
+
+## How to use this course
+
+- Lessons are tagged **Basic** (first-time essentials), **Intermediate** (builds on the basics) and **Advanced** (distributed-systems depth for deep dives).
+- Each lesson opens with the **problem** that forced the box in. Read that first.
+- **Try it** panels are small simulations. Break things on purpose; that's the point.
+- Optional knowledge checks of a few questions appear along the way.
+
+The six core modules grow the app. After them, the **advanced tracks** go deeper into each box (distributed systems, database internals, streaming, operations, security, infrastructure, architecture patterns), and the **design practice** modules work through [high-level design case studies](/learn#hld) and low-level design. Follow the core in order; take the tracks in any order you like.

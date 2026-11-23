@@ -1,0 +1,87 @@
+When millions open the same celebrity post (say, Virat Kohli's), re-querying the database each time wastes work and slows everyone down. A **cache** keeps hot data in RAM, about <mark>1,000× faster than SSD</mark> (see [Latency, throughput and the numbers to know](/learn/latency)). The usual tools are Redis and Memcached; one Redis node handles roughly 100k operations per second.
+
+Caches exist at every layer: browser → CDN → app memory → Redis → the database's own memory. Each layer catches some reads so fewer reach the slow layer below it.
+
+## Local vs distributed cache
+
+<Comparison>
+
+<ComparisonItem title="Local (in-process)">
+
+Lives inside each app server's memory. The fastest option: no network hop at all.
+
+But every server keeps its own copy, and the copies can disagree.
+
+</ComparisonItem>
+
+<ComparisonItem title="Distributed (Redis)">
+
+One cache shared by all servers, so everyone sees the same value.
+
+The cost is a network hop on every lookup.
+
+</ComparisonItem>
+
+</Comparison>
+
+Many systems use both: a small local cache in front of Redis.
+
+## Cache-aside (lazy loading)
+
+This is the pattern you will use most. The application, not the cache, is in charge:
+
+<Steps>
+
+1. Check the cache for the key.
+2. On a **hit**, return the cached value.
+3. On a **miss**, read the database.
+4. Store the result in the cache with a TTL (expiry), then return it.
+
+</Steps>
+
+On an update, write the database and **delete** the cache entry, so the next read reloads it.
+
+<Diagram name="cache-aside-flow" caption="Cache-aside: the app checks the cache first and fills it only on a miss." />
+
+<Interactive name="cache-aside" />
+
+## Write patterns
+
+| Write pattern | How | Trade-off |
+| --- | --- | --- |
+| Cache-aside | App writes the DB, invalidates the cache | Simple; the first read after a change is a miss |
+| Write-through | Write cache and DB together | Cache always fresh; slower writes |
+| Write-back (write-behind) | Write the cache now, the DB later | Very fast; data lost if the cache dies first |
+
+## Eviction
+
+RAM is limited. When it fills, the cache drops entries by a policy: **LRU** (least recently used) or **LFU** (least frequently used). Track the **hit ratio** (hits ÷ total lookups): it tells you whether the cache is earning its memory.
+
+## Pitfalls
+
+- **Stale data.** Invalidation is famously hard: the cache can keep serving a value the database has already changed.
+- **Cache stampede.** A hot key expires and thousands of requests hit the database at once. Let one request rebuild the value while the others wait, and randomize TTLs so keys don't all expire together.
+- **Hot keys.** One key (a celebrity post) gets so much traffic it overloads a single cache node. Replicate the key or add a local cache in front.
+- **Cold start.** After a restart the cache is empty, and every request falls through to the database until it warms up.
+
+## Taming a stampede
+
+When a hot key expires, every request that misses tries to rebuild it at once. Three techniques, usually combined:
+
+- **Request coalescing (single-flight).** The first miss takes a short lock on the key and recomputes; the others wait for its result, or are served the stale value in the meantime. One rebuild instead of thousands. HTTP caches call the second variant *stale-while-revalidate*.
+- **TTL jitter.** Give each key a slightly random expiry (a TTL ± 10%), so keys that were loaded together do not expire together.
+- **Early refresh.** Rebuild *before* expiry: a background refresher for the hottest keys, or **probabilistic early expiration**, where each read recomputes with a small probability that grows as expiry approaches. The well-known rule from Vattani, Chierichetti and Lowenstein (2015) recomputes when `now − Δ × β × ln(rand) ≥ expiry`, where Δ is how long a recompute takes, `rand` is uniform in (0, 1] and β is about 1. With many readers, roughly one of them refreshes just in time and nobody else notices.
+
+<Callout type="idea" title="When to cache">
+
+Caching pays off for read-heavy data that changes rarely. For sizing, start at about 20% of the daily read volume (the 80/20 rule; see [The formulas](/learn/estimation-formulas)).
+
+</Callout>
+
+<DeepDive title="Go deeper: why delete the cache entry instead of updating it?">
+
+If two writers both update the database and then both *set* the cache, their cache writes can arrive in the opposite order, leaving the older value cached indefinitely. Deleting is safer: it is the same no matter how many times or in what order it happens, and the next read fetches the truth from the database.
+
+A small race remains (a slow reader can put an old value back right after the delete), which is one more reason every entry gets a TTL: it bounds how long any mistake can live. Phil Karlton's line still holds: "There are only two hard things in computer science: cache invalidation and naming things."
+
+</DeepDive>

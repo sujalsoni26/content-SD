@@ -1,0 +1,103 @@
+An **API** is the contract between pieces of software: what you can ask, in what format, and what comes back.
+
+**REST** models everything as a **resource** with a URL, and HTTP methods are the verbs:
+
+| Action | Request |
+| --- | --- |
+| Get a user | `GET /users/42` |
+| Create a post | `POST /posts` |
+| Replace a profile | `PUT /users/42` |
+| Edit part of a profile | `PATCH /users/42` |
+| Delete a post | `DELETE /posts/7` |
+
+- **URLs are nouns.** Avoid verb URLs like `/getUser`.
+- **Stateless.** Every request carries its token and parameters, so any server behind the LB can answer. Data still lives in the database; the server just keeps no per-client session.
+
+## Status codes that carry meaning
+
+A good API uses the status code to say *what kind* of thing happened and the body to say *what exactly*.
+
+| Code | Means | Typical use |
+| --- | --- | --- |
+| 200 OK | Done, here is the result | Successful GET, PUT, PATCH |
+| 201 Created | A new resource exists | Successful POST; its URL goes in the `Location` header |
+| 204 No Content | Done, nothing to return | Successful DELETE |
+| 400 Bad Request | The request itself is wrong | Malformed JSON, failed validation |
+| 401 / 403 | Who are you? / You may not | Missing or invalid token / valid token, no permission |
+| 404 Not Found | No such resource | Wrong id, or hidden on purpose |
+| 409 Conflict | Clashes with the current state | Alias already taken, version mismatch |
+| 429 Too Many Requests | Quota used up | Rate limiting (see [Rate limiting](/learn/rate-limiting)) |
+| 500 / 503 | We broke / we are overloaded | Bugs / load shedding (see [Backpressure and load shedding](/learn/backpressure)) |
+
+Clients branch on the class: 4xx means "fix the request, do not retry it as is"; 429 and most 5xx mean "retry later, carefully" (see [Timeouts and retries](/learn/timeouts-retries)).
+
+## Idempotent by design
+
+The HTTP specification (RFC 9110) defines **safe** methods, which must not change state (`GET`, `HEAD`, `OPTIONS`, `TRACE`), and **idempotent** methods, where repeating the request has the same effect as sending it once: the safe methods plus `PUT` and `DELETE`. `POST` is neither, and `PATCH` is not guaranteed to be.
+
+That decides how you shape an API:
+
+- Use `PUT /users/42/avatar` for "set it to this": a retry simply sets it again.
+- "Create one of these" needs help: an **idempotency key** turns a retried `POST` into a no-op (see [Idempotency](/learn/idempotency)).
+- Deleting something that is already gone should return 204 or 404 consistently. Either is fine; flip-flopping is not.
+
+## Errors a client can act on
+
+Return the same error shape everywhere. RFC 9457, *Problem Details for HTTP APIs*, standardises one:
+
+```http
+HTTP/1.1 409 Conflict
+Content-Type: application/problem+json
+
+{
+  "type": "https://api.example.com/problems/alias-taken",
+  "title": "Alias already taken",
+  "status": 409,
+  "detail": "The alias 'diwali-sale' is already in use.",
+  "instance": "/urls"
+}
+```
+
+`type` identifies the kind of problem so clients can switch on it, `detail` explains this occurrence, and `status` repeats the HTTP code so the body makes sense on its own in a log. Validation, CORS, CSRF and webhook signing are in [API security](/learn/api-security).
+
+## Versioning without breaking clients
+
+Mobile apps live for years, so an API change must not break old clients.
+
+- **Additive changes are free:** new optional fields, new endpoints. Clients ignore what they do not know.
+- **Never rename or remove a field in place.** Add the new one, migrate, then retire the old one after a deprecation period.
+- When a break is unavoidable, version explicitly. A path prefix (`/v2/users/42`) is the most visible; a header (`Accept: application/vnd.example.v2+json`) keeps URLs stable. Pick one and keep it.
+
+<Comparison>
+
+<ComparisonItem title="Pros">
+
+- JSON: readable and universal
+- Simple; every language and browser speaks it
+- GET responses are cacheable
+
+</ComparisonItem>
+
+<ComparisonItem title="Cons">
+
+- Verbose text format
+- **Under-fetching**: a screen may need several calls
+- **Over-fetching**: an endpoint returns more than you need
+
+</ComparisonItem>
+
+</Comparison>
+
+**GraphQL** addresses both fetching problems: the client asks for exactly the fields it needs in one request.
+
+<Callout type="interview" title="Write the API as a table">
+
+List each endpoint with its method, path, request body, success response and error codes, as [Design a URL shortener](/learn/url-shortener) does. It forces the data model and the failure cases into the open before you draw a single box.
+
+</Callout>
+
+<DeepDive title="Go deeper: paginating big lists">
+
+A feed can't return a million posts at once. **Offset pagination** (`?offset=40&limit=20`) is simple but slows down on deep pages and skips or repeats items when new posts arrive. **Cursor pagination** (`?after=post_9812&limit=20`) asks for "20 items after this one". It stays fast with an index and stable as the feed changes, which is why most social APIs use it.
+
+</DeepDive>

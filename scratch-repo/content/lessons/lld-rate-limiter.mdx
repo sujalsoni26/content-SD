@@ -1,0 +1,326 @@
+[Rate limiting](/learn/rate-limiting) explained why an API says no to its hundredth request in a second and which algorithms decide when. This case study builds the component that says it: a library a gateway or a service calls on every request, with the algorithm as a replaceable part. The decision that carries the design is to **put each algorithm behind one small interface, keep its state per key, and refill that state lazily from an injected clock on every call**. No timer thread tops up buckets; the arithmetic happens when a request arrives. Per-key state lives in a `ConcurrentHashMap`, is created on first use and evicted when idle, and is updated atomically by its own lock or a compare-and-set loop, so hot keys never queue behind each other.
+
+## Requirements and assumptions
+
+**Functional requirements**
+
+- `tryAcquire(key, permits)` returns a decision: allowed or denied, how long to wait, how much is left, so middleware can answer `429` with a `Retry-After` header.
+- Limits are per key: a client id, an IP address, a route, or a combination.
+- Three algorithms as interchangeable strategies: token bucket, sliding window log, fixed window counter. One limiter instance uses one algorithm for all its keys.
+- Thread-safe for many concurrent callers, and testable without sleeping.
+- Idle keys are forgotten, so memory is bounded by active clients rather than every client ever seen.
+
+**Assumptions**, stated as numbers so they can be challenged: one process; up to a hundred thousand active keys; fifty thousand checks per second; limits from ten to a few thousand permits per minute. Different limits per tier are a map from tier to configuration, left to the caller.
+
+**Out of scope**: a limiter shared across servers, which changes where state lives and is the subject of [Design a rate limiter](/learn/design-rate-limiter); quotas over days; configuration reload.
+
+**Non-functional**: a decision costs microseconds and, on the common path, allocates nothing. A denied request consumes no permits. Time comes from a monotonic source, so a clock correction never grants a free refill.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility | Knows |
+| --- | --- | --- |
+| RateLimiter | The caller's interface: a decision for a key and a number of permits | nothing: a contract |
+| KeyedRateLimiter | Maps key to state, creating lazily; evicts idle keys; hands each call to the key's state with the current time | map, state factory, clock |
+| LimiterState | One key's algorithm state and the decision logic; one implementation per algorithm | its counters and timestamps |
+| TokenBucket, SlidingWindowLog, FixedWindowCounter | The three strategies | capacity, rate or window, their state |
+| Limit | Immutable configuration: capacity and refill rate, or limit and window | the numbers |
+| Decision | Immutable result: allowed, retry-after, remaining | the three fields |
+| Clock | Monotonic nanoseconds, injected | the current time |
+| RateLimitFilter | Middleware: picks the key from the request, calls the limiter, writes 429 and Retry-After | limiter, key extractor |
+
+The two-level interface is the shape to notice. Callers see `RateLimiter`, which speaks in keys. Algorithms implement `LimiterState`, which speaks in permits and a timestamp and has never heard of keys, threads or HTTP. `KeyedRateLimiter` is the only class that knows both, and the only one with a map in it.
+
+## Class design
+
+<Mermaid caption="One interface for callers, one for algorithms. KeyedRateLimiter owns the map and asks a Supplier for a fresh state when a key is new. Each state is a Strategy; the clock is injected so tests move time by hand." chart={`classDiagram
+    class RateLimiter {
+        <<interface>>
+        +tryAcquire(String key, int permits) Decision
+    }
+    class KeyedRateLimiter {
+        -ConcurrentHashMap states
+        -Supplier newState
+        -Clock clock
+        +tryAcquire(String key, int permits) Decision
+        +evictIdle(Duration idle)
+    }
+    class LimiterState {
+        <<interface>>
+        +tryAcquire(int permits, long nowNanos) Decision
+        +lastUsedNanos() long
+    }
+    class TokenBucket {
+        -double tokens
+        -long lastRefillNanos
+    }
+    class CasTokenBucket {
+        -AtomicReference state
+    }
+    class SlidingWindowLog {
+        -ArrayDeque stamps
+    }
+    class FixedWindowCounter {
+        -long window
+        -long count
+    }
+    class Limit {
+        +long capacity
+        +double refillPerSecond
+        +Duration window
+    }
+    class Decision {
+        +boolean allowed
+        +long retryAfterMillis
+        +long remaining
+    }
+    class Clock {
+        <<interface>>
+        +nanos() long
+    }
+    class RateLimitFilter {
+        -RateLimiter limiter
+        +handle(Request request) Response
+    }
+    KeyedRateLimiter ..|> RateLimiter
+    KeyedRateLimiter o-- LimiterState : one per key
+    KeyedRateLimiter --> Clock
+    TokenBucket ..|> LimiterState
+    CasTokenBucket ..|> LimiterState
+    SlidingWindowLog ..|> LimiterState
+    FixedWindowCounter ..|> LimiterState
+    TokenBucket --> Limit
+    LimiterState ..> Decision : returns
+    RateLimitFilter --> RateLimiter
+`} />
+
+## Key interfaces and methods
+
+Two records and three one-method interfaces. The clock returns monotonic nanoseconds rather than wall-clock time, for a reason in the edge cases; it plays the role `java.time.Clock` plays for dates, and the Java documentation's advice applies to both: inject it, so tests step time by hand instead of sleeping, as [Testing and extensibility](/learn/testing-extensibility) argued.
+
+```java
+record Limit(long capacity, double refillPerSecond, Duration window) {}
+record Decision(boolean allowed, long retryAfterMillis, long remaining) {
+    static Decision allowed(long remaining) { return new Decision(true, 0, remaining); }
+    static Decision denied(long waitNanos) { return new Decision(false, Math.max(1, waitNanos / 1_000_000), 0); }
+}
+interface RateLimiter { Decision tryAcquire(String key, int permits); }
+interface LimiterState { Decision tryAcquire(int permits, long nowNanos); long lastUsedNanos(); }
+interface Clock { long nanos(); }                       // System::nanoTime in production, a stepping fake in tests
+```
+
+The token bucket is the default strategy. It holds two numbers, the tokens it had and when it last looked, and refills from the elapsed time on every call. A `synchronized` method is the simplest correct answer, and because the lock is per bucket it is a lock per key.
+
+```java
+final class TokenBucket implements LimiterState {
+    private final long capacity;
+    private final double refillPerNano;
+    private double tokens;                                 // fractional, so slow rates refill smoothly
+    private long lastRefillNanos;
+
+    public synchronized Decision tryAcquire(int permits, long now) {
+        tokens = Math.min(capacity, tokens + (now - lastRefillNanos) * refillPerNano);   // lazy refill, no timer
+        lastRefillNanos = now;
+        if (tokens >= permits) { tokens -= permits; return Decision.allowed((long) tokens); }
+        return Decision.denied((long) Math.ceil((permits - tokens) / refillPerNano));   // nothing spent on a deny
+    }
+    public long lastUsedNanos() { return lastRefillNanos; }
+}
+```
+
+A bucket that starts full allows a burst of `capacity` requests and then settles to the refill rate. Watch it below: send a burst of fifteen into a bucket of ten, see five get `429`, then see the refill rate decide how soon the next one passes.
+
+<Interactive name="token-bucket" />
+
+The sliding window log is the exact algorithm: it remembers when each allowed request happened and counts those still inside the window, at the cost of a timestamp per allowed request.
+
+```java
+final class SlidingWindowLog implements LimiterState {
+    private final long limit;
+    private final long windowNanos;
+    private final ArrayDeque<Long> stamps = new ArrayDeque<>();   // oldest at the head
+
+    public synchronized Decision tryAcquire(int permits, long now) {
+        while (!stamps.isEmpty() && stamps.peekFirst() <= now - windowNanos) stamps.pollFirst();   // forget what left the window
+        if (stamps.size() + permits > limit) return Decision.denied(stamps.peekFirst() + windowNanos - now);
+        for (int i = 0; i < permits; i++) stamps.addLast(now);
+        return Decision.allowed(limit - stamps.size());
+    }
+}
+```
+
+The fixed window counter is the cheapest and the leakiest, two numbers and no list:
+
+```text
+window = now / windowLength                  integer division: which window are we in
+if window != current: current = window, count = 0
+if count + permits > limit: deny until (window + 1) * windowLength
+count += permits, allow
+```
+
+| Algorithm | State per key | Burst behaviour | Precision |
+| --- | --- | --- | --- |
+| Fixed window counter | Two numbers: window id, count | Up to twice the limit across a window boundary | Coarse: resets on the boundary |
+| Sliding window log | One timestamp per allowed request, up to the limit | Never more than the limit in any window | Exact |
+| Sliding window counter | Two numbers: this window, previous window | Smooth, slightly approximate | Cloudflare measured 0.003 percent of requests wrongly decided |
+| Token bucket | Two numbers: tokens, last refill | A burst of capacity, then the steady rate | Exact for the average rate |
+
+The keyed limiter is the glue. `computeIfAbsent` is atomic, so two first requests for a new key get the same state object; the supplier is the Strategy choice, made once at construction.
+
+```java
+final class KeyedRateLimiter implements RateLimiter {
+    private final ConcurrentHashMap<String, LimiterState> states = new ConcurrentHashMap<>();
+    private final Supplier<LimiterState> newState;         // the algorithm: TokenBucket::new, SlidingWindowLog::new ...
+    private final Clock clock;
+
+    public Decision tryAcquire(String key, int permits) {
+        LimiterState s = states.computeIfAbsent(key, k -> newState.get());   // lazy creation, exactly one per key
+        return s.tryAcquire(permits, clock.nanos());
+    }
+    void evictIdle(Duration idle) {                        // run from a ScheduledExecutorService
+        long cutoff = clock.nanos() - idle.toNanos();
+        states.entrySet().removeIf(e -> e.getValue().lastUsedNanos() < cutoff);
+    }
+}
+```
+
+The middleware is three lines, which is the sign the interface is right:
+
+```java
+Decision d = limiter.tryAcquire(clientId(request), 1);
+if (!d.allowed()) return Response.status(429).header("Retry-After", Long.toString((d.retryAfterMillis() + 999) / 1000));   // whole seconds, rounded up, never zero
+return next.handle(request);
+```
+
+## Interactions
+
+<Mermaid caption="A new client's first request creates its bucket; a burst later finds it empty. The limiter never sleeps and never runs a timer: every refill is arithmetic on the elapsed time at the moment of the call." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client app-77
+    participant F as RateLimitFilter
+    participant K as KeyedRateLimiter
+    participant M as ConcurrentHashMap
+    participant B as TokenBucket app-77
+    participant T as Clock
+    C->>F: GET /orders
+    F->>K: tryAcquire(app-77, 1)
+    K->>M: computeIfAbsent(app-77)
+    M-->>K: new TokenBucket, 10 tokens
+    K->>T: nanos()
+    T-->>K: now
+    K->>B: tryAcquire(1, now)
+    B-->>K: allowed, 9 remaining
+    K-->>F: Decision
+    F-->>C: 200 OK
+    Note over C,B: a burst empties the bucket
+    C->>F: GET /orders
+    F->>K: tryAcquire(app-77, 1)
+    K->>M: computeIfAbsent(app-77)
+    M-->>K: existing bucket
+    K->>B: tryAcquire(1, now)
+    Note over B: refill 0.3 tokens from elapsed time, still below 1
+    B-->>K: denied, retry after 350 ms
+    K-->>F: Decision
+    F-->>C: 429, Retry-After 1
+`} />
+
+<Mermaid caption="Lifecycle of one key's state. The sweeper only removes idle entries, and the idle period is chosen so that a bucket evicted and recreated is indistinguishable from one that was left to refill." chart={`stateDiagram-v2
+    state "Absent from map" as Absent
+    state "Active, refilling lazily" as Active
+    state "Idle, no requests" as Idle
+    [*] --> Absent
+    Absent --> Active: first request creates the state
+    Active --> Active: each call refills from elapsed time, then spends
+    Active --> Idle: no request for the idle period
+    Idle --> Active: a request arrives before the sweep
+    Idle --> Absent: sweeper evicts it
+    Absent --> [*]
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Strategy | LimiterState with three implementations | The algorithm is the decision that changes between teams and endpoints; each is tested alone against a fake clock | One algorithm, forever |
+| Factory via Supplier | KeyedRateLimiter.newState | A new key needs a fresh state and the limiter must not know which class | States are stateless, which they never are here |
+| Chain of Responsibility | RateLimitFilter in the HTTP filter chain | The limiter is one handler among authentication and logging, as [Design patterns III](/learn/design-patterns-behavioural) describes | There is no chain to join |
+| Null Object | An AlwaysAllow state for allow-listed keys | No branch in the limiter for exempt clients | Nobody is exempt |
+
+Absent on purpose: a Singleton (one limiter per limit, injected), and metrics, which become a Decorator around `RateLimiter` counting allowed and denied the day someone asks.
+
+## Edge cases and error handling
+
+- **Permits larger than capacity.** Can never be granted; reject at configuration time rather than deny forever with a retry-after that lies.
+- **The clock moves.** With wall-clock milliseconds a correction backwards makes `now - last` negative and a correction forwards grants a free full refill. `System.nanoTime` is monotonic within a process, so neither happens: the rule from [Time and ordering](/learn/time-and-ordering), measure durations with a monotonic clock, applies at code level too.
+- **A new key's first request.** Starting full permits a burst of `capacity`; starting empty makes the first request wait. Full is the common choice and what the simulation shows.
+- **Eviction races a request.** A thread holds a state while the sweeper removes it from the map; its decision lands on an orphan and the next request gets a fresh, full state. Choose the idle period to make this harmless: after `capacity / refillRate` seconds a bucket is full anyway, so an idle period at least that long means a recreated bucket equals the one evicted.
+- **Denied requests and the sliding log.** This design does not record denied requests, so a client hammering at the limit gets through as soon as the window frees up. Figma's log counted rejected requests too, which lengthens the lockout for abusive clients; either is defensible, say which.
+- **Retry-After rounding.** The header is whole seconds; round up and never send zero, or clients retry in a tight loop.
+- **Too many keys.** A hundred thousand buckets are a few megabytes; a million addresses from a scan are not nothing. Bound the map and evict the least recently used keys, which is the [in-memory cache](/learn/lld-in-memory-cache) design wearing a different hat.
+
+<Callout type="analogy" title="A prepaid pass that refunds itself">
+
+A token bucket is a travel card that gains one ride a minute, up to ten saved rides. You can spend all ten in a burst, then you travel at one ride a minute. The card does not tick in your pocket: when you tap in, the reader works out how many rides have accrued since you last tapped and adds them. Where the analogy fails: a real card is topped up by a server somewhere; here nothing runs between requests at all, which is exactly what makes a hundred thousand keys cheap.
+
+</Callout>
+
+## Concurrency
+
+Name the shared mutable state, as [Concurrency and thread safety](/learn/concurrency-basics) asks: the map of keys, and inside each state two numbers that must change together. The map is a `ConcurrentHashMap`, whose `computeIfAbsent` is atomic; the function must be short and must not touch the map, and `newState.get()` is both. The sweeper's `removeIf` runs while requests arrive and only ever removes entries that are, by definition, not being used.
+
+The per-key state is the interesting part, because tokens and last-refill time are compound state: refilling reads both, computes, writes both, and two threads interleaving that sequence double-spend. There are two correct answers.
+
+The `synchronized` bucket above is the first. Each key has its own monitor, so this is lock striping with one stripe per key for free: two clients never contend, and one client's threads contend only with each other. Uncontended `synchronized` is cheap, and the critical section is a dozen arithmetic operations.
+
+The compare-and-set loop is the second. The two numbers become one immutable record in an `AtomicReference`, so swapping the reference swaps both atomically:
+
+```java
+final class CasTokenBucket implements LimiterState {
+    private record State(double tokens, long lastNanos) {}
+    private final AtomicReference<State> ref;
+    private final long capacity; private final double refillPerNano;
+
+    public Decision tryAcquire(int permits, long now) {
+        while (true) {
+            State cur = ref.get();
+            double refilled = Math.min(capacity, cur.tokens() + (now - cur.lastNanos()) * refillPerNano);
+            if (refilled < permits) return Decision.denied((long) Math.ceil((permits - refilled) / refillPerNano));
+            if (ref.compareAndSet(cur, new State(refilled - permits, now))) return Decision.allowed((long) (refilled - permits));
+        }                                                      // another thread won the race: recompute from its state
+    }
+}
+```
+
+The loop retries when another thread changed the state between the read and the swap, which is why the body must be side-effect free: the Java documentation makes the same demand of `AtomicLong.updateAndGet`, whose function may be re-applied under contention. The condition that decides: a `synchronized` bucket when a key is touched by a handful of threads, which is every ordinary client; the CAS loop when one hot key is hit by many threads at once and a small record allocated per call is acceptable. Both give the happens-before guarantee that makes another thread's spend visible. Measure before switching; the lock is rarely where the time goes.
+
+## Extensibility and trade-offs
+
+- **A new algorithm.** One class implementing `LimiterState` and a different supplier. The sliding window counter in the deep dive is the pragmatic middle: two numbers and no boundary leak worth worrying about.
+- **Blocking acquire and warm-up.** An `acquire()` that sleeps for the returned wait and then takes the permit, for callers that would rather wait than be refused, and a bucket that ramps its rate up from cold; Guava's `RateLimiter` offers both.
+- **Weighted costs, composite keys.** `permits` already exists on the interface, so an expensive endpoint asks for five; the key is a string, so `clientId + ":" + route` is a per-route limit with no change to the limiter.
+- **Shared across servers.** Three things change and nothing else. State moves out of the process into a store such as Redis, so the `ConcurrentHashMap` becomes a key namespace; refill-and-spend must stay atomic, so it runs as a script on the store rather than as Java on the client; and the clock becomes the store's clock, so servers with drifting time agree. Idle eviction becomes key expiry. The algorithms are unchanged, which is why they were kept free of keys and threads. [Rate limiting](/learn/rate-limiting) covers the algorithms at that level and [Design a rate limiter](/learn/design-rate-limiter) covers the store, the script and what to do when the store is down.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| Lazy refill from the clock | No timer thread, cost proportional to requests not to keys | Every call does the elapsed-time arithmetic |
+| State per key behind one interface | Algorithms know nothing of keys or threads; swap by changing a supplier | Two interfaces where a naive design has one class |
+| Lock per bucket by synchronized | Striping for free, simple to read | A hot key serialises its own callers |
+| Monotonic nanosecond clock | Immune to wall-clock corrections | Not comparable across processes, which is fine here and not in the distributed version |
+
+<Callout type="interview" title="The two-minute version">
+
+"One RateLimiter interface for callers, keyed by client; one LimiterState interface for algorithms, which know only permits and a timestamp. Token bucket, sliding window log and fixed window counter are three Strategies behind it; the bucket is two numbers refilled lazily from an injected monotonic clock on every call, so there is no timer and tests step time by hand. Per-key state lives in a ConcurrentHashMap created with computeIfAbsent and swept when idle for longer than it takes a bucket to refill. Each bucket is synchronised, which is a lock per key; a CAS loop over an immutable record is the alternative for a hot key. Shared across servers, the state and the atomic update move to the store and the algorithms do not change." Then offer the comparison table.
+
+</Callout>
+
+<DeepDive title="Go deeper: the sliding window counter">
+
+The sliding window log is exact and remembers every request; the fixed window is cheap and leaks at the boundary. The sliding window counter keeps two numbers per key, the count for the current fixed window and for the previous one, and estimates the rate as the current count plus the previous count weighted by how much of the previous window still overlaps the trailing window. Cloudflare's worked example: 42 requests in the previous minute, 18 in the current one, 15 seconds into it, gives 42 times 0.75 plus 18, which is 49.5 against a limit of 50. Their analysis of 400 million requests from 270 thousand sources found 0.003 percent wrongly allowed or limited, and no source blocked that was under its threshold. Figma took a related route without the weighting: sixty one-minute counters summed per hour. The structure here does not change for either: another `LimiterState`, two longs and a window id, the same `synchronized` or CAS choice. It is the algorithm to name when the interviewer asks what you would ship for a hundred million keys.
+
+</DeepDive>

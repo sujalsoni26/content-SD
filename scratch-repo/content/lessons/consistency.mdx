@@ -1,0 +1,62 @@
+Copies can briefly disagree: your profile update reached the primary but not yet a replica. A **consistency model** is the promise about what a read returns after a write.
+
+| Model | Promise | Use it for |
+| --- | --- | --- |
+| **Strong** | Every later read, anywhere, sees the write, as if there were one copy. Costs latency and availability. | Balances, payments, inventory, permissions. Deposit ₹10, and an immediate ₹10 payment must see the deposit. |
+| **Eventual** | Replicas converge once updates stop. Fast and available, but reads may be stale. | Likes, views, follower counts, feeds. A replica showing 69k followers while the primary has 70k is harmless. |
+| **Causal** | Effects never appear before their causes. | Comments: a reply never shows up before the post it replies to. |
+| **Read-your-writes** | You see your own updates at once; others may see them later. | Your new post tops your own feed while fan-out to followers takes a few seconds. |
+
+<Callout type="idea" title={"Ask \"what does a stale read cost?\""}>
+
+If a stale read could lose money or double-sell a seat, you need strong consistency. If the worst case is a like count that's a few seconds behind, eventual is fine and much cheaper.
+
+</Callout>
+
+## Four promises for one user
+
+Eventual consistency is much easier to live with when the system keeps a few promises *per user session*. Terry and colleagues named them in 1994 while building the Bayou system, and modern databases still use the list:
+
+| Guarantee | Promise | Without it |
+| --- | --- | --- |
+| Read-your-writes | After you write, your own reads include it | Your comment vanishes on refresh |
+| Monotonic reads | Once you have seen a value, you never see an older one | Refresh and watch a like count go *down* |
+| Monotonic writes | Your writes apply in the order you made them | Edit twice, and the first edit wins |
+| Writes-follow-reads | A write that depends on something you read lands after it | A reply stored before the comment it answers |
+
+## How read-your-writes is implemented
+
+<Mermaid caption="Read-your-writes: for a short time after a write, the user's reads go to the primary (or to a replica known to have the write)." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant U as User
+    participant P as Primary
+    participant R as Replica (lagging)
+    U->>P: Post comment 88
+    P-->>U: Saved
+    U->>R: Refresh (no guarantee)
+    R-->>U: Feed without comment 88
+    Note over U,R: Read-your-writes on
+    U->>P: Refresh (routed to the primary for 10 s)
+    P-->>U: Feed with comment 88
+`} />
+
+Two common mechanisms:
+
+- **Time-based routing.** For a short window after a user writes (say 10 seconds, longer than the usual lag), send that user's reads to the primary. Simple, but it moves read load back onto the primary.
+- **Version tracking.** The write returns a version (a log position or timestamp). The client sends it with later reads, and a replica that has not reached that version either waits or forwards the read. More precise, and it works across devices if the version is kept server-side with the session.
+
+**Monotonic reads** usually come from **sticky routing**: hash the user id to a replica, so one user keeps reading the same copy, which only ever moves forward. **Causal** ordering for related items is often solved by placement rather than protocol: write a thread's comments through one partition, so they replicate in the order they happened.
+
+<Callout type="analogy" title="The family WhatsApp group">
+
+Mum's message reaches some phones before others (eventual). Nobody sees a reply before the message it answers (causal). And you always see the message you just sent (read-your-writes).
+
+</Callout>
+
+Strong consistency has a precise name, **linearizability**, and a cousin for whole transactions, **serializability**; [Linearizability, serializability and the consistency zoo](/learn/linearizability) takes them apart one by one.

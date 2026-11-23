@@ -1,0 +1,107 @@
+Apache Kafka stores events in a **distributed, append-only log**. A producer appends a record to the end of a partition, the broker keeps it for as long as retention says, and any number of consumers read it by position, each keeping its own bookmark. Keep the data and let readers track their place: that one decision separates a log from the queue in [Message queues](/learn/message-queues) and gives the fan-out of [Pub/sub](/learn/pubsub) without copying a message per subscriber.
+
+## Log or queue?
+
+| | Queue (RabbitMQ, SQS) | Log (Kafka) |
+| --- | --- | --- |
+| After a consumer acks | The message is deleted | Nothing changes; the consumer moves its offset |
+| Retention | Until consumed, or a TTL | A time or size limit per topic (7 days by default), read or not |
+| Independent readers | Each needs its own queue and copy | Any number of consumer groups read the same bytes |
+| Replay | Impossible once acked | Reset the offset and read again |
+| Ordering | Per queue, loosened by redelivery | Strict within a partition, none across partitions |
+| Parallelism | Add consumers | Bounded by the partition count |
+
+
+## Topics, partitions, offsets and segments
+
+A **topic** is a named stream such as `orders`, split into **partitions**. Each partition is an ordered, immutable sequence of records, and a record's position in it is its **offset**, a 64-bit integer that only grows. Records with the same key land in the same partition and are read back in the order written; across partitions there is no order at all. On disk a partition is a directory of **segment** files named after their first offset. The active segment rolls at `segment.bytes` (1 GiB by default), and retention deletes whole segments, never single records.
+
+<Mermaid caption="Topic orders with two partitions on three brokers. Each partition has one leader; followers fetch from it, so every record exists on three brokers." chart={`flowchart LR
+    PR["Producer"] --> P0L
+    PR --> P1L
+    subgraph B1["Broker 1"]
+        P0L["orders-0 leader"]
+        P1F1["orders-1 follower"]
+    end
+    subgraph B2["Broker 2"]
+        P0F1["orders-0 follower"]
+        P1L["orders-1 leader"]
+    end
+    subgraph B3["Broker 3"]
+        P0F2["orders-0 follower"]
+        P1F2["orders-1 follower"]
+    end
+    P0L -.-> P0F1
+    P0L -.-> P0F2
+    P1L -.-> P1F1
+    P1L -.-> P1F2
+`} />
+
+## Brokers, leaders and the in-sync replicas
+
+A cluster is a set of **brokers**, and every partition is copied to `replication.factor` of them (the broker default is 1; three is usual in production). One copy is the **leader**, which takes all writes and reads; the others are **followers** that fetch from it and append the same records in the same order, as in [Replication](/learn/replication).
+
+A follower that has not fetched, or has not caught up to the leader's end of the log, within `replica.lag.time.max.ms` (30 s by default) is dropped from the **in-sync replica set (ISR)** and rejoins when it catches up. A record is **committed** only when every ISR member has it, and consumers never see uncommitted records. With f+1 replicas Kafka can lose f of them without losing a committed record. If every replica dies, the controller waits for an ISR member to return rather than crowning a stale one: `unclean.leader.election.enable` is false by default, and switching it on trades data loss for availability.
+
+<Callout type="analogy" title="A numbered ledger with many bookmarks">
+
+A partition is a bound ledger: every entry gets the next line number, nothing is erased, and old volumes are shredded after a fixed period. Readers never tear out pages; each keeps a bookmark, and a new auditor can start at volume one and catch up. Where it breaks: a ledger is one copy, while a partition is copied to several brokers, and a reader sees a line only once enough copies have it.
+
+</Callout>
+
+## What acks=all buys you
+
+| Setting | The leader replies when | Lost if |
+| --- | --- | --- |
+| `acks=0` | Never; the producer does not wait | Anything fails, even a dropped connection |
+| `acks=1` | It has written the batch to its own log | The leader dies before a follower fetches it |
+| `acks=all` (or -1) | Every replica in the ISR has written it | Every in-sync replica dies |
+
+Since Kafka 3.0 the Java producer defaults to `acks=all` with `enable.idempotence=true` (KIP-679); before that the default was `acks=1`. On its own `acks=all` has a hole: if the ISR has shrunk to the leader alone, "all in-sync replicas" is one broker. `min.insync.replicas` (default 1, settable per topic) closes it: with `acks=all`, a write is refused with `NotEnoughReplicas` when the ISR is smaller than that. The usual production choice is replication factor 3 with `min.insync.replicas=2`: an acknowledged write survives one broker loss, writes continue while one broker is down, and a second failure stops writes rather than accepting them on a single copy.
+
+<Mermaid caption="A produce with acks=all. The leader answers only after every in-sync follower has fetched the batch, so an acknowledged record already exists on at least min.insync.replicas brokers." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant P as Producer
+    participant L as Leader (broker 1)
+    participant F1 as Follower (broker 2)
+    participant F2 as Follower (broker 3)
+    P->>L: Produce batch, acks=all
+    Note over L: Append at offset 1042
+    F1->>L: Fetch from 1042
+    L-->>F1: Records 1042 to 1047
+    F2->>L: Fetch from 1042
+    L-->>F2: Records 1042 to 1047
+    Note over L: All ISR members have it: committed
+    L-->>P: Ack, base offset 1042
+    Note over P: Visible to consumers from now on
+`} />
+
+## Consumers read by offset
+
+Consumers **pull**, so a slow consumer falls behind instead of being flooded. The only per-consumer state the broker keeps is the **committed offset**, the position a consumer has saved, stored in the internal topic `__consumer_offsets`. A restarted consumer resumes from there; one that wants history resets its offset to any point retention still covers. How a group shares partitions is [Partitions, consumer groups and ordering](/learn/partitions-consumer-groups); whether to commit before or after the work is [Delivery semantics and exactly-once](/learn/delivery-semantics).
+
+## Retention and compaction
+
+Retention is per topic: `retention.ms` (7 days by default) and `retention.bytes` (-1 by default, meaning no size limit; it applies per partition) decide when a segment may go, read or not. A consumer that falls behind retention loses records silently; its offset becomes invalid and `auto.offset.reset` (default `latest`) decides where it resumes. For topics that hold *state* rather than history, such as every product's current price, `cleanup.policy=compact` keeps at least the latest record per key. Compaction never reorders or renumbers records, and a consumer reading from the start still ends with the final value of every key. To delete a key you write a **tombstone**, that key with a null value, kept for `delete.retention.ms` (1 day by default) so a consumer part-way through still sees the deletion. The policies can be combined (`delete,compact`).
+
+## The controller: from ZooKeeper to KRaft
+
+One node is the **controller**: it notices broker failures, elects partition leaders and records the ISR and other metadata. That metadata used to live in ZooKeeper, a separate service to run and upgrade. **KRaft** (Kafka Raft) replaces it with a quorum of controller nodes, usually 3 or 5, keeping the metadata in an internal replicated log with the Raft protocol from [Consensus](/learn/consensus): one active controller, the rest hot standbys, a majority required (3 tolerate 1 failure, 5 tolerate 2). KRaft was declared production-ready in Kafka 3.3, ZooKeeper mode deprecated in 3.5, and Kafka 4.0 (March 2025) removed ZooKeeper; 3.9 is the last release that runs both, the bridge for migrations.
+
+<Callout type="interview" title="Say the three settings together">
+
+Give the durability triple in one breath: "replication factor 3, `min.insync.replicas` 2, `acks=all`", then what it buys (an acknowledged write survives one broker loss) and what it costs (every produce waits for a second broker; two failures stop writes). Then why a log and not a queue: replay, independent readers, retention as a buffer while consumers are down.
+
+</Callout>
+
+<DeepDive title="Go deeper: ISR versus majority quorums">
+
+Raft, which the controller quorum uses, commits once a majority has a write: 2f+1 nodes tolerate f failures and a slow minority never delays a commit. Kafka's data path chose the other corner: a write is committed only when *all* in-sync replicas have it, so f+1 replicas survive f failures, and the ISR can shrink to one replica under pressure instead of refusing writes. The price: one slow follower slows every acknowledgement until it is dropped, and a shrunken ISR silently means fewer copies than you think, the gap `min.insync.replicas` closes.
+
+</DeepDive>

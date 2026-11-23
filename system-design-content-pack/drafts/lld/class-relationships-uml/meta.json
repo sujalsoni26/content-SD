@@ -1,0 +1,64 @@
+{
+  "slug": "class-relationships-uml",
+  "title": "Class relationships and UML",
+  "moduleId": "lld",
+  "level": "basic",
+  "minutes": 8,
+  "problem": "Two engineers say 'the order has lines' and mean different things: one deletes lines with the order, the other keeps them, and the code they write disagrees.",
+  "summary": "UML class diagrams express six relationships (dependency, association, aggregation, composition, inheritance, realisation) with multiplicity and visibility; sequence diagrams show one use case as ordered messages between lifelines. Together they are the two drawings of every low-level design.",
+  "catTip": "I and the sofa are aggregation: it holds me, yet both survive apart. I and my whiskers are composition. Diamonds go on the owner, and whiskers never get one.",
+  "recall": {
+    "q": "A class diagram shows `Order \"1\" *-- \"1..*\" OrderLine`. What do the filled diamond and the two multiplicities tell you, and how would the code differ if the diamond were hollow?",
+    "a": "A filled diamond is composition: an order owns its lines, which cannot exist without it; every order has at least one line and each line belongs to exactly one order. A hollow diamond (aggregation) would let lines outlive the order, so they would be created elsewhere and merely referenced."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a shared notation for ownership, lifetime and count, two developers read 'the order has lines' differently, and one of them writes code that orphans or deletes data the other expected to keep.",
+    "tradeoffs": "Diagrams take time to draw and go stale as code changes, so draw only the classes, relationships and one or two flows that carry a decision.",
+    "explainSimply": "A class diagram is a family tree plus an address book: who is a kind of whom, and who keeps whose number. A sequence diagram is the transcript of one phone call, read top to bottom. The first says who knows whom; the second says who called whom, and in what order.",
+    "hint": "A filled versus a hollow diamond is about whether the parts survive the whole; then read each number at the far end of the line."
+  },
+  "meow": "Meow owns whiskers (filled diamond). Meow sits on sofa (hollow). Meow calls human (sequence diagram, repeat until fed).",
+  "quiz": [
+    {
+      "prompt": "A class diagram shows `Order \"1\" *-- \"1..*\" OrderLine`. Which statement follows?",
+      "options": [
+        "An OrderLine may belong to several orders at once",
+        "Deleting the order deletes its lines, and a line never exists without an order",
+        "OrderLine inherits the fields and methods of Order",
+        "Order only uses OrderLine inside one method and never stores it"
+      ],
+      "answer": 1,
+      "explanation": "A filled diamond is composition: exclusive ownership and a shared lifetime, with at least one line per order. The last option describes a dependency (dashed arrow), and shared membership would need a hollow diamond or a plain association."
+    },
+    {
+      "prompt": "Class A receives an object of class B only as a method parameter and never keeps a reference to it. Which relationship should the diagram show?",
+      "options": [
+        "Association, drawn as a solid arrow from A to B",
+        "Aggregation, with a hollow diamond on A",
+        "Dependency, drawn as a dashed arrow from A to B",
+        "Realisation, drawn as a dashed line with a hollow triangle at B"
+      ],
+      "answer": 2,
+      "explanation": "Dependency means transient use: a parameter, a local or a return type. Association is the believable but stronger claim, because it implies a field that lasts beyond one call; realisation is for implementing an interface."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Aggregation or composition: a `Team` and its `Player`s; a `House` and its `Room`s. Which is which, and what is the test?",
+      "a": "Team–Player is aggregation (players exist before and after the team; hollow diamond on Team). House–Room is composition (rooms die with the house; filled diamond on House). The test: delete the whole, and do the parts survive?"
+    },
+    {
+      "q": "In a sequence diagram, what do a solid arrow, a dashed arrow and the vertical dashed line under each box mean, and what does a box with many outgoing arrows tell you?",
+      "a": "Solid arrow: a call or message; dashed arrow: the reply; the vertical dashed line is the lifeline, the object's existence over time, read top to bottom. A box with many outgoing arrows is the coordinator, and too many is the first sign of a class doing too much."
+    }
+  ],
+  "glossary": [
+    { "term": "UML", "full": "Unified Modeling Language", "note": "The standard notation for class, sequence and state diagrams; interviews use about a dozen of its symbols." }
+  ],
+  "sources": [
+    { "title": "Object Management Group, OMG Unified Modeling Language (OMG UML), Version 2.5.1 (December 2017)", "url": "https://www.omg.org/spec/UML/2.5.1", "accessed": "2026-11-22", "supports": "the definitions of association, aggregation, composition, dependency, generalisation and interface realisation, multiplicity and visibility", "status": "reference" },
+    { "title": "Martin Fowler, UML Distilled, 3rd ed. (Addison-Wesley, 2003), ch. 3 \"Class Diagrams: The Essentials\" and ch. 5 \"Class Diagrams: Advanced Concepts\"", "url": "https://martinfowler.com/books/uml.html", "accessed": "2026-11-22", "supports": "reading class diagrams, the lifetime distinction between aggregation and composition, and Rumbaugh's remark that aggregation is a modelling placebo", "status": "reference" },
+    { "title": "Mermaid documentation, \"Class diagrams\"", "url": "https://mermaid.js.org/syntax/classDiagram.html", "accessed": "2026-11-22", "supports": "the arrow tokens, cardinality placement, visibility prefixes and annotations used in the diagram", "status": "verified" }
+  ]
+}

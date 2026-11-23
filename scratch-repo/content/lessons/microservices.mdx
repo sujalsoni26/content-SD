@@ -1,0 +1,32 @@
+A **monolith** is one codebase deployed as one unit. **Microservices** split the app into small independent services, each owning one capability and usually its own database.
+
+<Diagram name="monolith-vs-microservices" caption="Monolith vs microservices behind an API gateway." />
+
+|  | Monolith | Microservices |
+| --- | --- | --- |
+| Build, test, debug | Simple; in-process calls | Harder; calls cross the network |
+| Deploy and scale | Everything together | Each service on its own |
+| Failure | One bug can crash everything | Failures can be isolated |
+| Data | One DB; easy joins and transactions | Split data; cross-service consistency is hard |
+| Teams | Step on each other as the org grows | Own their services independently |
+| Ops overhead | Low | High: monitoring, tracing, deployments |
+
+<Callout type="idea" title="Start with a monolith">
+
+Ideally a **modular monolith**: one deployable, with clean internal boundaries between modules. Split into services when team size and independent scaling justify the cost.
+
+</Callout>
+
+- Splitting turns one app into a <mark>distributed system</mark>: latency, partial failures and consistency become your problems (see [Performance and Reliability](/learn#reliability)).
+- You will need an **API gateway**: one entry point for clients that handles routing, auth, rate limiting, TLS and logging. It is a specialized reverse proxy (see [Proxy and reverse proxy](/learn/proxy)), such as Kong or AWS API Gateway. Its responsibilities, and the backend-for-frontend variant, are in [API gateway and backend-for-frontend](/learn/api-gateway).
+- You will need **service discovery**, so services can find each other's changing addresses as instances come and go. How registries and internal DNS do this: [Service discovery and internal DNS](/learn/service-discovery).
+
+<DeepDive title="Go deeper: Conway's law and the way back">
+
+**Conway's law** says a system's structure mirrors the communication structure of the organization that builds it. Microservices work best when each service matches a team that can own it end to end; splitting finer than your teams usually creates coordination pain, not speed.
+
+The move is not one-way. Shopify famously runs a large modular monolith, and in 2023 Amazon Prime Video's engineering blog described moving a video-monitoring tool from distributed serverless components (Step Functions and Lambda handing data through S3) into a single process, cutting its infrastructure cost by over 90% and removing a scaling bottleneck. Choose the shape that fits the problem you have now.
+
+Where the boundaries go, and how to move between shapes without a big bang: [Monolith, modular monolith, SOA and microservices](/learn/modular-monolith-soa) and [Migrating safely: strangler fig and friends](/learn/strangler-fig). Moving retries, timeouts and encryption out of application code: [Service mesh](/learn/service-mesh).
+
+</DeepDive>

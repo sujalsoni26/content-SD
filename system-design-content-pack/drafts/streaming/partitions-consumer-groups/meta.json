@@ -1,0 +1,69 @@
+{
+  "slug": "partitions-consumer-groups",
+  "title": "Partitions, consumer groups and ordering",
+  "moduleId": "streaming",
+  "level": "intermediate",
+  "minutes": 9,
+  "problem": "Ten consumers are started for a topic with four partitions and six do nothing, while one partition carrying a single hot key falls further behind every minute.",
+  "summary": "A partition is the unit of both ordering and parallelism. Keys decide which partition a record joins, a consumer group gives each partition exactly one owner, rebalances move partitions when membership changes, and lag per partition tells you whether the group keeps up.",
+  "catTip": "I pick one checkout lane and stay in it, so my tins are scanned in the order I put them down. The empty lane next to me does not help: a partition has one owner, and a hot key is one very full trolley.",
+  "recall": {
+    "q": "A topic has 8 partitions and its consumer group has 12 instances. How many do useful work, and what would you check before adding partitions?",
+    "a": "At most 8, because each partition has exactly one owner within a group, so 4 instances idle. Check whether lag is spread evenly or sits on one hot partition, and remember that adding partitions changes which partition each key hashes to, so per-key order breaks across the change."
+  },
+  "archNodes": ["queue"],
+  "guide": {
+    "breaks": "Without a deliberately chosen key and a sized partition count, related events are processed out of order, consumers beyond the partition count sit idle, and one hot key stalls a single partition while the others are empty.",
+    "tradeoffs": "Ordering and parallelism pull against each other: a coarse key keeps order but concentrates load, a fine key spreads load but orders less, and changing the partition count later breaks the key-to-partition mapping.",
+    "explainSimply": "A topic is a row of checkout lanes and each consumer is a cashier who owns a lane. A shopper's items stay in one lane and are scanned in order, extra cashiers with no lane stand about, and one enormous trolley slows its lane however many cashiers you hire.",
+    "hint": "Count the partitions, then ask what each partition's lag looks like and what happens to a key's partition when you add more."
+  },
+  "meow": "Four lanes, one cashier each. Twelve cats turn up to work; eight nap. Purr-tition 2 has the big trolley.",
+  "quiz": [
+    {
+      "prompt": "An order-status topic is keyed by customer id, and one enterprise customer generates 60% of all events. What is the most likely symptom, and the right fix?",
+      "options": [
+        "Rebalances every few minutes; raise session.timeout.ms",
+        "One partition's lag grows while the others stay near zero; key by order id (a finer-grained key) so load spreads while each order stays ordered",
+        "All partitions lag equally; add consumers to the group",
+        "Records arrive out of order for every customer; enable the idempotent producer"
+      ],
+      "answer": 1,
+      "explanation": "A dominant key makes one hot partition that a single consumer must drain alone, and adding consumers cannot help because the partition still has one owner. Keying by order id keeps the order that matters and spreads that customer's orders across partitions."
+    },
+    {
+      "prompt": "A consumer group of three uses the default assignment settings of the Kafka 4.x Java client, and one member crashes. What happens to the other two during the rebalance?",
+      "options": [
+        "Nothing; the coordinator quietly hands the dead member's partitions to them",
+        "They keep consuming their own partitions and only the dead member's partitions move, because cooperative rebalancing is the default",
+        "They give up all their partitions and stop consuming until everything is reassigned, because the default assignor list begins with the eager RangeAssignor",
+        "They are also removed from the group and must rejoin"
+      ],
+      "answer": 2,
+      "explanation": "The default partition.assignment.strategy lists RangeAssignor first, and the group uses the eager stop-the-world protocol with it. Incremental rebalancing needs CooperativeStickyAssignor on its own, or the KIP-848 protocol selected with group.protocol=consumer."
+    }
+  ],
+  "cards": [
+    {
+      "q": "You added partitions to a topic to cure growing lag. Which guarantee did you just weaken, and who is affected?",
+      "a": "Per-key ordering across the change: existing records stay where they are, and new records with the same key now hash to a different partition, so a consumer may process a key's newer record before its older one. Any consumer keeping per-key local state tied to a partition has to be rebuilt."
+    },
+    {
+      "q": "A consumer takes eight minutes to process one batch of records. What does the group coordinator do, and why?",
+      "a": "It treats the consumer as failed because it did not call poll() within max.poll.interval.ms (5 min by default), removes it from the group and rebalances its partitions to others. Fix it with smaller batches (max.poll.records), a longer interval, or by moving slow work off the polling thread."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Apache Kafka 4.4 producer configuration reference", "url": "https://kafka.apache.org/44/generated/producer_config.html", "accessed": "2026-11-22", "supports": "default partitioning logic (hash of the key; sticky partition switched after batch.size bytes); partitioner.adaptive.partitioning.enable default true; partitioner.ignore.keys; batch.size 16384; ordering with max.in.flight.requests.per.connection and idempotence", "status": "verified" },
+    { "title": "KIP-794: Strictly Uniform Sticky Partitioner", "url": "https://cwiki.apache.org/confluence/display/KAFKA/KIP-794%3A+Strictly+Uniform+Sticky+Partitioner", "accessed": "2026-11-22", "supports": "the problem with the earlier sticky partitioner (KIP-480) for keyless records and the new batch.size-based, adaptive behaviour", "status": "verified" },
+    { "title": "Apache Kafka 3.3 release post, What's New in Apache Kafka 3.3 (3 October 2022)", "url": "https://blogsarchive.apache.org/kafka/entry/what-rsquo-s-new-in", "accessed": "2026-11-22", "supports": "KIP-794 shipped in Kafka 3.3 and improves the default partitioner for non-keyed records", "status": "verified" },
+    { "title": "Apache Kafka 4.4 consumer configuration reference", "url": "https://kafka.apache.org/44/generated/consumer_config.html", "accessed": "2026-11-22", "supports": "partition.assignment.strategy default [RangeAssignor, CooperativeStickyAssignor] and the listed assignors; session.timeout.ms 45 s; max.poll.interval.ms 5 min; max.poll.records 500; group.protocol default classic with values classic/consumer; static members keep partitions until the session timeout", "status": "verified" },
+    { "title": "KafkaConsumer Javadoc (Apache Kafka 4.4)", "url": "https://kafka.apache.org/44/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html", "accessed": "2026-11-22", "supports": "each partition is assigned to exactly one consumer in the group; membership is maintained dynamically and partitions are reassigned on failure or join; detecting failures via session.timeout.ms and max.poll.interval.ms", "status": "verified" },
+    { "title": "KIP-429: Kafka Consumer Incremental Rebalance Protocol", "url": "https://cwiki.apache.org/confluence/display/KAFKA/KIP-429%3A+Kafka+Consumer+Incremental+Rebalance+Protocol", "accessed": "2026-11-22", "supports": "the eager stop-the-world protocol versus cooperative incremental rebalancing in two rounds; CooperativeStickyAssignor; accepted for 2.4.0", "status": "verified" },
+    { "title": "KIP-848: The Next Generation of the Consumer Rebalance Protocol", "url": "https://cwiki.apache.org/confluence/display/KAFKA/KIP-848%3A+The+Next+Generation+of+the+Consumer+Rebalance+Protocol", "accessed": "2026-11-22", "supports": "assignment computed by the group coordinator with server-side assignors; incremental reconciliation without a global synchronisation barrier; GA in Apache Kafka 4.0", "status": "verified" },
+    { "title": "Apache Kafka 4.0.0 release announcement (18 March 2025)", "url": "https://kafka.apache.org/blog/2025/03/18/apache-kafka-4.0.0-release-announcement/", "accessed": "2026-11-22", "supports": "the new protocol is enabled by default on the server side and consumers opt in with group.protocol=consumer", "status": "verified" },
+    { "title": "Apache Kafka 4.4 documentation, Operations: Basic Kafka Operations (Modifying topics; Managing consumer groups)", "url": "https://kafka.apache.org/44/operations/basic-kafka-operations/", "accessed": "2026-11-22", "supports": "adding partitions does not redistribute existing data; partition count cannot be reduced; partition count bounds consumer parallelism; kafka-consumer-groups.sh columns CURRENT-OFFSET, LOG-END-OFFSET, LAG", "status": "verified" },
+    { "title": "Apache Kafka 4.4 documentation, Introduction", "url": "https://kafka.apache.org/44/getting-started/introduction/", "accessed": "2026-11-22", "supports": "events with the same key are written to the same partition and read in the order written", "status": "verified" }
+  ]
+}

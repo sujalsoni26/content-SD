@@ -1,0 +1,51 @@
+When data outgrows one machine (say 50 TB) or writes overwhelm one primary, **partition** it.
+
+- **Horizontal partitioning** splits *rows*.
+- **Vertical partitioning** splits *columns or tables*.
+- **Sharding** is horizontal partitioning across machines: each **shard** holds a subset of rows, chosen by the **shard key** (e.g., `user_id`).
+
+<Diagram name="shard-routing" caption="User 42 → 42 % 3 = 0 → Shard 1. Real systems hash the key instead of using raw modulo." />
+
+## Sharding strategies
+
+| Strategy | How | Trade-off |
+| --- | --- | --- |
+| Range | user\_id 1–1M → shard 1, … | Easy range queries, but hot shards (new users pile onto the newest shard) |
+| Hash | hash(user\_id) % N | Even spread; range queries hit every shard; changing N moves almost all data, so use consistent hashing |
+| Directory | Lookup table: key → shard | Flexible; the lookup service is one more dependency |
+| Geo | By region (India users → India shard) | Data near users; regions can be uneven |
+
+<Interactive name="shard-router" />
+
+## What gets hard
+
+- **Picking the shard key**: it must match the main query and spread the load.
+- **Hot keys**: a celebrity's data hammers one shard.
+- **Cross-shard joins and transactions** are slow and complex.
+- **Resharding** when you add shards.
+- **Secondary indexes** across shards, and rebalancing without downtime, are covered in [Partitioning and rebalancing](/learn/partitioning-internals).
+
+<Callout type="idea" title="Shard last">
+
+Try indexes, caching, vertical scaling and replicas first. Each shard is usually replicated too: <mark>replication copies the same data</mark> (reads, availability); <mark>sharding splits different data</mark> (size, writes).
+
+</Callout>
+
+<Mermaid caption="Replication copies the same data (reads, availability); sharding splits different data (size, writes)." chart={`flowchart LR
+    %% Definition order is chosen so the layout shows Replication above Sharding and Shards 1, 2, 3 top to bottom.
+    subgraph SHA["Sharding: each shard holds some users"]
+        RT["Shard router"] --> S2["Shard 2"]
+        RT --> S3["Shard 3"]
+        RT --> S1["Shard 1"]
+    end
+    subgraph REP["Replication: every copy holds all users"]
+        P1["Primary"] --> R1["Replica 1"]
+        P1 --> R2["Replica 2"]
+    end
+`} />
+
+<DeepDive title="Go deeper: consistent hashing in one picture">
+
+Imagine a ring of hash values from 0 to 2³². Each shard is placed at a few points on the ring, and each key goes **clockwise to the next shard** it meets. Adding a shard only takes over the keys between it and its neighbour, about **1/N** of the data, instead of reshuffling almost everything as `hash % N` does. Placing each shard at many points (**virtual nodes**) evens out the load. DynamoDB and Cassandra use variants of this.
+
+</DeepDive>

@@ -1,0 +1,178 @@
+{
+  "slug": "design-notification-system",
+  "title": "Design a notification system",
+  "moduleId": "hld",
+  "level": "intermediate",
+  "minutes": 15,
+  "problem": "Events must become pushes, texts and emails through providers you do not control, without duplicates, without ignoring a user's preferences, and without a marketing blast delaying a one-time password.",
+  "summary": "A notification system is a durable queue first: events are deduplicated and filtered by preference, queued per channel and priority, sent by paced workers through provider adapters with retries and a dead-letter queue, and tracked through provider webhooks.",
+  "catTip": "Treats arrive by post, text and pigeon. I sort urgent from junk before the couriers see them, never deliver the same treat twice, and if the pigeon service is down I keep the treat in the queue instead of losing it.",
+  "recall": {
+    "q": "A campaign makes 10k notifications a second arrive while the SMS provider accepts 500. What absorbs the difference, and how does an OTP avoid waiting behind the campaign?",
+    "a": "Durable queues absorb the spike, one per channel and priority, because neither Kafka nor SQS reorders by priority inside a queue. Workers drain the transactional lane first and the pacer reserves a slice of each provider's rate for it, so an OTP never waits for a marketing token."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Calling providers synchronously from the API collapses at a 100× campaign spike, one shared queue puts one-time passwords behind coupons, and at-least-once redelivery sends the same text twice.",
+    "tradeoffs": "Everything after ingestion is asynchronous and eventually consistent, so the design carries three layers of idempotency, a pacer per provider, a reconciler that polls for stuck statuses, and queues that hold minutes of backlog by design.",
+    "explainSimply": "Think of a post office sorting floor: sacks of letters come in, get sorted into express and bulk bins for each destination, and leave on trucks that carry a fixed load an hour. Express always boards first, every letter is stamped so it cannot be sent twice, and undeliverable mail goes to a returns shelf instead of being thrown away.",
+    "hint": "Compare the arrival rate during a campaign with the rate each provider accepts, then ask what sits between them and how urgent work overtakes bulk."
+  },
+  "meow": "Urgent lane, bulk lane, one delivery per treat, and the pigeon gets a retry before I give up. Mew.",
+  "quiz": [
+    {
+      "prompt": "A marketing campaign of 2M pushes starts at 18:00 and OTP delivery latency rises from 2 s to 15 minutes. Which change fixes the cause?",
+      "options": [
+        "Add more push workers",
+        "Separate queues per channel and priority, with workers that drain the transactional lane first and a reserved slice of provider capacity",
+        "Negotiate higher provider rate limits",
+        "Switch the push queue from Kafka to SQS FIFO"
+      ],
+      "answer": 1,
+      "explanation": "The OTPs are waiting behind campaign messages in the same queue, so only a separate lane with priority drains them first. More workers is the strongest distractor: it helps only until the provider's accepted rate, and the OTPs still queue behind the campaign; FIFO makes ordering stricter, not smarter."
+    },
+    {
+      "prompt": "A worker crashes after APNs accepted a push but before it recorded the status, and the queue redelivers the message. What keeps the user from receiving two pushes?",
+      "options": [
+        "Kafka exactly-once transactions on the push topic",
+        "A claim-before-send update on the delivery row (a lease) plus the provider's collapse id, accepting that a crash in the narrow window may still resend",
+        "A longer SQS visibility timeout",
+        "Deleting the queue message before calling the provider"
+      ],
+      "answer": 1,
+      "explanation": "Only a row-level claim stops a second worker from sending, and a collapse id makes a rare resend harmless on the device. Kafka transactions are the strongest distractor, but they cover Kafka-to-Kafka work, not an HTTP call to a provider; deleting before sending turns a crash into a lost notification."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: queues are at-least-once and a provider call cannot be undone. Decision?",
+      "a": "Layer idempotency: a unique idempotency key at the API, Redis SET NX with a TTL at ingestion, a claim-before-send update with a lease on the delivery row, and provider collapse ids (APNs apns-collapse-id, FCM collapse key) where they exist. Decide per priority what a crash in the remaining window does: resend an OTP, drop a marketing message."
+    },
+    {
+      "q": "Problem: a campaign sends 100× the normal rate while OTPs must still arrive in seconds. Decision?",
+      "a": "Queues per channel and priority (sms-high, sms-bulk) because neither Kafka nor SQS has per-message priority; workers drain high first with weighted polling as a starvation guard; the per-provider pacer reserves a slice of the accepted rate for the high lane; campaign fan-out is paced at the provider's rate so backlog stays bounded; preferences are re-checked at send time."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    {
+      "title": "Apple Developer Documentation, \"Sending notification requests to APNs\"",
+      "url": "https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns",
+      "accessed": "2026-11-22",
+      "supports": "HTTP/2 with long-lived reusable connections and advice to spread pushes across connections; apns-expiration (0 means a single attempt, no storage; stored up to 30 days otherwise); apns-priority 10, 5 and 1; apns-collapse-id up to 64 bytes merges notifications; APNs stores only one notification per bundle id per device, usually the latest; payload limit of 4 KB",
+      "status": "verified"
+    },
+    {
+      "title": "Apple Developer Documentation, \"Handling notification responses from APNs\"",
+      "url": "https://developer.apple.com/documentation/usernotifications/handling-notification-responses-from-apns",
+      "accessed": "2026-11-22",
+      "supports": "status 410 Unregistered with a timestamp when a token is no longer active; 429 TooManyRequests for the same device token; TooManyProviderTokenUpdates (update the token no more than once every 20 minutes); retry 5xx responses after a wait with back-off; do not retry BadDeviceToken, Unregistered, ExpiredToken or PayloadTooLarge",
+      "status": "verified"
+    },
+    {
+      "title": "Firebase documentation, \"FCM HTTP v1 API: ErrorCode\"",
+      "url": "https://firebase.google.com/docs/reference/fcm/rest/v1/ErrorCode",
+      "accessed": "2026-11-22",
+      "supports": "UNREGISTERED (404): remove the token; QUOTA_EXCEEDED (429): exponential backoff with a minimum initial delay of one minute; UNAVAILABLE (503): honour Retry-After, otherwise exponential backoff with jitter; INTERNAL (500): retry; TTL range 0 to 2,419,200 seconds",
+      "status": "verified"
+    },
+    {
+      "title": "Firebase documentation, \"Set the lifespan of a message\"",
+      "url": "https://firebase.google.com/docs/cloud-messaging/customize-messages/setting-message-lifespan",
+      "accessed": "2026-11-22",
+      "supports": "messages without a ttl last up to four weeks by default; ttl of 0 discards messages that cannot be delivered immediately; maximum 2,419,200 seconds (28 days)",
+      "status": "verified"
+    },
+    {
+      "title": "Firebase documentation, \"Non-collapsible and collapsible messages\"",
+      "url": "https://firebase.google.com/docs/cloud-messaging/customize-messages/collapsible-message-types",
+      "accessed": "2026-11-22",
+      "supports": "a collapsible message may be replaced by a newer one with the same collapse key before delivery; at most four collapse keys per registration token at a time",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Amazon SQS visibility timeout\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html",
+      "accessed": "2026-11-22",
+      "supports": "default visibility timeout of 30 seconds, maximum 12 hours; a message not deleted before the timeout becomes visible again; at-least-once delivery means a message may still be delivered more than once",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Amazon SQS queue types\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-queue-types.html",
+      "accessed": "2026-11-22",
+      "supports": "standard queues: nearly unlimited throughput, at-least-once delivery, best-effort ordering; FIFO queues: exactly-once processing with MessageDeduplicationId, 300 API calls per second per action, 3,000 messages per second with batching, 30,000 TPS in high-throughput mode",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Using dead-letter queues in Amazon SQS\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html",
+      "accessed": "2026-11-22",
+      "supports": "redrive policy with maxReceiveCount; for standard queues the original enqueue timestamp is kept when a message moves to the DLQ, so the DLQ's retention should be longer than the source queue's",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Amazon SQS features\"",
+      "url": "https://aws.amazon.com/sqs/features/",
+      "accessed": "2026-11-22",
+      "supports": "\"Priority: Use separate queues to provide prioritization of work\"",
+      "status": "verified"
+    },
+    {
+      "title": "Ricardo Ferreira, \"Implementing Message Prioritization in Apache Kafka\" (Confluent blog, 10 September 2020)",
+      "url": "https://www.confluent.io/blog/prioritize-messages-in-kafka/",
+      "accessed": "2026-11-22",
+      "supports": "Kafka has no native message prioritisation because records in the commit log are immutable and the broker never reorders them; the bucket-priority pattern as a workaround",
+      "status": "verified"
+    },
+    {
+      "title": "Twilio documentation, \"Track the message status of outbound messages\"",
+      "url": "https://www.twilio.com/docs/messaging/guides/track-outbound-message-status",
+      "accessed": "2026-11-22",
+      "supports": "status callbacks are POST requests to a StatusCallback URL on each status change (queued, sent, delivered, undelivered, failed) with MessageSid, MessageStatus and ErrorCode; callbacks are not guaranteed to arrive in order; signature validation recommended",
+      "status": "verified"
+    },
+    {
+      "title": "Twilio documentation, \"Best practices for outbound message delivery status logging\"",
+      "url": "https://www.twilio.com/docs/messaging/guides/outbound-message-logging",
+      "accessed": "2026-11-22",
+      "supports": "poll the API if a message has not reached delivered or undelivered within 12 hours; reconcile statuses at least daily",
+      "status": "verified"
+    },
+    {
+      "title": "Twilio documentation, \"Error 30001: Queue overflow\"",
+      "url": "https://www.twilio.com/docs/api/errors/30001",
+      "accessed": "2026-11-22",
+      "supports": "messages sent faster than a sender's throughput are queued; messages can only be queued for 10 hours before they automatically fail; default validity period of 36,000 seconds",
+      "status": "verified"
+    },
+    {
+      "title": "Twilio SendGrid documentation, \"Event Webhook reference\"",
+      "url": "https://www.twilio.com/docs/sendgrid/for-developers/tracking-events/event",
+      "accessed": "2026-11-22",
+      "supports": "delivery events processed, dropped, delivered, deferred and bounce; engagement events open, click, spam report, unsubscribe; sg_event_id for deduplication; the signed event webhook and OAuth 2.0 for securing it",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Managing your Amazon SES sending limits\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/ses/latest/dg/manage-sending-quotas.html",
+      "accessed": "2026-11-22",
+      "supports": "sending quota per 24 hours and maximum send rate per second; sandbox accounts limited to 200 messages per 24 hours and one message per second; quotas raised on request",
+      "status": "verified"
+    },
+    {
+      "title": "Redis documentation, \"SET\" command",
+      "url": "https://redis.io/docs/latest/commands/set/",
+      "accessed": "2026-11-22",
+      "supports": "SET with NX sets the key only if it does not exist and returns a null reply otherwise; EX sets the expiry in seconds",
+      "status": "verified"
+    },
+    {
+      "title": "Paul Tarjan, \"Scaling your API with rate limiters\" (Stripe Engineering, 30 March 2017)",
+      "url": "https://stripe.com/blog/rate-limiters",
+      "accessed": "2026-11-22",
+      "supports": "the fleet usage load shedder reserves a share of capacity for critical traffic, with 20% given as an example",
+      "status": "verified"
+    }
+  ]
+}

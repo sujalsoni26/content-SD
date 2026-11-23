@@ -1,0 +1,87 @@
+{
+  "slug": "design-search-autocomplete",
+  "title": "Design search autocomplete",
+  "moduleId": "hld",
+  "level": "intermediate",
+  "minutes": 14,
+  "problem": "Thirty thousand keystrokes a second each want ten ranked completions in under 100 ms, from a ranking that must also change when news breaks.",
+  "summary": "Autocomplete serves a precomputed top-ten per prefix from an in-memory index behind a CDN, while a stream job counts searches, detects trends and an hourly build publishes an immutable index snapshot; freshness, personalisation and typo tolerance are traded against the latency budget per keystroke.",
+  "catTip": "I do not hunt when you say 'tr'; I already have a card with the ten things people usually mean. The cards are rewritten every hour while I nap, and a sticker goes on the moment everyone suddenly asks about the same thing.",
+  "recall": {
+    "q": "A search box must answer every keystroke in under 100 ms with ten ranked suggestions that also reflect what started trending ten minutes ago. What is the key design decision, and what follows from it?",
+    "a": "Separate the keystroke from the computation: serve a precomputed top-ten per prefix from an in-memory hash index behind a CDN that caches short prefixes, and do all ranking offline, where a stream job counts distinct users per minute and detects trends, an hourly build recomputes decayed scores and publishes an immutable snapshot that nodes swap whole, and a small bounded trending delta is pushed every minute. Personal recents merge on the client so the edge cache stays shared; the blocklist is the one thing applied at serve time."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Ranking suggestions by querying a database or scanning a sorted list on every keystroke blows the ten-millisecond budget for short prefixes, and rebuilding rankings per request cannot keep up with thirty thousand lookups a second.",
+    "tradeoffs": "A precomputed index costs about 80 bytes for every prefix anyone types and only changes at the next build, a 60-second edge cache delays every ranking change, anything personalised cannot be cached at the edge, and typo tolerance costs a dozen extra lookups per keystroke.",
+    "explainSimply": "A librarian keeps a card for every opening phrase they hear, with the ten most-asked titles on it, and answers from the card instead of searching the shelves. The cards are rewritten each night from the day's requests, and a sticker goes on when everyone suddenly asks about the same thing.",
+    "hint": "Ask what work can be done before anyone types, what must be done the instant they type, and what must be done the moment someone reports a bad suggestion."
+  },
+  "meow": "Mew: ten cards for ten letters, all in RAM. Rebuild while I nap, sticker on when the humans stampede, and never a database between the paw and the answer.",
+  "quiz": [
+    {
+      "prompt": "A news story breaks and searches for one phrase explode. The index rebuilds hourly and one-to-three-character prefixes are cached at the CDN for five minutes. Which change gets the phrase into suggestions within a couple of minutes at the least cost?",
+      "options": [
+        "Rebuild the whole index every minute instead of every hour",
+        "Have the stream job push a bounded trending delta to the serving nodes each minute and purge only the CDN entries for the prefixes that delta touches",
+        "Disable CDN caching for suggestions so every keystroke reaches the origin",
+        "Lower the edge TTL to ten seconds for every prefix"
+      ],
+      "answer": 1,
+      "explanation": "A per-minute delta changes only the few prefixes that are actually trending and purges only those edge entries, so freshness arrives without touching the 26 GB index or the other 99% of cached prefixes. Rebuilding every minute is the strongest distractor: a billion heap inserts is a batch job that takes minutes to run and republish, and it gains nothing for the prefixes whose ranking did not change."
+    },
+    {
+      "prompt": "The precomputed top-ten for every prefix up to 20 characters has outgrown one machine's memory. Which change saves the most memory for the least latency cost?",
+      "options": [
+        "Shard the index by the first letter of the prefix across several nodes",
+        "Keep precomputed top-tens only for prefixes up to about eight characters, and answer longer prefixes by binary-searching a sorted array of queries and scanning the small matching range",
+        "Reduce every prefix's list from ten suggestions to five",
+        "Move the index to a database with an index on the prefix column"
+      ],
+      "answer": 1,
+      "explanation": "Most prefix entries are long prefixes that match only a handful of queries, so scanning their small range costs microseconds while dropping their precomputed lists removes most of the memory. Sharding by first letter is the strongest distractor: it spreads the memory without reducing it, and letters like s and a carry far more prefixes than x or q, so the shards are badly skewed."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: a phrase starts trending at 10:07, the index rebuilds hourly, and the edge caches short prefixes for 60 seconds. Decision and why?",
+      "a": "Keep the hourly build for the long tail and add a per-minute path for the head: the stream job counts distinct users per query in 1-minute windows, marks a query trending when the last ten minutes exceed the same window a week earlier by a ratio of five with at least 500 distinct users, and pushes a delta that may take at most two of a prefix's ten slots and expires in 30 minutes unless renewed; the CDN entries for the prefixes it touches are purged. Distinct users and the two-slot cap stop one script from taking over the list."
+    },
+    {
+      "q": "Problem: a prefix with a typo matches nothing, and a rare query that one person typed about their own health could surface for the next person. Decision and why?",
+      "a": "Fuzzy-match only when the exact prefix returns fewer than ten results and the prefix has at least three characters, allow one edit for three to five characters and two beyond, never fuzz the first character, and look up each candidate in the same in-memory map so a dozen lookups still fit the budget. Filter twice, at build time with a blocklist and a classifier and again at serve time because removals cannot wait for the next build, and suggest only queries seen from a minimum number of distinct users, which protects privacy and defeats bots with one rule."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    {
+      "title": "Nielsen Norman Group, \"Response Times: The 3 Important Limits\"",
+      "url": "https://www.nngroup.com/articles/response-times-3-important-limits/",
+      "accessed": "2026-11-22",
+      "supports": "about 0.1 second is the limit for a response to feel instantaneous, the basis of the 100 ms per-keystroke budget",
+      "status": "verified"
+    },
+    {
+      "title": "Google, The Keyword blog, \"How Google autocomplete works in Search\"",
+      "url": "https://blog.google/products/search/how-google-autocomplete-works-search/",
+      "accessed": "2026-11-22",
+      "supports": "predictions are drawn from real searches, showing common and trending ones relevant to the characters entered, location and previous searches; predictions that violate policies on sexually explicit, hateful, violent or dangerous content are removed, as are closely related predictions when one is reported",
+      "status": "verified"
+    },
+    {
+      "title": "Elasticsearch reference, \"Suggesters\", completion suggester",
+      "url": "https://www.elastic.co/guide/en/elasticsearch/reference/current/search-suggesters.html",
+      "accessed": "2026-11-22",
+      "supports": "the completion suggester uses data structures that are fast to look up but costly to build and stored in memory, with the index entirely heap resident; fuzzy suggestions default to fuzziness AUTO, prefix_length 1 and min_length 3; suggestions sharing the longest prefix with the input score higher; an optional weight sets the score",
+      "status": "verified"
+    },
+    {
+      "title": "Metwally, Agrawal and El Abbadi, \"Efficient Computation of Frequent and Top-k Elements in Data Streams\", ICDT 2005",
+      "url": "https://www.cs.ucsb.edu/sites/default/files/documents/2005-23.pdf",
+      "accessed": "2026-11-22",
+      "supports": "the Space-Saving algorithm named as the bounded-memory summary for approximate top-k per prefix when exact per-minute counting holds too much state",
+      "status": "reference"
+    }
+  ]
+}

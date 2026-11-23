@@ -1,0 +1,271 @@
+An [API gateway](/learn/api-gateway) fronts dozens of services and runs as many instances. Every request needs one more decision before it is forwarded: does this client, on this endpoint, in this tenant, still have budget? A **distributed rate limiter** makes that decision in about a millisecond using state every gateway instance shares. The algorithms are in [Rate limiting](/learn/rate-limiting) and are not the hard part. The hard part is a counter that lives across a network hop, is updated by many instances at once, and must never become the slowest or most fragile component in the request path.
+
+## Requirements
+
+The gateway's platform team owns the limiter; service teams own the rules.
+
+- **Functional:** rules per client (API key or user), per endpoint (a client on one route) and per tenant (an organisation's plan); on deny, 429 with `Retry-After` and rate-limit headers; short-window rates and long-window quotas; rule changes without redeploying the gateway; allowlists; a dry-run mode that logs what a new rule would deny.
+- **Out of scope:** billing-grade metering, load shedding (see [Backpressure and load shedding](/learn/backpressure)) and volumetric DDoS protection, which belongs at the network edge.
+- **Non-functional:** 1–2 ms per decision, because the gateway hop must stay almost free; 50k requests/s sustained and 150k at peak, because every request is a decision; accuracy within a few percent, because clients tolerate slightly approximate limits and nobody is invoiced from these counters; never take the API down, because a limiter that causes an outage has failed at its one job; correct under concurrency, because two instances must not both grant the last token.
+
+<Diagram name="rate-limit-vs-shedding" caption="The limiter answers a policy question at the front door. Whether a server is healthy enough to take the request is load shedding, a different mechanism inside each service." />
+
+## Estimation
+
+Assume 50k requests/s on average and 150k at peak; 10M distinct clients, each with a per-client rule and about five recently used per-endpoint rules; 10⁵ tenants; a bucket is two numbers, about 100 B in Redis with key and overhead; a round trip inside one data centre is about half a millisecond on the classic latency table (see [Latency, throughput and the numbers to know](/learn/latency)), crossing a continent about 300× that.
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Decisions/s | one per request | 50k average, 150k peak |
+| Redis operations/s, naive | 3 keys per request × 150k | 450k at peak: four or five nodes at \~100k ops/s |
+| Redis operations/s, one script per client plus one per tenant | 2 × 150k | 300k at peak, 100k average: three primaries |
+| Memory for counters | 10⁷ clients × 6 keys × 100 B | \~6 GB; tenants add 10 MB |
+| Latency budget | 0.5 ms round trip + tens of µs of script time | about 1 ms with headroom; cross-region would cost 50–150 ms |
+| Rule set | 10⁴ rules × 1 KB | 10 MB: copy it into every gateway instance |
+
+→ The dataset is tiny and the operation rate is huge: <mark>300k atomic read-modify-writes a second against 6 GB of state, each inside a 1 ms budget</mark>. That is neither a read-heavy nor a storage shape (see [Three system shapes](/learn/system-shapes)); it is a latency-and-contention problem, and it settles three things before any box is drawn: counters in memory, in the same region as the gateways, updated atomically on the server rather than read, changed and written back.
+
+## API
+
+| Endpoint | Request | Success | Errors |
+| --- | --- | --- | --- |
+| `check` (library call in the gateway, or `POST /v1/check` for a sidecar) | `{ "descriptors": [client, client+route, tenant], "cost": 1 }` | `{ "allowed": true, "limit", "remaining", "reset_after_ms" }` | `allowed: false` with `retry_after_ms`; store unavailable, which the gateway resolves (Deep dive 2) |
+| `PUT /v1/rules/{rule_id}` (control plane) | `{ "scope", "selector", "algorithm", "limit", "window_s", "burst", "mode" }` | 200 + `{ "version" }` | 400 · 403 not the owner · 409 stale version |
+| `GET /v1/usage/{tenant_id}` | – | 200 + `{ "used", "limit", "resets_at" }` | 404 |
+
+A denied client receives `429 Too Many Requests`, RFC 6585's status for too many requests in a given time, with `Retry-After` in seconds or an HTTP-date as RFC 9110 defines it (see [Timeouts and retries](/learn/timeouts-retries)). Every response carries the de-facto `X-RateLimit-Limit`, `-Remaining` and `-Reset` trio (GitHub's REST API adds `-used` and `-resource`); the IETF's `RateLimit-Policy` and `RateLimit` fields are still an Internet-Draft whose syntax keeps changing, so send them alongside the trio rather than instead of it.
+
+## Data model
+
+Counters live in Redis, one key per rule instance, each with a TTL so idle clients cost nothing:
+
+```text
+rl:{k_42}:client               HASH   tokens=811.6  ts=1763800000.512   TTL 2 × window
+rl:{k_42}:route:POST/orders    HASH   tokens=19.0   ts=1763800000.512   TTL 2 × window
+rl:tenant:t_7:min:29396668     STRING 4812   (sliding window counter: this minute)
+rl:tenant:t_7:min:29396667     STRING 9530   (and the previous minute)
+```
+
+The `{k_42}` braces are a Redis Cluster hash tag: only the text inside is hashed, so a client's keys land in one slot and one script can update them together. Rules live in PostgreSQL and reach gateways as a versioned snapshot:
+
+```sql
+CREATE TABLE rate_limit_rules (
+  rule_id     BIGSERIAL PRIMARY KEY,
+  scope       TEXT NOT NULL,        -- client, route or tenant
+  selector    JSONB NOT NULL,       -- e.g. {"plan": "free"} or {"route": "POST /orders"}
+  algorithm   TEXT NOT NULL,        -- token_bucket or sliding_window
+  limit_count INTEGER NOT NULL,
+  window_s    INTEGER NOT NULL,
+  burst       INTEGER,              -- bucket capacity; NULL = limit_count
+  mode        TEXT NOT NULL,        -- enforce or dry-run
+  owner_team  TEXT NOT NULL,
+  version     BIGINT NOT NULL,      -- bumped on every change
+  updated_at  TIMESTAMPTZ NOT NULL
+);
+```
+
+One row per rule; the snapshot is the table serialised, so gateways never query it on the request path. Resolution is most-specific-first: a client override beats the tenant's plan, which beats the route default.
+
+## High-level design
+
+Where can the counter live? Three answers, and the condition that decides:
+
+| Deployment | How | Latency | Accuracy | Choose when |
+| --- | --- | --- | --- | --- |
+| Local, in-process | Each instance keeps its own buckets, the limit divided by the instance count | Microseconds | Approximate: uneven balancing lets a client exceed or fall short | Coarse protection, or as the first layer and fallback of the others |
+| Gateway-centralised | Every gateway asks one limiter service over gRPC | An extra hop, then that service's store | Accurate | Many heterogeneous proxies need one policy; Envoy's global rate limit service works this way, its Go reference implementation backed by Redis |
+| Redis-backed shared counters | The limiter library in each gateway updates a shared Redis cluster with an atomic script | One in-region round trip, about 1 ms | Accurate to the script's atomicity | The gateway is the only caller and the budget rules out a second hop. **Chosen**, with a local layer in front |
+
+<Mermaid caption="Authentication produces the key; the limiter checks a local bucket, then the shared counter in the same region; rules arrive as a snapshot, never as a per-request lookup." chart={`flowchart LR
+    C["API clients"] --> AU
+    subgraph GW["One gateway instance, of many"]
+        AU["Authenticate: who is calling"] --> RL["Rate-limit filter: local bucket, then shared counter"]
+    end
+    RL -- "allowed" --> SVC["Backend services"]
+    RL -- "429 + Retry-After" --> C
+    RL --> RC["Redis Cluster, same region: shared counters, Lua script"]
+    RC -. "allowed, remaining, reset" .-> RL
+    CP["Rule control plane"] --> RDB[("PostgreSQL: rules")]
+    CP -. "versioned rule snapshot" .-> RL
+    RL -. "allow, deny and fail-open counts" .-> MET["Metrics"]
+`} />
+
+- **Authentication first**, because the limit key must be something the gateway established, never a header the client chose.
+- **The limiter filter** inside each instance, because the gateway is the one place that sees all of a client's traffic: cached rules, local bucket, shared-counter script, headers.
+- **Redis Cluster, one per region**, because the state must be in memory within half a millisecond of the gateways, and a Lua script gives the atomic read-modify-write (Deep dive 1).
+- **The control plane** in PostgreSQL with a versioned snapshot in every instance, because a rule lookup on the request path would double the round trips (Deep dive 3).
+- **Metrics** for every allow, deny and fail-open decision, because a limiter you cannot observe is one you cannot trust to be approximately right.
+
+<Mermaid caption="Two requests from one client. The script refills and spends in one step; the gateway translates the result into headers." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client k_42
+    participant G as Gateway
+    participant R as Redis shard
+    participant S as Order service
+    C->>G: POST /orders
+    Note over G: Token verified. Rule says 1,000 per minute, burst 200
+    Note over G: Local bucket still has tokens
+    G->>R: EVALSHA bucket script, keys for k_42, cost 1
+    Note over R: Refill by elapsed time, then spend, in one atomic script
+    R-->>G: allowed, 1 left, resets in 900 ms
+    G->>S: Forward
+    S-->>G: 201 Created
+    G-->>C: 201 + X-RateLimit-Remaining 1
+    C->>G: POST /orders, two requests later
+    G->>R: EVALSHA bucket script, cost 1
+    R-->>G: denied, wait 840 ms
+    G-->>C: 429 + Retry-After 1
+`} />
+
+## Storage and caching
+
+| Data | Store | Why |
+| --- | --- | --- |
+| Counters, 6 GB, 300k ops/s | Redis Cluster per region, every key with a TTL | Atomic in-memory operations in tens of microseconds; idle keys expire |
+| Rules, 10 MB | PostgreSQL as truth; a versioned snapshot in every gateway's memory | The request path never reads rules remotely |
+| Monthly quotas per tenant | Redis counter, flushed to PostgreSQL every minute | A monthly quota must survive a Redis restart; a per-second bucket need not |
+| Decision metrics | The metrics pipeline, not Redis | 150k decisions/s would double Redis load for data nobody reads live |
+
+Two caches sit on the request path. The **local bucket** caches the shared state and can only make the limiter stricter, so it is safe. The **deny cache** remembers a denied client's reset time and denies locally until then, so a client hammering a 429 costs no shared-counter traffic at all.
+
+<Callout type="analogy" title="Several doors, one guest list">
+
+A venue with four entrances and a capacity of 500 can give each doorman a count of 125 (local: fast, wrong whenever one door is busier) or have them radio a single tally before each admission (shared: correct, one radio call per guest). This design does both: each doorman turns away anyone obviously over the limit without touching the radio, and radios for everyone else. Where it fails: the radio call must take a millisecond, and doormen do not lose the tally when the radio dies.
+
+</Callout>
+
+## Scaling
+
+- **Gateways** are stateless and scale on CPU; the limiter adds one Redis call per request.
+- **Redis** scales by hash slot: 300k scripts/s at peak needs three primaries with replicas. Hash tags keep a client's keys together, so client and endpoint checks are one call and the tenant check a second, pipelined.
+- **Hot keys** are the real limit: a tenant doing 30k requests/s puts 30k scripts/s on one shard. Split its budget into N sub-keys (`t_7#0` to `t_7#3`) with a quarter of the limit each and pick one at random per request, trading a little accuracy for spread.
+- **Batching** trades accuracy for round trips: a gateway takes 20 tokens at once and spends them locally, so one call serves 20 requests and a client can exceed its limit by at most 20 tokens per instance per window.
+
+## Consistency and availability
+
+- **Per-second and per-minute limits:** approximate is acceptable, so choose availability: local fallback and fail-open when the store is unreachable (Deep dive 2). In CAP terms (see [CAP and PACELC](/learn/cap)) a partition between gateways and Redis is resolved by admitting requests.
+- **Monthly quotas on a paid plan:** stronger. One owning shard, a durable flush every minute, and the rule may fail closed, because over-admitting costs the provider while over-denying costs the customer; which matters more is a product decision, so it is a per-rule setting.
+- **Across regions:** eventual, with a stated bound: synchronised every 5 s, a client spreading traffic over two regions can briefly get twice its limit (see [Consistency: strong vs eventual](/learn/consistency)).
+
+## Failure and recovery
+
+| Failure | What users see | How it heals |
+| --- | --- | --- |
+| A Redis shard is down | Nothing: that shard's keys use the local bucket, and a fail-open counter climbs | Replica promotion in seconds (see [Database replication](/learn/replication)) |
+| Redis is slow (p99 of 20 ms) | Nothing, if the call times out at the budget and the circuit breaker opens (see [Circuit breaker](/learn/circuit-breaker)) | The breaker probes and closes when Redis is fast again |
+| Script cache lost after a restart or failover | Nothing | Redis returns `NOSCRIPT`; the gateway runs `SCRIPT LOAD` and retries once |
+| Gateway clocks disagree | Nothing: the script takes the time from Redis | No action needed |
+| A bad rule is pushed (limit 0 for everyone) | Mass 429s on the instances that received it | Dry-run and a 1% canary catch it first; otherwise roll the snapshot back by version |
+| Region failover | Clients land on empty counters and can get double their limit for one window | Accept it; the window is a minute |
+
+## Security
+
+- **Key on verified identity:** the API key or user id the gateway authenticated (see [Authentication](/learn/authentication)), never a header the client sent. Before authentication, on login and other anonymous routes, key on the client IP taken from the trusted load balancer rather than a forwarded-for header the client can forge (see [API security](/learn/api-security)).
+- **Key-cardinality attacks:** counters exist only for authenticated identities and for IPs with short TTLs, so a flood of random API keys produces 401s, not millions of Redis keys.
+- **Rule authority:** only a rule's owning team may change it (see [Authorisation](/learn/authorization)); every change is versioned and audited, because a rule can deny all traffic.
+- **Headers** reveal a client's own limit, never another tenant's usage. **Not a DDoS defence:** volumetric attacks saturate the gateway before the limiter runs; the CDN and network edge absorb them.
+
+## Observability
+
+- **SLIs:** decision latency p50 and p99 (target under 2 ms); share of decisions made in fail-open or local-only mode (alert above 0.1%); allow and deny counts per rule and tenant; Redis latency and errors per shard; per-shard operation rate, which shows hot keys as skew; snapshot version per instance, which shows stale rules; from load tests, admitted rate against configured limit (see [Metrics and monitoring](/learn/metrics-monitoring) and [SLIs, SLOs and error budgets](/learn/slos-error-budgets)).
+- **One trace:** request → authentication → limiter, with child spans for the local check and the Redis script → upstream. The limiter span is the millisecond you promised (see [Distributed tracing](/learn/tracing)).
+
+## Trade-offs and bottlenecks
+
+- **The next thing to break** is Redis operation rate, not memory: at 3× growth the per-request script is 1M ops/s and batching becomes mandatory everywhere except strict quotas. Hot tenant keys arrive before that.
+- **Not taken:** a central limiter service (a second hop inside a 1 ms budget); local-only limiting (approximate in a way that depends on the load balancer); a sliding log of timestamps (exact, but memory grows with each client's rate); Kafka-fed counters (the decision would lag the traffic).
+- **Accepted:** a Redis cluster on the hot path of every request, a few percent of inaccuracy, and an operations surface (propagation, canaries, rollbacks) most teams underestimate.
+
+## How it evolves
+
+**At 10×** (500k requests/s): 1.5M script calls a second at peak is too many even for a large cluster, so batching stops being optional: an instance takes tokens in batches sized to its share of traffic and refills a few times per window, keeping the per-request round trip only for strict quotas.
+
+**At 100×** (5M requests/s): shared counters give way to quota assignment. A central service hands each instance a share of every active client's limit for the next interval, instances enforce locally and report usage, and the service rebalances shares toward the traffic. Accuracy is bounded by the reporting interval rather than a round trip; Envoy's quota-based global rate limiting has this shape. Limits for anonymous traffic move outward to the CDN edge.
+
+## Deep dive 1: atomicity and race conditions in the counter
+
+Two gateway instances read `tokens = 1`, both admit, both write `tokens = 0`: two requests spent one token. At 300k operations a second across dozens of instances this is routine. Anything that reads a value, computes and writes it back from the client side has this race.
+
+A fixed-window counter avoids it because `INCR` is atomic on the server. Even that has a hole the Redis documentation points out: `INCR` followed by a separate `EXPIRE` means a client that dies between the two leaves a key that never expires, and the documented fix is a transaction or a Lua script. A token bucket needs more: read tokens and timestamp, refill by elapsed time, compare, spend, write back. That is a read-modify-write with a branch in the middle, which `MULTI`/`EXEC` cannot express, so it runs as a script:
+
+```text
+-- Lua, loaded once with SCRIPT LOAD and run with EVALSHA
+-- KEYS[1] = bucket hash; ARGV = refill rate per second, capacity, cost
+local t = redis.call('TIME')
+local now = tonumber(t[1]) + tonumber(t[2]) / 1000000
+local rate, cap, cost = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3])
+local b = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(b[1]) or cap
+local ts = tonumber(b[2]) or now
+tokens = math.min(cap, tokens + (now - ts) * rate)
+local allowed = 0
+if tokens >= cost then tokens = tokens - cost; allowed = 1 end
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('EXPIRE', KEYS[1], math.ceil(cap / rate) + 1)
+local wait_ms = 0
+if allowed == 0 then wait_ms = math.ceil((cost - tokens) / rate * 1000) end
+return { allowed, math.floor(tokens), wait_ms }
+```
+
+Redis guarantees a script's atomic execution: while it runs, all other server activity is blocked, so its effects either all happened or none did. The guarantee is also the constraint: a script that takes a millisecond blocks every other key on the shard for a millisecond, and at 100k scripts a second per shard the budget is about 10 µs each, which a handful of hash commands fits and a loop does not. Three more documented facts matter. Time comes from `TIME` inside the script, so gateway clocks never matter; since Redis 5 scripts are replicated by their effects rather than re-executed, so non-deterministic commands are allowed in scripts that write (Redis 7 removed the old mode). The script cache is volatile: a restart or failover empties it, `EVALSHA` returns `NOSCRIPT`, and the client must `SCRIPT LOAD` and retry. And in Redis Cluster every key a script touches must be passed in `KEYS` and hash to one slot, which the `{k_42}` hash tag arranges; the tenant key lives elsewhere and is a second, pipelined call.
+
+The sliding window counter is the other algorithm worth carrying: two counters per key, this window and the previous, and a rolling estimate of `previous × (fraction of the previous window still inside the last minute) + current`. Cloudflare has described running this approximation at its edge: on 400 million requests from 270,000 sources, 0.003% of requests were wrongly allowed or limited, with no source blocked below its threshold. Two integers per client is hard to beat.
+
+<Interactive name="token-bucket" />
+
+<Callout type="warning" title="Atomic per key, not per request">
+
+The script makes one key's update atomic. A request checked against the client key, then the route key, then the tenant key can pass the first two and fail the third after their tokens are spent. Accept the small over-count (the usual answer), or evaluate the strictest key first and spend on the others only if it passes.
+
+</Callout>
+
+## Deep dive 2: when Redis is slow or down
+
+The decision is made before the incident, as a per-rule setting, not by whoever is on call.
+
+| | Fail open | Fail closed |
+| --- | --- | --- |
+| On store error or timeout | Admit and count as fail-open | Deny with 429 or 503 |
+| Protects | The API's availability | The quota and the backends |
+| Who pays | The platform, with unmetered traffic during the outage | Every client, with an outage caused by the limiter |
+| Choose for | Ordinary per-client and per-endpoint rates | Hard paid quotas; login and other brute-force targets; endpoints whose overload is worse than a 429 |
+
+Stripe's published guidance is to fail open: a bug in the limiter or Redis going down should not affect requests. Envoy's HTTP rate limit filter does the same by default, letting unchecked requests through and counting them unless `failure_mode_deny` is set. This design follows both, with three layers so that "open" does not mean "unlimited".
+
+<Steps>
+
+1. **Time out at the budget.** The Redis call gets 3 ms; past that the request is decided locally and a `fail_open` counter increments. Slow is treated like down, because a limiter that waits 50 ms for an accurate answer has already broken its promise.
+2. **Open a circuit breaker.** After a run of timeouts the gateway stops calling Redis for ten seconds and decides everything locally, so it stops paying the 3 ms on every request. Half-open probes bring it back.
+3. **Fall back to the local bucket.** Each instance already runs a bucket per client with the global limit divided by the instance count: approximate, wrong in the generous direction when balancing is uneven, but a cap on the damage one client can do.
+
+</Steps>
+
+Recovery has its own failure modes. The script cache may be empty after a failover, so the client library must handle `NOSCRIPT` without a 500. Counters are gone, so every client starts a fresh window: harmless for per-minute limits, while monthly quotas are restored from the last durable flush before the rule is re-enabled. And the clients that were told `Retry-After` all come back at once; the local bucket absorbs that surge while the shared one refills.
+
+<Callout type="interview" title="Say the three numbers and the default">
+
+"One in-region round trip inside a 1 ms budget, a Lua script so refill-and-spend is atomic, a local bucket in front as the first layer and the fallback, fail open with an alert for ordinary limits and fail closed only for hard quotas." Naming what happens when Redis is down, before being asked, is what interviewers remember.
+
+</Callout>
+
+## Deep dive 3: distributing rules and keeping counters near the gateways
+
+**Rules.** The control plane writes rules to PostgreSQL, bumps a version and publishes a snapshot (a compacted topic or a config service both work) that every gateway polls every 10 to 30 s or receives by push; the hot path reads rules from local memory only. Propagation time becomes an SLO (under a minute), proved by the version each instance reports. A new rule starts in dry-run mode, then reaches 1% of instances before all of them, because a limit is a production change with the blast radius of a deploy. Matchers are precompiled when the snapshot loads, so evaluation is a map lookup, not a scan of 10⁴ rules.
+
+**Counters stay in the region.** A cross-region round trip costs 50–150 ms, so counters for traffic entering a region live in that region's cluster; Envoy's documentation likewise recommends local rate limiting alongside global limiting to reduce load on the shared service. The open question is what a *global* limit means when a client sends traffic to two regions:
+
+| Approach | How | Cost |
+| --- | --- | --- |
+| Split the budget | Each region gets a fixed share, say 60/30/10 by observed traffic, rebalanced hourly | Simple; a client that moves its traffic sees a smaller limit until the rebalance |
+| Enforce locally, sum asynchronously | Each region enforces the full limit and publishes usage every few seconds; a region that sees the global sum exceeded tightens | Accurate within the sync interval; a client can exceed its limit by (regions − 1) × limit for one interval |
+| Route each client to one region | The home region is authoritative; others forward its counter updates there | Accurate; brings the cross-region hop back for roaming clients, so only for strict quotas |
+
+Choose the split for ordinary plans, asynchronous sums when accuracy matters and the window is long, and the home-region design only for strict quotas (see [Multi-region deployment](/learn/multi-region)).
+
+**Multi-tenant quotas** (see [Multi-tenant architecture](/learn/multi-tenancy)) add one rule: a tenant's quota is shared by all its clients, so the tenant key is the hottest key in the system and the first to be split into sub-keys. A tenant's 429 says it used its own quota, not that the platform is out of capacity, the distinction the [Rate limiting](/learn/rate-limiting) lesson draws between a limit and a shed.

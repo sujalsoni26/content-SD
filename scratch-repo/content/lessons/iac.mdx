@@ -1,0 +1,91 @@
+**Infrastructure as Code** (IaC) means the machines, networks, queues and permissions your system runs on are described in version-controlled files and created by a tool from that description, never by clicking through a console: the discipline that made [container images](/learn/containers) repeatable, applied to everything around them.
+
+The cost of not doing it arrives at the worst time: a hand-built environment cannot be rebuilt, staging and production differ in ways nobody can list, and standing the stack up in a second region for [disaster recovery](/learn/disaster-recovery) takes days; AWS's recovery guidance says that without IaC a recovery-region restore is likely to exceed the recovery time objective.
+
+## Declarative or imperative
+
+<Comparison>
+
+<ComparisonItem title="Declarative">
+
+You describe the end state ("one queue named orders, one bucket, this role may read it") and the tool works out what to create, change or delete; running it twice changes nothing. Terraform, CloudFormation templates and Kubernetes manifests all work this way.
+
+</ComparisonItem>
+
+<ComparisonItem title="Imperative">
+
+You write the steps ("create the queue, then the bucket, then attach the policy"). Order matters, a failure halfway leaves a half-built state, and running it twice creates duplicates. Shell scripts calling cloud CLIs are the usual form.
+
+</ComparisonItem>
+
+</Comparison>
+
+The common tools differ in front end, not model. **Terraform** has its own configuration language and reaches every major cloud through providers. **AWS CloudFormation** takes JSON or YAML templates, manages them as *stacks* and previews an update as a *change set* before you execute it. **Pulumi** takes TypeScript, Python, Go, Java or YAML; the program still produces a desired state that `pulumi preview` diffs and `pulumi up` applies.
+
+## Plan, apply, state and drift
+
+<Steps>
+
+1. Edit the configuration and open a pull request.
+2. `terraform plan` compares the configuration with the refreshed state and prints the proposed creates, updates and destroys. Nothing changes yet.
+3. A reviewer reads the plan; "destroy 1 database" is the line everyone looks for.
+4. `terraform apply` executes the saved plan and records the result in the **state**.
+
+</Steps>
+
+Why keep a state file? The tool must remember which real resource each block of configuration corresponds to (not everything can be found by name or tag), which resources depend on which, and what every attribute looked like last time. A local file also forces every engineer to fetch the latest copy and never run concurrently, so teams keep **remote state** in a backend such as Amazon S3 or HCP Terraform with **state locking**: any operation that could write state takes a lock first, so two applies cannot corrupt it. The S3 backend has had native lock files since Terraform 1.10 (`use_lockfile = true`); the older DynamoDB-table lock is deprecated.
+
+**Drift** is reality changing without the tool: someone enlarges an instance in the console during an incident and the state still says small. `terraform plan -refresh-only` shows what changed outside Terraform without proposing to undo it, `apply -refresh-only` records it, and a plain `plan` then presents the choice: adopt the hotfix into the configuration or let the next apply revert it. CloudFormation's drift detection makes the same comparison, marking each resource in sync, modified or deleted; it never fixes anything itself.
+
+<Callout type="warning" title="State and plan files are sensitive">
+
+State holds every attribute of every resource, including passwords and keys that providers return, and a saved plan file can hold the same values in clear text. Treat the state bucket like a secrets store: encrypted, access-controlled, versioned so that a bad write can be rolled back, and never committed to Git.
+
+</Callout>
+
+## Modules and environments
+
+A **module** is a set of resources managed together, with inputs and outputs: "a service", meaning its queue, role, alarms and DNS record. Root configurations call modules, which may call modules; shared ones live in a registry. Environments (dev, staging, production) are the *same modules* with different variables, each with its own state and credentials; Terraform's guidance is that workspaces are not for deployments needing separate credentials and access controls, so use one root configuration, ideally one cloud account, per environment.
+
+## The pipeline: build, test, deploy
+
+<Mermaid caption="One artefact, built once and identified by digest, promoted through environments; infrastructure changes travel as reviewed plans alongside it." chart={`flowchart LR
+    C["Commit"] --> B["Build image, run unit tests"]
+    B --> P["Push image by digest"]
+    P --> PL["terraform plan posted to the pull request"]
+    PL --> RV["Review and approve"]
+    RV --> ST["Apply and deploy to staging"]
+    ST --> IT["Integration and smoke tests"]
+    IT --> PR["Apply and deploy to production"]
+    PR --> OB["Observe: metrics, alerts, rollback if needed"]
+`} />
+
+**Continuous integration** merges every change often and builds and tests it automatically; **continuous delivery** keeps every passing change deployable at the push of a button; continuous deployment removes the button. The image and the infrastructure plan travel through the same stages, and nothing is rebuilt between them: the digest that passed in staging is the digest that reaches production.
+
+## GitOps: the repository is the desired state
+
+GitOps turns the last step inside out: instead of CI pushing into a cluster with powerful credentials, an agent inside the cluster *pulls* the desired state from Git and continuously reconciles the cluster to it (the OpenGitOps principles: declarative, versioned and immutable, pulled automatically, continuously reconciled). **Argo CD** polls the repository (every three minutes by default, or on a webhook), marks objects that differ from the manifests OutOfSync and can sync them automatically; *self-heal* additionally reverts changes made directly to the cluster and *prune* deletes resources removed from Git, both off by default. **Flux** does the same from Git, OCI registry or Helm sources. During an incident you therefore change the repository, not the cluster; the agent will undo anything else.
+
+<mark>If it was not applied from the repository, it does not exist tomorrow.</mark>
+
+## What gets hard
+
+Secrets cannot sit in Git in plain text, so GitOps needs sealed secrets or an external store ([Secrets management](/learn/secrets-management)); a pipeline with broad cloud permissions is a high-value target. Two engineers applying without a lock, a lost state file, or an `apply` aimed at the wrong environment are the classic self-inflicted outages; the fix is one pipeline, one state per environment, locks on, humans reading plans.
+
+<Callout type="analogy" title="Blueprints, not verbal instructions">
+
+A building from blueprints can be rebuilt identically anywhere; a building from a foreman's verbal instructions cannot. Drift is the tenant who knocks through a wall: the blueprint is now wrong, and the inspector (drift detection) can tell you so but will not rebuild the wall. GitOps is the rule that the blueprint is the only thing anyone is allowed to change.
+
+</Callout>
+
+<Callout type="interview" title="Say how a change travels">
+
+"Every commit builds one image by digest; infrastructure lives in Terraform modules with one remote, locked state per environment; a plan is reviewed in the pull request; staging and production are applied by the pipeline or synced by Argo CD from the repository, never by hand." Four clauses cover repeatability, review, isolation and rollback.
+
+</Callout>
+
+<DeepDive title="Go deeper: what a missing lock costs">
+
+Two applies start a second apart with no lock. Both read the same state, both create the subnet the configuration asks for, and both write their state back; the second write overwrites the first, so one subnet is now unknown to Terraform, an orphan that costs money and that no future plan will mention. Locking makes the second run wait or fail instead. `-lock=false` exists and the documentation recommends against it; `force-unlock` exists for a crashed run and should be used only after confirming that no other run is alive.
+
+</DeepDive>

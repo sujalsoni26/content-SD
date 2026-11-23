@@ -1,0 +1,87 @@
+{
+  "slug": "distributed-sql",
+  "title": "Distributed SQL and NewSQL",
+  "moduleId": "internals",
+  "level": "advanced",
+  "minutes": 9,
+  "problem": "One PostgreSQL primary has run out of write capacity and disk, and sharding it by hand would break the transactions and joins the product depends on.",
+  "summary": "Distributed SQL databases such as Spanner, CockroachDB and TiDB split tables into key ranges, replicate each range with Raft or Paxos, run two-phase commit across ranges and order commits with a clock service, so one SQL endpoint survives node and region loss.",
+  "catTip": "I used to nap on one big database server. Now the humans spread my bed across three towns and only count me asleep once two of the three beds agree. Very safe. Also slower to lie down, every single time.",
+  "recall": {
+    "q": "What does a distributed SQL database do that sharded PostgreSQL cannot, and what does every write pay for it?",
+    "a": "It splits tables into ranges it moves itself, replicates each range with Raft or Paxos, and runs two-phase commit across ranges so cross-shard transactions are ordinary. Every write pays at least one consensus round trip, which across regions is the round trip to the nearest other region."
+  },
+  "archNodes": ["db"],
+  "guide": {
+    "breaks": "A single primary caps write throughput and loses acknowledged writes on failover, while hand-sharding behind a router leaves cross-shard transactions, unique constraints and joins to the application.",
+    "tradeoffs": "Every write waits for a consensus majority, so latency rises with the distance between replicas, sequential keys create hot ranges, and the cluster needs far more operational care than one server.",
+    "explainSimply": "Imagine a ledger copied to three towns, where a sale only counts once two of the three clerks have initialled it and a town-hall clock stamps the order of entries. Nothing is lost if one town burns down, but every sale takes a little longer. That is distributed SQL.",
+    "hint": "Think about what replaces the primary, and what every write has to wait for."
+  },
+  "meow": "Three beds in three towns, meow. I am only officially asleep when two agree. Safe nap, slow nap.",
+  "quiz": [
+    {
+      "prompt": "A team runs CockroachDB with replicas in Mumbai, Singapore and Frankfurt so that the database survives a region failure. What happens to write latency compared with a single-region cluster?",
+      "options": [
+        "Nothing changes, because Raft commits on the leader and replicates to the other regions asynchronously",
+        "Every write waits at least the round trip to the nearest other region, because a majority of replicas must acknowledge it",
+        "Only transactions that touch several ranges slow down; a single-row write stays local to its leader's region",
+        "Writes get faster, because three regions share the write load"
+      ],
+      "answer": 1,
+      "explanation": "A write commits when a majority of its range's replicas have it, and with one replica per region that majority always includes another region. The third option is the tempting error: even a single-row write is a Raft commit that needs that majority, so there is no local fast path."
+    },
+    {
+      "prompt": "Which statement correctly distinguishes distributed SQL from sharded PostgreSQL behind a router such as Citus?",
+      "options": [
+        "Distributed SQL cannot run joins, because rows live on different machines",
+        "Sharded PostgreSQL replicates each shard with consensus, while distributed SQL uses a primary and replicas",
+        "Distributed SQL splits and moves key ranges itself, replicates each range by consensus and treats cross-range transactions as ordinary",
+        "Sharded PostgreSQL cannot scale writes beyond one machine"
+      ],
+      "answer": 2,
+      "explanation": "The difference is where the shard edge lives: distributed SQL puts ranges, consensus and cross-range two-phase commit inside the database. The last option is the strongest distractor because sharding does scale writes; what it cannot do cheaply is a transaction or a constraint that crosses shards."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Your orders table on CockroachDB uses an auto-increment primary key and inserts slow down under load. Why, and what would you change?",
+      "a": "Sequential keys send every insert to the last range, so one leader is the whole cluster's bottleneck. Load-based splitting cannot split a single hot key, so use a random or hash-prefixed key to spread inserts across ranges."
+    },
+    {
+      "q": "What is Spanner's commit wait, and why does CockroachDB not need one?",
+      "a": "Spanner waits out TrueTime's uncertainty interval before acknowledging a commit so that its timestamp is externally consistent. CockroachDB has no bounded clock; instead a read that meets a write inside its uncertainty window restarts at a later timestamp, paying only on conflict."
+    }
+  ],
+  "glossary": [
+    { "term": "TSO", "full": "Timestamp Oracle", "note": "A central service that hands out monotonically increasing timestamps to order transactions; in TiDB it is provided by the Placement Driver." }
+  ],
+  "sources": [
+    { "title": "Spanner documentation, Replication", "url": "https://docs.cloud.google.com/spanner/docs/replication", "accessed": "2026-11-22", "supports": "splits replicated with Paxos; witness replicas vote but do not serve reads; stale reads served by the closest caught-up replica at 15 seconds or more of staleness", "status": "verified" },
+    { "title": "Spanner documentation, Life of Spanner reads and writes", "url": "https://docs.cloud.google.com/spanner/docs/whitepapers/life-of-reads-and-writes", "accessed": "2026-11-22", "supports": "two-phase commit across splits with one split's leader as coordinator; commit wait before the outcome is returned", "status": "verified" },
+    { "title": "Spanner documentation, TrueTime and external consistency (Spanner Omni)", "url": "https://docs.cloud.google.com/spanner-omni/true-time-external-consistency", "accessed": "2026-11-22", "supports": "TrueTime represents time as an interval from earliest to latest; higher uncertainty lengthens commit wait", "status": "verified" },
+    { "title": "Spanner documentation, Reads", "url": "https://docs.cloud.google.com/spanner/docs/reads", "accessed": "2026-11-22", "supports": "strong reads are the default; bounded-staleness and exact-staleness reads; 15 seconds suggested as a reasonable staleness", "status": "verified" },
+    { "title": "Spanner documentation, Instance configurations", "url": "https://docs.cloud.google.com/spanner/docs/instance-configurations", "accessed": "2026-11-22", "supports": "regional configurations hold three read-write replicas in three zones; multi-region configurations add replicas and a witness in other regions", "status": "verified" },
+    { "title": "Spanner documentation, Transactions", "url": "https://docs.cloud.google.com/spanner/docs/transactions", "accessed": "2026-11-22", "supports": "serializable isolation is Spanner's default", "status": "verified" },
+    { "title": "Corbett et al., \"Spanner: Google's Globally-Distributed Database\", OSDI 2012, sections 3 and 4", "url": "https://static.googleusercontent.com/media/research.google.com/en//archive/spanner-osdi2012.pdf", "accessed": "2026-11-22", "supports": "TrueTime built on GPS and atomic clocks; uncertainty a sawtooth of about 1 to 7 ms, 4 ms on average; commit wait", "status": "reference" },
+    { "title": "CockroachDB documentation, Replication Controls (configure replication zones)", "url": "https://docs.cockroachlabs.com/docs/stable/configure-replication-zones", "accessed": "2026-11-22", "supports": "range_max_bytes default 512 MiB; num_replicas default 3", "status": "verified" },
+    { "title": "CockroachDB documentation, Distribution Layer", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/distribution-layer", "accessed": "2026-11-22", "supports": "a range that reaches its size limit splits into two, each its own Raft group", "status": "verified" },
+    { "title": "CockroachDB documentation, Transaction Layer", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/transaction-layer", "accessed": "2026-11-22", "supports": "write intents and the transaction record; parallel commits reduce commit from two rounds of consensus to one; hybrid logical clocks; a node crashes when its offset exceeds 80% of the maximum; uncertainty-window read restarts", "status": "verified" },
+    { "title": "CockroachDB documentation, cockroach start (--max-offset)", "url": "https://docs.cockroachlabs.com/docs/stable/cockroach-start", "accessed": "2026-11-22", "supports": "maximum allowed clock offset defaults to 500ms; servers crash if observed offsets exceed it", "status": "verified" },
+    { "title": "CockroachDB documentation, Transactions", "url": "https://docs.cockroachlabs.com/docs/stable/transactions", "accessed": "2026-11-22", "supports": "SERIALIZABLE is the default isolation level", "status": "verified" },
+    { "title": "CockroachDB documentation, Follower Reads", "url": "https://docs.cockroachlabs.com/docs/stable/follower-reads", "accessed": "2026-11-22", "supports": "follower_read_timestamp() reads data at least 4.2 seconds in the past from the nearest replica", "status": "verified" },
+    { "title": "CockroachDB documentation, Multi-region survival goals", "url": "https://docs.cockroachlabs.com/docs/stable/multiregion-survival-goals", "accessed": "2026-11-22", "supports": "surviving a region failure needs at least three regions and raises write latency by at least the round trip to the nearest region", "status": "verified" },
+    { "title": "CockroachDB documentation, Global tables", "url": "https://docs.cockroachlabs.com/docs/stable/global-tables", "accessed": "2026-11-22", "supports": "global tables serve consistent local reads in every region at the cost of higher write latency from a commit-wait step", "status": "verified" },
+    { "title": "CockroachDB documentation, Load-based splitting", "url": "https://docs.cockroachlabs.com/docs/stable/load-based-splitting", "accessed": "2026-11-22", "supports": "load-based splitting is on by default with a threshold of 2,500 queries per second", "status": "verified" },
+    { "title": "TiDB documentation, TiKV configuration file (region-split-size)", "url": "https://docs.pingcap.com/tidb/stable/tikv-configuration-file", "accessed": "2026-11-22", "supports": "Region split size defaults to 256 MiB; before v8.4.0 the default was 96 MiB", "status": "verified" },
+    { "title": "TiDB documentation, PD configuration file (max-replicas)", "url": "https://docs.pingcap.com/tidb/stable/pd-configuration-file", "accessed": "2026-11-22", "supports": "three replicas per Region by default", "status": "verified" },
+    { "title": "TiDB documentation, TSO", "url": "https://docs.pingcap.com/tidb/stable/tso", "accessed": "2026-11-22", "supports": "PD provides the timestamp oracle whose timestamps always move forward", "status": "verified" },
+    { "title": "TiDB documentation, TiDB FAQ (transaction model)", "url": "https://docs.pingcap.com/tidb/stable/tidb-faq", "accessed": "2026-11-22", "supports": "TiDB's transaction model is a Percolator-style two-phase commit with PD as the timestamp allocator", "status": "verified" },
+    { "title": "TiDB documentation, Pessimistic transaction mode", "url": "https://docs.pingcap.com/tidb/stable/pessimistic-transaction", "accessed": "2026-11-22", "supports": "clusters created from v3.0.8 use pessimistic transactions by default", "status": "verified" },
+    { "title": "TiDB documentation, Follower Read", "url": "https://docs.pingcap.com/tidb/stable/follower-read", "accessed": "2026-11-22", "supports": "the tidb_replica_read variable sends reads to follower replicas", "status": "verified" },
+    { "title": "TiDB documentation, Transaction isolation levels", "url": "https://docs.pingcap.com/tidb/stable/transaction-isolation-levels", "accessed": "2026-11-22", "supports": "TiDB implements snapshot isolation and advertises it as REPEATABLE READ for MySQL compatibility", "status": "verified" },
+    { "title": "Vitess documentation, What is Vitess and History", "url": "https://vitess.io/docs/overview/whatisvitess/", "accessed": "2026-11-22", "supports": "Vitess was created at YouTube in 2010; VTGate is the proxy that routes MySQL-protocol queries to shards", "status": "verified" },
+    { "title": "Citus documentation, Concepts", "url": "https://docs.citusdata.com/en/stable/get_started/concepts.html", "accessed": "2026-11-22", "supports": "Citus is a PostgreSQL extension with a coordinator and workers; tables are distributed by a distribution column", "status": "verified" },
+    { "title": "Pavlo and Aslett, \"What's Really New with NewSQL?\", SIGMOD Record 45(2), 2016", "url": "https://sigmodrecord.org/publications/sigmodRecord/1606/pdfs/07_forum_Pavlo.pdf", "accessed": "2026-11-22", "supports": "the term NewSQL was first used by Aslett in a 2011 analyst report", "status": "verified" }
+  ]
+}

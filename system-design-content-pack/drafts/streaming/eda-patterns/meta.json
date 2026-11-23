@@ -1,0 +1,70 @@
+{
+  "slug": "eda-patterns",
+  "title": "Event-driven architecture in practice",
+  "moduleId": "streaming",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Twelve services react to each other's events, nobody can say what happens after OrderPlaced, and a renamed field broke three consumers that were still reading last week's records.",
+  "summary": "Design events as past-tense facts with an owner, choose thin notifications or fat state-carrying events deliberately, evolve schemas through a registry with compatibility rules, and know when a choreographed flow needs an orchestrator and how to observe it.",
+  "catTip": "I do not command the humans; I publish MeowHeard and let them react. A fat meow tells them what I want, a thin meow makes them come and look. Either way, the shape of a meow must never change without warning.",
+  "recall": {
+    "q": "Five teams consume OrderPlaced and you want to rename customer_id to buyer_id. What does a registry in BACKWARD mode let through, and what should you do instead?",
+    "a": "A rename is a delete plus an add; BACKWARD allows deleting fields and adding optional ones, so the registry accepts it, but old records still carry customer_id and new-schema consumers read an empty buyer_id. Add buyer_id as optional, populate both for a while, and drop customer_id only after every consumer has moved."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without agreed event shapes and compatibility rules, consumers break on old records, services issue commands disguised as events and wait for reactions nobody owes them, and the workflow exists only in a running system that nobody can read.",
+    "tradeoffs": "Fat events trade copies and eventual consistency for consumer autonomy, strict compatibility trades flexibility for safe replay, and an orchestrator trades the loose coupling of choreography for a visible workflow and one more component that can bottleneck.",
+    "explainSimply": "An event is a notice pinned to the company board: it says what happened, anyone may read it, and each department decides what to do. A command is a memo to one person asking for something. Keep old notices readable, and when the flow matters, appoint someone to run it.",
+    "hint": "Is the message a fact or a request, who must still read last week's copy of it, and who owns the flow when a step stalls?"
+  },
+  "meow": "MeowHeard is a fact. FeedMe is a command. Purr-blishing FeedMe as an event and sulking when nobody comes is passive-aggressive.",
+  "quiz": [
+    {
+      "prompt": "A payment service publishes PaymentCaptured and then waits for the order service to react by marking the order paid; if that does not happen within a minute it raises an alert. What is wrong with the design?",
+      "options": [
+        "Nothing; this is standard event-carried state transfer",
+        "The event should be fat so the order service does not need to call back",
+        "The payment service is sending a command disguised as an event: it depends on one consumer acting, so it should send a command (or let an orchestrator own the step) and handle failure explicitly",
+        "The event is in the past tense but should be named MarkOrderPaid"
+      ],
+      "answer": 2,
+      "explanation": "An event announces a fact and leaves reactions to consumers; a producer that depends on one consumer's reaction has hidden a command inside an event. Renaming it does not fix the intent, and making it fat addresses callbacks, not the dependency."
+    },
+    {
+      "prompt": "A schema registry subject uses the default compatibility mode. A producer team adds a required field with no default to OrderPlaced. What happens, and why is that mode the default?",
+      "options": [
+        "The registry accepts it; new fields are always backward compatible",
+        "The registry rejects it, because consumers on the new schema could not read old records that lack the field; BACKWARD is the default so a consumer can rewind to the start of a topic",
+        "The registry accepts it, but consumers must be upgraded before producers",
+        "The registry rejects it because FORWARD is the default and producers must upgrade first"
+      ],
+      "answer": 1,
+      "explanation": "BACKWARD means new-schema consumers must be able to read data written with the previous schema, so a new field needs a default; the mode is the default precisely so a consumer can replay a topic from the beginning. FORWARD is the mode in which producers upgrade first."
+    }
+  ],
+  "cards": [
+    {
+      "q": "For the Notifications service that emails an order confirmation, compare a thin OrderPlaced event (order id only) with a fat one carrying items and address.",
+      "a": "Thin: Notifications calls the order service back, so it depends on that service being up and adds load to it, but the event is small and hard to get wrong. Fat: Notifications works from its own copy with no callback (resilience, lower latency, less load on the source), at the cost of copies that are only eventually consistent and personal data sent to every subscriber."
+    },
+    {
+      "q": "Name three pitfalls of pure choreography and the signal that it is time to add an orchestrator.",
+      "a": "Hidden coupling between services that rely on each other's reactions; cycles or event storms when reactions trigger reactions; and no owner of a flow that stalls half-way, because no component sees the whole operation. Add an orchestrator (a saga) when steps are ordered, need compensation on failure, or carry a deadline someone is accountable for."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Martin Fowler, What do you mean by Event-Driven? (7 February 2017)", "url": "https://martinfowler.com/articles/201701-event-driven.html", "accessed": "2026-11-22", "supports": "Event Notification and Event-Carried State Transfer; thin events with a call back for details; gains of resilience, reduced latency and reduced load and the cost of copies; the passive-aggressive command; losing sight of the larger-scale flow", "status": "verified" },
+    { "title": "Confluent Developer, Event Streaming Patterns: Command", "url": "https://developer.confluent.io/patterns/event/command/", "accessed": "2026-11-22", "supports": "events are facts and commands invoke an action; commands are tightly coupled to an audience of one", "status": "verified" },
+    { "title": "Confluent Developer, Event Streaming Patterns: Event", "url": "https://developer.confluent.io/patterns/event/event/", "accessed": "2026-11-22", "supports": "an event is an immutable fact about something that happened; CloudEvents as a standard envelope", "status": "verified" },
+    { "title": ".NET Microservices: Architecture for Containerized .NET Applications, Domain events: design and implementation (Microsoft Learn)", "url": "https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/domain-events-design-implementation", "accessed": "2026-11-22", "supports": "an event is something that happened in the past, named with a past-tense verb and immutable", "status": "secondary" },
+    { "title": "CloudEvents specification v1.0.2 (CNCF)", "url": "https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md", "accessed": "2026-11-22", "supports": "required attributes id, source, specversion, type; optional time and subject; source plus id must be unique per event", "status": "verified" },
+    { "title": "Confluent Platform documentation, Schema Registry: Schema Evolution and Compatibility", "url": "https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html", "accessed": "2026-11-22", "supports": "BACKWARD, FORWARD, FULL and NONE and their allowed changes and upgrade order; BACKWARD is the default so consumers can be rewound to the beginning of a topic; transitive variants check all previous versions; compatibility set globally or per subject; Avro, Protobuf and JSON Schema", "status": "verified" },
+    { "title": "Confluent Platform documentation, Schema Registry: Formats, Serializers, and Deserializers (Wire format)", "url": "https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html", "accessed": "2026-11-22", "supports": "records are prefixed with a version byte (0 for the schema-id format) and a 4-byte schema id; the deserializer fetches the schema by id", "status": "verified" },
+    { "title": "Microsoft Azure Architecture Center, Choreography pattern", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/choreography", "accessed": "2026-11-22", "supports": "no single component has a complete view of an in-flight operation; sequential steps complicate choreography; feedback loops and event storms; schema registry and idempotent consumers as mitigations; when an orchestrator is preferable", "status": "verified" },
+    { "title": "Chris Richardson, Pattern: Saga (microservices.io)", "url": "https://microservices.io/patterns/data/saga.html", "accessed": "2026-11-22", "supports": "choreography (each local transaction publishes events that trigger the next) versus orchestration (an orchestrator tells participants what to execute)", "status": "verified" },
+    { "title": "OpenTelemetry Semantic Conventions, Messaging spans (Context propagation)", "url": "https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/", "accessed": "2026-11-22", "supports": "a producer attaches a message creation context that is propagated to consumers, whose Receive or Process spans link to it", "status": "verified" },
+    { "title": "Apache Kafka 4.4 topic configuration reference", "url": "https://kafka.apache.org/44/generated/topic_config.html", "accessed": "2026-11-22", "supports": "retention.ms defaults to 7 days; compacted topics keep the latest record per key", "status": "verified" }
+  ]
+}

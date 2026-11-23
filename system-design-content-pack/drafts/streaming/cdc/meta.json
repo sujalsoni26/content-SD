@@ -1,0 +1,73 @@
+{
+  "slug": "cdc",
+  "title": "Change data capture",
+  "moduleId": "streaming",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "The order service writes the row and then publishes the event, crashes in between, and the cache, search index and warehouse never learn the order exists.",
+  "summary": "Change data capture reads committed changes from the database log and publishes each as an event in commit order. With an outbox table it makes the row and its event one atomic write, delivered at least once and ordered per key.",
+  "catTip": "I do not ask the humans what changed in the kitchen. I read the scratches on the cupboard door, in order, including the tin that was taken away. The log never forgets a delete, and neither do I.",
+  "recall": {
+    "q": "Why does log-based CDC with an outbox beat writing to the database and then publishing to Kafka?",
+    "a": "A dual write can commit the row and lose the event when the process dies between them. With an outbox the event is written in the same transaction as the row, and Debezium reads both from the WAL, so nothing committed can be missing its event and the stream is in commit order."
+  },
+  "archNodes": ["db", "queue", "cache"],
+  "guide": {
+    "breaks": "Publishing an event from application code after the commit can lose it when the process dies in the gap, and polling tables for changes misses deletes and out-of-order commits.",
+    "tradeoffs": "Consumers must tolerate duplicates and apply changes idempotently, a replication slot holds WAL until it is read, and schema changes need discipline because consumers see every column change.",
+    "explainSimply": "Instead of asking the database what changed, you read its diary: every change it committed, in order, including the things it threw away. Anyone who needs to know, the cache, the search index or the warehouse, reads the diary at their own pace. Nothing is missed because the diary is written before anything else happens.",
+    "hint": "Think about what happens between a commit and a publish, and where the event could be written instead."
+  },
+  "meow": "Row written, event lost in the gap? Not with an outbox. Meow it into the log, let the log do the telling.",
+  "quiz": [
+    {
+      "prompt": "An order service writes the order to PostgreSQL and then publishes an OrderCreated event to Kafka from application code. What is the risk?",
+      "options": [
+        "Kafka will reorder the events because the service publishes from several threads",
+        "If the service crashes after the commit and before the publish, the order exists but no event is ever sent, and no retry can know that",
+        "The database commit will fail because Kafka is slower than PostgreSQL",
+        "The event will be duplicated, which Kafka cannot handle"
+      ],
+      "answer": 1,
+      "explanation": "This is the dual-write problem: two systems, no shared transaction, so a crash in the gap leaves a committed row with no event. Duplicates are the tempting wrong answer, but they are survivable with idempotent consumers; silent loss is not, which is why the outbox pattern exists."
+    },
+    {
+      "prompt": "A Debezium consumer sees the same update event for row 42 twice after the connector restarted. Which is the correct response?",
+      "options": [
+        "Treat it as a bug in Debezium and reset the connector's offsets to the latest position",
+        "Apply it again: events carry the full row image and the consumer is written as an idempotent upsert, because delivery is at least once",
+        "Switch snapshot.mode to always so that the connector re-reads the whole table",
+        "Change the topic to a single partition so that Kafka can deduplicate"
+      ],
+      "answer": 1,
+      "explanation": "Debezium guarantees at-least-once delivery, so duplicates after a restart are expected and the consumer must be idempotent. Resetting offsets to the latest position is the dangerous distractor: Debezium's own FAQ warns that it skips events and turns a duplicate into a loss."
+    }
+  ],
+  "cards": [
+    {
+      "q": "You need to add a search index for a 2 TB table that is already being streamed by Debezium, without stopping the stream. What do you use?",
+      "a": "An incremental snapshot, triggered by writing to the signalling table: the connector reads the table in chunks (1,024 rows by default) with watermarks while streaming continues, so the index receives history and live changes correctly interleaved."
+    },
+    {
+      "q": "Why does a Debezium update event from PostgreSQL often contain only the primary key in its before field?",
+      "a": "Because the table's REPLICA IDENTITY is DEFAULT, so logical decoding records only the old key. Set REPLICA IDENTITY FULL on the table to get the previous values of every column."
+    }
+  ],
+  "glossary": [
+    { "term": "SMT", "full": "Single Message Transform", "note": "A Kafka Connect plug-in that rewrites each record in flight; Debezium's outbox event router is one." },
+    { "term": "JDBC", "full": "Java Database Connectivity", "note": "The Java API for talking to relational databases; Kafka Connect's JDBC source connector polls tables through it." }
+  ],
+  "sources": [
+    { "title": "Debezium documentation, Frequently Asked Questions", "url": "https://debezium.io/documentation/faq/", "accessed": "2026-11-22", "supports": "consumers must expect at-least-once delivery and duplicates after a crash; restarting from the latest offset instead of the committed one can miss events", "status": "verified" },
+    { "title": "Debezium documentation, PostgreSQL connector", "url": "https://debezium.io/documentation/reference/stable/connectors/postgresql.html", "accessed": "2026-11-22", "supports": "event envelope fields before, after, op, ts_ms and source; topic name prefix.schema.table; key is the primary key; snapshot.mode default initial; REPLICA IDENTITY DEFAULT gives only key columns in before; tombstones.on.delete default true; incremental snapshots with chunk size 1024 via a signalling table; heartbeat.interval.ms default 0 and heartbeat.action.query; schema read from the decoding stream, no DDL events", "status": "verified" },
+    { "title": "Jiri Pechanec, \"Incremental Snapshots in Debezium\", Debezium blog, 7 October 2021", "url": "https://debezium.io/blog/2021/10/07/incremental-snapshots/", "accessed": "2026-11-22", "supports": "incremental snapshots follow the watermark approach introduced by the DBLog paper", "status": "verified" },
+    { "title": "Andreakis and Papapanagiotou, \"DBLog: A Watermark Based Change-Data-Capture Framework\", arXiv, 2020", "url": "https://arxiv.org/abs/2010.12597", "accessed": "2026-11-22", "supports": "Netflix's watermark-based method for interleaving a table snapshot with the live change stream", "status": "reference" },
+    { "title": "Debezium documentation, Outbox Event Router", "url": "https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html", "accessed": "2026-11-22", "supports": "the SMT class, the aggregatetype and aggregateid columns, aggregateid as the message key, default topic outbox.event followed by the aggregatetype value", "status": "verified" },
+    { "title": "Gunnar Morling, \"Reliable Microservices Data Exchange With the Outbox Pattern\", Debezium blog, 19 February 2019", "url": "https://debezium.io/blog/2019/02/19/reliable-microservices-data-exchange-with-the-outbox-pattern/", "accessed": "2026-11-22", "supports": "the outbox pattern as described for Debezium and the dual-write problem it solves", "status": "verified" },
+    { "title": "Chris Richardson, microservices.io, Pattern: Transactional outbox", "url": "https://microservices.io/patterns/data/transactional-outbox.html", "accessed": "2026-11-22", "supports": "the event is stored in an outbox table in the same transaction; the relay is either a polling publisher or transaction log tailing", "status": "verified" },
+    { "title": "Debezium documentation, MySQL connector", "url": "https://debezium.io/documentation/reference/stable/connectors/mysql.html", "accessed": "2026-11-22", "supports": "the MySQL connector records DDL statements in a database schema history topic", "status": "verified" },
+    { "title": "Confluent documentation, JDBC Source Connector configuration properties", "url": "https://docs.confluent.io/kafka-connectors/jdbc/current/source-connector/source_config_options.html", "accessed": "2026-11-22", "supports": "poll.interval.ms default 5000; incrementing mode detects only new rows, not modifications or deletions", "status": "verified" },
+    { "title": "Confluent documentation, JDBC Source Connector overview", "url": "https://docs.confluent.io/kafka-connectors/jdbc/current/source-connector/overview.html", "accessed": "2026-11-22", "supports": "timestamp mode cannot guarantee delivery of all updates because timestamps are not unique; out-of-order commits in incrementing mode lose rows", "status": "verified" },
+    { "title": "Confluent documentation, Schema Evolution and Compatibility", "url": "https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html", "accessed": "2026-11-22", "supports": "the default compatibility mode is BACKWARD; the changes BACKWARD permits", "status": "verified" }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "slug": "design-key-value-store",
+  "title": "Design a distributed key-value store",
+  "moduleId": "hld",
+  "level": "advanced",
+  "minutes": 18,
+  "problem": "One database node cannot serve 800k operations a second, and the moment it is unreachable every cart and session it owned stops accepting writes.",
+  "summary": "A Dynamo-style store hashes keys onto a ring of identical nodes, keeps three copies of each key, lets every request choose how many replicas must answer, and stays writeable through failures with sloppy quorums, hinted handoff, read repair, Merkle-tree anti-entropy and version vectors.",
+  "catTip": "Three bowls in three rooms, and dinner counts once two are filled. If a door is shut I leave a note on it and eat from the neighbour's bowl. Nobody has ever refused my put. Merging two dinners is the application's problem.",
+  "recall": {
+    "q": "A Dynamo-style store runs N = 3, W = 2, R = 2 and a rack partition cuts one home replica off from the other two. Why do writes on both sides still succeed, and what does the first reader see after the heal?",
+    "a": "Each side forms a sloppy quorum: the side with one home replica writes to it plus a stand-in node that keeps a hint for the missing owner, so W = 2 is met on both sides. After hinted handoff the two versions carry concurrent version vectors, so a quorum read returns both as siblings for the application to merge, where last-write-wins would have silently dropped one."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A single primary refuses every write the moment it is unreachable, and sharding by hash modulo moves almost every key each time a node is added, so neither availability nor incremental growth is possible.",
+    "tradeoffs": "Staying writeable through a partition means two versions of a key can exist, so the application must merge siblings, deletes become tombstones that cost disk for days, and background hints, read repair and Merkle-tree repair add traffic.",
+    "explainSimply": "Imagine three flatmates each keeping a copy of the shopping list, where a change counts once two copies have it. If one flatmate is away you leave a sticky note on their door and copy it in when they return. If two people changed the list at the same time, you keep both lists and sort it out together rather than throwing one away.",
+    "hint": "Draw the key's three home replicas, cut one off, and ask who can still acknowledge a write and what the version vectors look like afterwards."
+  },
+  "meow": "Hash the key, walk the ring, three bowls. Two acks and the put is done. Door shut? Note on door. Two dinners later? Merge, meow.",
+  "quiz": [
+    {
+      "prompt": "A key-value store with N = 3, W = 2, R = 2 must keep accepting writes during a rack partition that leaves only one of a key's home replicas reachable from the client's side. Which mechanism makes that possible, and what is its cost?",
+      "options": [
+        "Read repair: the coordinator writes the newest version back to stale replicas, at the cost of extra reads",
+        "A sloppy quorum: the coordinator writes to the next healthy node with a hint for the missing owner, at the cost of overlap between read and write sets",
+        "Raising W to 3 so that every replica must confirm, at the cost of latency",
+        "Merkle-tree anti-entropy, which streams the differing ranges once the partition heals"
+      ],
+      "answer": 1,
+      "explanation": "Only a sloppy quorum lets a stand-in node count towards W, which keeps the write available but means a later quorum read may miss it until hinted handoff completes. Anti-entropy and read repair heal replicas after the fact; neither makes the write succeed during the cut."
+    },
+    {
+      "prompt": "A replica was offline for twelve days. In a Cassandra-style store with the default ten-day tombstone grace period, what should happen before it serves reads again?",
+      "options": [
+        "Nothing: hinted handoff replays the writes it missed as soon as it is back",
+        "Run read repair on every key, which rewrites the tombstones it missed",
+        "Rebuild it from the other replicas, because deletes it missed may already have had their tombstones compacted away and its stale values would be repaired back as zombies",
+        "Lower gc_grace_seconds so that its old tombstones are dropped sooner"
+      ],
+      "answer": 2,
+      "explanation": "Past the grace period the surviving replicas may have purged the tombstones, so repair would compare copies, find the old value only on the returning node and copy it back; rebuilding avoids that. Hints only cover a short window (three hours by default in Cassandra), so the first option is wrong for a twelve-day outage."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: a 40-node ring is at its throughput limit and a node must be added during peak traffic without downtime or lost writes. Decision and why?",
+      "a": "Give the new node 16 tokens, gossip it as joining, stream only the ranges it takes over (about 1/41 of the data) at a throttled rate so streaming does not starve user reads, and have coordinators double-write any in-flight range to old and new owner until the node flips to up. Consistent hashing with virtual nodes is what keeps the move at a fortieth of the data instead of three quarters of it."
+    },
+    {
+      "q": "Problem: a client deletes a key while one of its three replicas is down. Decision and why?",
+      "a": "Write a tombstone, a version with an empty value, replicated to W nodes like any put, and keep it for longer than the repair cycle (ten days by default in Cassandra). Simply removing the key would let read repair or anti-entropy copy the old value back from the replica that missed the delete; a node down longer than the grace period is rebuilt rather than repaired for the same reason."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    {
+      "title": "DeCandia et al., \"Dynamo: Amazon's Highly Available Key-value Store\", SOSP 2007",
+      "url": "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf",
+      "accessed": "2026-11-22",
+      "supports": "objects usually under 1 MB and the always-writeable goal (§2); zero-hop routing (§3); virtual nodes and tokens (§4.2); preference list of N distinct physical nodes (§4.3); vector clocks with truncation at ten (node, counter) pairs (§4.4); coordinator, R/W execution and read repair (§4.5); sloppy quorum and hinted handoff (§4.6); Merkle-tree anti-entropy per key range (§4.7); gossip with a random peer every second (§4.8); pluggable storage engines including Berkeley DB and MySQL (§5); the common (3,2,2) configuration (§6)",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Cassandra documentation, \"Dynamo\" (architecture)",
+      "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html",
+      "accessed": "2026-11-22",
+      "supports": "consistent-hashing token ring; virtual nodes; the 2.x default of 256 tokens judged too high and the newer deterministic token allocator; gossip every second with a random peer; phi-accrual failure detector with local UP/DOWN decisions; hinted handoff and read repair as best-effort convergence",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Cassandra documentation, \"cassandra.yaml file configuration\"",
+      "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/configuration/cass_yaml_file.html",
+      "accessed": "2026-11-22",
+      "supports": "num_tokens default 16; allocate_tokens_for_local_replication_factor default 3; max_hint_window default 3h; hinted_handoff_enabled true; phi_convict_threshold default 8; commitlog_sync default periodic (writes may be acknowledged before the log is synced); tombstone_warn_threshold 1000 and tombstone_failure_threshold 100000",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Cassandra documentation, \"Data definition (CQL)\", table options",
+      "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/ddl.html",
+      "accessed": "2026-11-22",
+      "supports": "gc_grace_seconds default 864000 as the time to wait before garbage-collecting tombstones; SizeTieredCompactionStrategy as the default compaction strategy",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Cassandra documentation, \"Tombstones\"",
+      "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/tombstones.html",
+      "accessed": "2026-11-22",
+      "supports": "a tombstone is dropped only after gc_grace_seconds and only in a compaction that includes the older SSTables holding the key; a node down longer than the grace period can repair deleted data back as a zombie; TTL-expired data is treated as tombstones",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Cassandra documentation, \"Hints\"",
+      "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/hints.html",
+      "accessed": "2026-11-22",
+      "supports": "hinted handoff stores writes for a down replica and replays them when it returns, for at most the hint window",
+      "status": "reference"
+    },
+    {
+      "title": "Riak KV documentation, \"Causal Context\"",
+      "url": "https://docs.riak.com/riak/kv/latest/learn/concepts/causal-context/index.html",
+      "accessed": "2026-11-22",
+      "supports": "sibling explosion when clients write without reading, as cited in the Quorums lesson",
+      "status": "reference"
+    }
+  ]
+}

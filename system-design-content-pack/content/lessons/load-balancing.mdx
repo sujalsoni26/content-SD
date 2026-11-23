@@ -1,0 +1,33 @@
+A **load balancer** (LB) is a specialised reverse proxy that spreads requests across a **pool** of servers.
+
+## Algorithms
+
+| Algorithm | How | Best when |
+| --- | --- | --- |
+| Round robin | 1 → 2 → 3 → 1 … | Equal servers, similar requests |
+| Weighted round robin | Bigger servers get a bigger share | Mixed hardware |
+| Least connections | Server with the fewest active connections | Request durations vary |
+| Hashing (e.g., IP hash) | Same key → same server | A server holds that client's session or cache |
+
+## Health checks
+
+The LB regularly calls something like `GET /health` on each server. Failing servers are taken out of rotation and put back when they recover, so <mark>one dead server no longer takes the app down</mark>.
+
+<Interactive name="lb-sim" />
+
+## Layer 4 vs layer 7
+
+- **L4** LBs route by IP and port: fast, but blind to content.
+- **L7** LBs read HTTP paths, headers and cookies, so they can route smarter (`/video` to video servers, a beta cookie to canary servers).
+
+<Callout type="warning" title="Don't just move the single point of failure">
+
+The LB itself must not become a single point of failure (SPOF). Run a redundant pair, or use a managed LB such as AWS ELB.
+
+</Callout>
+
+<DeepDive title="Go deeper: the power of two random choices">
+
+"Least connections" needs an up-to-date view of every server, which is hard when many LB instances run in parallel. A popular trick: pick **two servers at random** and send the request to the less loaded of the two. This simple rule spreads load almost as well as checking every server, and it stops every LB from piling onto the same "least loaded" server at once. Envoy and Nginx both offer it.
+
+</DeepDive>

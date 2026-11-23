@@ -1,0 +1,92 @@
+A **multi-region deployment** runs the system in two or more geographically separate cloud regions, so that users get an answer from somewhere near them and the loss of an entire region is survivable. The servers are the easy part; the data decides everything else.
+
+Two forces push you there. Latency: [CAP and PACELC](/learn/cap) noted that a Delhi user talking to a North American server pays a cross-continent round trip of roughly 150 ms on every request. Resilience: a region can lose power, networking or its control plane for hours, and [Disaster recovery](/learn/disaster-recovery) defines what you are buying: the recovery time objective (RTO, how long you are down) and the recovery point objective (RPO, how much recent data you lose).
+
+## Region versus availability zone
+
+A **region** is a cluster of data centres in one geographic area; an **availability zone** (AZ) is one or more discrete data centres inside it with their own power, cooling and networking. On AWS, zones in a region are many kilometres apart but all within 100 km of each other, so a round trip between zones is about a millisecond and synchronous replication across zones is routine. Between regions the distance is hundreds or thousands of kilometres, and synchronous replication costs tens to hundreds of milliseconds per write.
+
+| Scope | Round trip (rule of thumb) | Replication that fits | Survives |
+| --- | --- | --- | --- |
+| One zone | Well under a millisecond | Synchronous | A rack, a machine |
+| Zones in one region | A millisecond or two | Synchronous | A data centre |
+| Two regions | Tens to hundreds of milliseconds | Asynchronous, or consensus at a price | A whole region |
+
+## Active-passive or active-active
+
+<Comparison>
+
+<ComparisonItem title="Active-passive">
+
+One region serves all traffic; the other receives replicated data and waits. AWS's catalogue runs from *pilot light* (data replicated, servers switched off) through *warm standby* (a scaled-down copy running) to *hot standby* (full size, idle). One writer, so no conflicts; failover means promoting the replica and rerouting users, with minutes of RTO and an RPO equal to the replication lag.
+
+</ComparisonItem>
+
+<ComparisonItem title="Active-active">
+
+Every region serves users, usually the nearest ones. Losing a region shifts traffic, so RTO approaches zero and no capacity sits idle. The price is the data: either partition writes so that no two regions write the same record, or accept conflicts and resolve them. AWS calls it the most complex and costly option, and notes that teams paying for a full second region usually end up using it.
+
+</ComparisonItem>
+
+</Comparison>
+
+## Data: choose a strategy per data class
+
+| Strategy | How writes work | Example | Pays |
+| --- | --- | --- | --- |
+| Single-writer region | All writes go to one region; other regions hold replicas for local reads | Aurora Global Database: one primary, up to 10 read-only secondaries, replication typically under a second, promotion in under a minute | Distant users wait a round trip per write; RPO is the lag at failover |
+| Geo-partitioned by home region | Each row has a home region that owns it; reads and writes are local there | CockroachDB `REGIONAL BY ROW`: a hidden region column per row | A traveller's requests cross regions; moving a home is a migration |
+| Multi-leader with conflicts | Every region accepts writes and replicates asynchronously; concurrent writes are reconciled | DynamoDB global tables (default mode): last writer wins | Lost updates when two regions write the same item; only for data where that is acceptable |
+| Consensus across regions | A write commits when a majority of voting replicas in several regions agree | Spanner's synchronous Paxos groups; CockroachDB `REGION` survival; DynamoDB's strong-consistency mode | Every write pays at least one cross-region round trip; three or more regions to survive one |
+
+The last two rows are [multi-leader replication](/learn/replication) and [consensus](/learn/consensus) applied across continents, and the row you pick is the [consistency](/learn/consistency) you get. Choose per feature: an order or a seat booking wants a single writer or consensus; a last-seen timestamp is fine with last writer wins. CockroachDB states the price plainly: surviving a region failure raises write latency by at least the round trip to the nearest other region.
+
+## Routing users to a region
+
+Three mechanisms, from slowest to fastest to change.
+
+- **GeoDNS.** The authoritative [DNS](/learn/dns) answers differently per user. Route 53 offers geolocation routing (by the user's location), latency-based routing (the region with the lowest latency measured from the user's network, re-measured over time) and failover routing (health-checked primary, passive secondary). Caching cuts the other way: a failover takes effect only as resolvers' TTLs expire.
+- **Anycast.** The same IP address is announced from many sites and internet routing delivers each packet to the topologically nearest one, usually but not always the lowest-latency one, with no TTL to wait for. AWS Global Accelerator and Cloudflare front their networks with anycast addresses.
+- **Global load balancers.** A health-monitored layer that steers by policy. Cloudflare Load Balancing steers by the region of the Cloudflare data centre that answered the DNS query (geo steering) or by the lowest round-trip time its health monitors measure to each pool (dynamic steering), and fails a pool over when its monitors see it down.
+
+<Mermaid caption="Users are steered to the nearest healthy region. Writes still need one owner: here Mumbai is the writer and Frankfurt serves reads from an asynchronous replica." chart={`flowchart TB
+    U["Users"] --> G["Global router: GeoDNS, anycast or global load balancer"]
+    G --> A1["Mumbai gateway"]
+    G --> B1["Frankfurt gateway"]
+    subgraph A ["Region A: Mumbai, active"]
+        A1 --> A2["App servers"] --> A3["Primary database"]
+    end
+    subgraph B ["Region B: Frankfurt, active for reads"]
+        B1 --> B2["App servers"] --> B3["Replica database"]
+    end
+    A3 -.->|asynchronous replication| B3
+    B2 -.->|writes forwarded| A3
+`} />
+
+## Failover and the data-loss window
+
+With asynchronous replication, the writes committed in the primary during the last lag window have not reached the replica when the primary dies. Promote the replica and those writes are gone (RPO equals the lag) or must be reconciled by hand when the old region returns. Two rules follow: fence the old primary so that it cannot keep accepting writes once the replica is promoted, or you have two writers and the conflicts of the multi-leader row without the resolution, and treat automatic failover with caution: a false alarm costs you the RPO for nothing, so AWS's guidance is to automate every step but trigger the sequence with one deliberate action, through data-plane operations such as health-check switches rather than control-plane changes that may themselves be degraded. Rehearse it; [Disaster recovery](/learn/disaster-recovery) covers how.
+
+## Cost
+
+You pay for two of everything, including compute that sits idle in a passive region, for every gigabyte that crosses a region boundary, for quotas raised in advance in the second region, and for the engineering: conflict handling, failover automation and the drills that prove it works. Warm standby is the usual compromise when active-active's data story is too hard.
+
+<Callout type="analogy" title="Two shops, one ledger or two">
+
+A chain with shops in Mumbai and Frankfurt can keep one master ledger in Mumbai and phone every sale through (single writer: Frankfurt waits on the line), give each shop its own customers' pages (geo-partitioned), let both write freely and reconcile by courier (multi-leader: the same last seat sold twice), or refuse to record a sale until both shops agree (consensus: every sale waits for the call). The IPL final's last ticket cannot be sold twice, so it gets consensus or one owner; a loyalty-points balance can be reconciled later.
+
+</Callout>
+
+<Callout type="interview" title="Lead with the data, then the routing">
+
+"Orders are single-writer in Mumbai with an asynchronous replica in Frankfurt, RPO about a second; sessions are multi-leader with last writer wins; users are routed by latency-based DNS with health-check failover on a short TTL; failover is a manual trigger that we rehearse quarterly." An answer that only draws two boxes and an arrow has skipped the hard part.
+
+</Callout>
+
+<mark>Multi-region is a data decision wearing an infrastructure costume.</mark>
+
+<DeepDive title="Go deeper: why cross-region consensus costs a round trip per write">
+
+In Spanner each group of replicas elects a leader; a write commits once a majority of voting replicas have acknowledged it, so the leader must hear back from at least one replica in another region before answering, and the more geographically spread the voters, the higher the latency. Placement is the lever: put the leader where most writes originate, use *witness* replicas that vote without serving reads to form a majority cheaply, and add read-only replicas freely, since they never affect write latency. CockroachDB's `REGION` survival goal requires at least three regions for the same reason: a majority must still exist with one region gone.
+
+</DeepDive>

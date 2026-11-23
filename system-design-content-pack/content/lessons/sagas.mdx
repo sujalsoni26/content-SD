@@ -1,0 +1,100 @@
+A **saga** splits one business transaction into a sequence of local transactions, one per service, and pairs each step with a **compensating transaction** that undoes its effect. Each service commits locally and moves on; if a later step fails, the saga runs the compensations for the completed steps, in reverse. <mark>Nothing is rolled back, because nothing is held open: a saga ends in a corrected state, not the original one.</mark> The name comes from Garcia-Molina and Salem's 1987 paper on long-running transactions inside a single database; microservices revived it because [two-phase commit](/learn/distributed-transactions) across services holds locks over network calls and couples everyone's availability.
+
+## A checkout as a saga
+
+Placing an order touches three services with three databases: Inventory reserves the items, Payment charges the card, Shipping creates the parcel. Each step is an ordinary local transaction, and each needs an answer to "and if we have to undo this?"
+
+| Step | Local transaction | Compensation |
+| --- | --- | --- |
+| 1 | Create the order as PENDING | Mark the order CANCELLED |
+| 2 | Reserve stock for the order | Release the reservation |
+| 3 | Charge the card | Refund the charge |
+| 4 | Create the shipment | Cancel the shipment, if it has not left |
+| 5 | Mark the order CONFIRMED | None; the saga is complete |
+
+<Mermaid caption="Payment declines after stock was reserved: the orchestrator runs the compensations for the completed steps in reverse and ends the saga in a consistent, cancelled state." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant O as Order orchestrator
+    participant I as Inventory
+    participant P as Payment
+    participant S as Shipping
+    O->>I: reserve 2 units for order 77
+    I-->>O: reserved
+    O->>P: charge ₹2,400 for order 77
+    P-->>O: declined
+    Note over O: The saga fails at the payment step
+    O->>I: release the reservation for order 77
+    I-->>O: released
+    Note over O: Order 77 set to CANCELLED
+    Note over S: Never called
+`} />
+
+## Choreography or orchestration
+
+Who decides what happens next? Two styles, and a given saga should use one.
+
+<Comparison>
+
+<ComparisonItem title="Choreography (events)">
+
+Each service publishes an event when its local transaction commits, and others react: Inventory hears `OrderCreated` and reserves; Payment hears `StockReserved` and charges; the Order service hears `PaymentDeclined` and cancels.
+
+- No extra component, no single coordinator to fail
+- The flow exists nowhere in code, only in the sum of the subscriptions
+- Easy to create cycles; hard to test without running every service
+
+</ComparisonItem>
+
+<ComparisonItem title="Orchestration (a coordinator)">
+
+An orchestrator sends commands such as "reserve" and "charge", waits for replies, and records where the saga has got to after every step.
+
+- The whole flow, compensations included, is in one readable place
+- Easy to add steps, branches and timeouts
+- One more durable component, which must survive its own crash; business rules can leak into it
+
+</ComparisonItem>
+
+</Comparison>
+
+Choreography suits short sagas with two or three participants; orchestration earns its keep as steps, branches and timeouts multiply.
+
+## Not every step is the same kind
+
+Chris Richardson's classification tells you how to order the steps:
+
+- **Compensatable** steps come first and can be undone: create the order, reserve stock.
+- The **pivot** is the go/no-go step. If it succeeds the saga will complete; if it fails, everything before it is compensated. Charging the card is the natural pivot: it is the hardest step to undo cleanly and the most expensive to get wrong.
+- **Retriable** steps follow the pivot and must eventually succeed, so they are retried until they do and must be idempotent (see [Idempotency](/learn/idempotency)).
+
+Put irreversible actions, such as sending a confirmation or handing a parcel to a courier, after the pivot as retriable steps, so they only ever run for orders that will complete.
+
+## What a saga does not give you: isolation
+
+Between the first step and the last, the system is in an intermediate state that others can see: stock reserved for an order that will be cancelled, a payment taken for an order not yet confirmed. A saga has none of the isolation of [ACID transactions](/learn/acid). The usual countermeasure is a **semantic lock**: the PENDING state on the order is an application-level flag that says "a saga is in progress here", and other code treats PENDING rows as provisional rather than acting on them. Other countermeasures include making updates commutative (reserve and release are increments, so their order does not matter) and re-reading a value just before acting on it.
+
+Two more things to design for. Compensations can fail and must be retried, so they are idempotent too. And every step may run twice, because the messages that drive a saga arrive at least once; publishing the event and committing the order must be atomic, which is what the outbox pattern in [Pub/Sub](/learn/pubsub) is for, and the duplicate publishes it allows are harmless only because the steps are idempotent.
+
+<Callout type="analogy" title="Booking a holiday yourself">
+
+You book the flight, then the hotel, then the airport taxi, each with a different company. The hotel turns out to be full, so you cancel the flight. That is a compensation, not a rewind: the cancellation fee stays on your card, and for an hour the airline believed you were coming. Where the analogy breaks: you never crash halfway, whereas a real orchestrator must record where it got to after every call so that a restart resumes instead of repeating.
+
+</Callout>
+
+<Callout type="interview" title="Say compensation, not rollback">
+
+"Across services I would use a saga: local transactions with compensations, orchestrated because the flow has several branches. Reserving stock is compensatable, charging the card is the pivot, shipping and notifications are retriable steps after it. Every step and compensation is idempotent, and events leave each service through an outbox."
+
+</Callout>
+
+<DeepDive title="Go deeper: when a compensation cannot undo">
+
+Some effects cannot be reversed: a parcel on a lorry, a message already read, cash handed over a counter. In order of preference: move the step after the pivot so it only runs for sagas that will complete; replace undo with a *semantic* compensation, such as a return label or an apology message; or route the saga to a human queue with everything it knows, as a bank's operations team does when a transfer half-completes.
+
+</DeepDive>

@@ -1,0 +1,66 @@
+An **SLO (service level objective)** is a target for something users can feel, held over a window: "99.9% of checkout requests succeed, measured over the trailing 30 days." The measurement is the **SLI (service level indicator)**, and everything between the target and 100% is the **error budget**: the failure you are allowed to spend. [Availability](/learn/availability) defines the terms and their contractual cousin, the SLA; this lesson is about choosing them to describe users rather than servers, and then running the service by the budget.
+
+## Choose SLIs from the user's seat
+
+A good SLI is a ratio of good events to all events, and "good" is defined by what the user wanted. The Google SRE Workbook's menu is short on purpose:
+
+| SLI type | A good event is... | Food-delivery example |
+| --- | --- | --- |
+| Availability | a request that got a successful response | the order was accepted, not a 5xx |
+| Latency | a request that finished under a threshold | the menu loaded in under 500 ms |
+| Quality or correctness | a response served undegraded, or with the right answer | the price shown equals the price charged |
+| Freshness | data updated more recently than a threshold | the rider's position is less than 10 s old |
+
+Two habits follow. State latency as a proportion ("99% of requests under 500 ms") rather than a bare percentile: the same fact as "p99 under 500 ms", but a ratio you can budget (see [Latency](/learn/latency) for why the tail is what users notice). And measure as close to the user as you can: server logs see only requests that reached the server, the load balancer also sees those that failed to connect, the client sees those that never left the phone. CPU, queue depth and pod count are not SLIs; they are causes, and users do not experience them.
+
+## A target plus a window
+
+The window matters as much as the number. A **rolling** window (the trailing four weeks) keeps a bad Tuesday on the books for 28 days and then lets it go; a calendar month forgets an outage on the first of the next month. The Workbook recommends four rolling weeks: long enough that minutes of noise do not swing it, and a whole number of weeks so that every window holds the same number of weekends. On the number itself the SRE book advises: few SLOs, not set from whatever today's performance happens to be, no absolutes such as "always", and start loose and tighten later. Try a target below.
+
+<Interactive name="nines" />
+
+## The budget, in one worked number
+
+The error budget is 1 − SLO over the window. Take a 99.9% availability SLO over 30 days for a service doing 10 million requests a day: 300 million requests in the window, so <mark>300,000 may fail</mark>. If every request fails during an outage, that is about 43 minutes at 116 requests per second, the availability lesson's figure. But the request view is the one you actually spend: a partial outage with a 10% error rate burns the same budget over about 7 hours, and a steady 0.02% background failure rate quietly uses a fifth of the month.
+
+<Callout type="analogy" title="A monthly data allowance">
+
+The budget behaves like a phone plan: a fixed allowance that resets each window and does not roll over. Spend it slowly on risky deploys and experiments, or blow it in one afternoon; either way the plan is the plan. Where the analogy stops: a data plan only counts what you use, while an error budget is also spent by things done to you, such as a cloud zone failing.
+
+</Callout>
+
+## Alert on burn rate
+
+A threshold alert ("error rate above 0.1% for five minutes") fails in both directions: it fires on every blip, a negligible slice of a 30-day budget, and it sleeps through a slow bleed at 0.09% that exhausts the budget by the end of the window. **Burn rate** fixes the scale: how fast you are spending the budget relative to the SLO. A burn rate of 1 runs the budget out exactly at the end of the window (a 0.1% error rate at a 99.9% SLO); an error rate of 1.44% is a burn rate of 14.4, which spends 2% of a 30-day budget in an hour and all of it in about two days.
+
+The SRE Workbook recommends **multi-window, multi-burn-rate** alerts: each rule checks a long window, to be sure the burn is large enough to matter, and a short window of about one-twelfth of it, to be sure it is still happening, so the alert stops minutes after the fix. For a 30-day window:
+
+| Burn rate | Long window | Short window | Budget consumed | Response |
+| --- | --- | --- | --- | --- |
+| 14.4 | 1 hour | 5 minutes | 2% | page |
+| 6 | 6 hours | 30 minutes | 5% | page |
+| 1 | 3 days | 6 hours | 10% | ticket |
+
+Why 14.4: an hour is 1/720 of 30 days, and 2% × 720 = 14.4. The 3-day row catches the slow bleed: burn rate 1 is exactly on schedule to exhaust the budget, which deserves a ticket, not a 3 a.m. page. Expressing these rules in a metrics system is the next lesson, [Metrics and monitoring](/learn/metrics-monitoring).
+
+<Callout type="interview" title="Say the number and the window">
+
+"The SLO is 99.9% of requests succeeding over a rolling 30 days, measured at the load balancer. That is roughly 43 minutes of full outage a month. We page when we burn 2% of the budget in an hour, ticket when we burn 10% in three days, and when the budget is gone we stop shipping features until it recovers."
+
+</Callout>
+
+## Spend it on purpose: the error-budget policy
+
+The budget is only useful if something happens when it runs out, agreed before the outage, in writing, by product and operations together. A typical **error-budget policy**: while budget remains, ship freely; when it is exhausted, reliability bugs go to the top of the queue and feature launches pause until the SLI is back inside the SLO. The SRE book is blunt: if violations spend the budget, releases are temporarily halted. A budget never spent is a signal too: Google's Chubby team deliberately takes the service down when it has been too reliable, so that dependants do not build on a promise it never made. And the internal SLO should be tighter than any SLA you sign, so that you miss your own target before you owe credits.
+
+## What gets hard
+
+- **Measuring at the edge** means owning instrumentation at the load balancer or in the client, and agreeing what counts as an error (a 404 for a product that does not exist is not one).
+- **One SLO for everyone** fails when a single customer is 40% of the traffic; a per-customer SLI shows the small tenants' pain.
+- **Budgets assume honest SLIs.** Measured where failures cannot be seen, the budget is always full and the policy never triggers.
+
+<DeepDive title="Go deeper: time-to-alert for a given burn rate">
+
+For a budget fraction f, window W and burn rate b, a rule fires after f × W ÷ b of wall-clock time at that rate, provided its long window is at least that long. At burn rate 2 the 1-hour and 6-hour rules never fire (2 × 6 ÷ 720 is 1.7% in six hours, below 5%), but the 3-day rule reaches 10% after 0.1 × 720 ÷ 2 = 36 hours and opens a ticket: fast burns page quickly, slow burns are caught inside the window. A 28-day window changes the constants (2% in an hour becomes a burn rate of 13.4), so recompute the table if you change it.
+
+</DeepDive>

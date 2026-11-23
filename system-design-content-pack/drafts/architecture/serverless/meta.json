@@ -1,0 +1,154 @@
+{
+  "slug": "serverless",
+  "title": "Serverless architecture",
+  "moduleId": "architecture",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "A thumbnail job that runs for ten seconds a few hundred times a day still needs servers sized, patched and paid for around the clock.",
+  "summary": "FaaS runs a handler per event on provider-managed environments that scale from zero and bill per request and GB-second; BaaS rents auth, storage and databases. Cold starts, timeouts, statelessness and the cost crossover at steady load are the design constraints.",
+  "catTip": "I do not keep a human on standby. I meow, one appears, feeds me, and vanishes. The first meow of the morning takes longer to answer. That is a cold start, and I resent it.",
+  "recall": {
+    "q": "What is a cold start, what makes it longer, and how do you reduce it for a latency-critical function?",
+    "a": "A cold start is the Init phase (download code, start the runtime, run initialisation code) running before a request because no warm environment existed, as after idleness, a scale-up or a deploy. Runtime choice, package size and initialisation work lengthen it. Trim dependencies and load lazily, use SnapStart where supported, or pay for provisioned concurrency to keep environments initialised."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a per-use platform, bursty or rare workloads need servers provisioned for the peak and paid for at idle, and someone must patch, scale and monitor them.",
+    "tradeoffs": "Functions are stateless, short-lived and limited in payload and runtime, the first request after idleness pays a cold start, local testing is approximate, the provider's event formats lock you in, and at steady high load per-use pricing costs more than always-on servers.",
+    "explainSimply": "Taking taxis instead of owning a car: you pay only while riding, never park or service anything, and it is perfect for occasional trips. Sometimes you wait for the taxi to arrive, and if you ride every day it ends up dearer than a car. Serverless is taxis for compute.",
+    "hint": "Think about what happens to the taxi analogy when the first ride of the day is requested, and what it costs to have one waiting outside."
+  },
+  "meow": "Meow, human appears, feeds, vanishes. First meow of the day is slow. Pay per meow.",
+  "quiz": [
+    {
+      "prompt": "An image-processing function takes 10 minutes on large files and is called synchronously from a web request through Amazon API Gateway. What is the problem?",
+      "options": [
+        "Lambda cannot run that long, because its maximum timeout is 5 minutes",
+        "API Gateway stops waiting after about 29 seconds, so the call must become asynchronous (a queue or a job id to poll) even though the function's own timeout can be set much higher",
+        "Lambda functions cannot read files larger than the invocation payload",
+        "The function needs provisioned concurrency in order to finish"
+      ],
+      "answer": 1,
+      "explanation": "Synchronous callers impose their own limits regardless of the function's timeout, which a standard Lambda function can set as high as 15 minutes. The 5-minute figure is the strongest distractor because it was the limit before 2018 and still circulates."
+    },
+    {
+      "prompt": "Which workload is least likely to be cheaper on FaaS than on always-on containers?",
+      "options": [
+        "A nightly report that runs for ten minutes",
+        "A webhook receiver that gets a few hundred calls a day",
+        "An API serving a steady 1,000 requests per second around the clock",
+        "Thumbnail generation triggered by uploads, with bursts at weekends"
+      ],
+      "answer": 2,
+      "explanation": "Per-request and per-GB-second pricing beats idle servers for spiky or low traffic, but at constant high utilisation the same GB-seconds cost more than a few always-on containers. The weekend bursts are the tempting distractor, yet bursts are exactly where paying only for use wins."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A checkout function's p99 latency spikes every time traffic rises. Name the cause and two mitigations, with the cost of each.",
+      "a": "Cold starts: every new execution environment runs Init (runtime start plus your initialisation code) before its first request, and scale-ups create new environments. Mitigate for free by trimming the package and loading dependencies lazily, or pay for provisioned concurrency (or use SnapStart where supported), which pre-initialises environments and is billed even while they idle."
+    },
+    {
+      "q": "Why does opening a database connection in each function fail at scale, and what do you do instead?",
+      "a": "Each concurrent invocation runs in its own environment with its own connection, so 1,000 concurrent invocations mean 1,000 connections, more than most databases accept. Use a connection proxy or an HTTP-based data API, cap the function with reserved concurrency, and put a queue in front to smooth bursts."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "FaaS",
+      "full": "Functions as a Service",
+      "note": "Run a handler per event on provider-managed environments that scale from zero; billed per request and per GB-second."
+    },
+    {
+      "term": "BaaS",
+      "full": "Backend as a Service",
+      "note": "Rent whole backend pieces (authentication, storage, databases, queues) instead of running them."
+    }
+  ],
+  "sources": [
+    {
+      "title": "AWS, \"Lambda quotas\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html",
+      "accessed": "2026-11-22",
+      "supports": "memory 128 MB to 10,240 MB with one vCPU at 1,769 MB; function timeout 1,800 seconds (30 minutes); payload 6 MB synchronous and 1 MB asynchronous; package 50 MB zipped, 250 MB unzipped, 10 GB container image; /tmp 512 MB to 10,240 MB; 1,000 concurrent executions per region by default; scaling of 1,000 environments per function every 10 seconds; API Gateway's 10,000 requests per second default throttle",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Understanding the Lambda execution environment lifecycle\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html",
+      "accessed": "2026-11-22",
+      "supports": "Init, Invoke and Shutdown phases; the 10-second Init limit; environments frozen and reused, /tmp retained as a transient cache, recycled every few hours; cold starts 'typically occur in under 1% of invocations' and last 'from under 100 ms to over 1 second'; factors: package size, amount of initialisation code, library and connection setup",
+      "status": "verified"
+    },
+    {
+      "title": "AWS Compute Blog, \"Operating Lambda: Performance optimization – Part 1\"",
+      "url": "https://aws.amazon.com/blogs/compute/operating-lambda-performance-optimization-part-1/",
+      "accessed": "2026-11-22",
+      "supports": "runtimes such as Java take longer to initialise; cold starts triggered by scale-ups and deploys; provisioned concurrency responds in double-digit milliseconds",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Configuring provisioned concurrency\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/provisioned-concurrency.html",
+      "accessed": "2026-11-22",
+      "supports": "pre-initialised environments; billed while idle; not available on $LATEST; reserved concurrency as both floor and ceiling; concurrency equals average requests per second times average duration",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Improving startup performance with Lambda SnapStart\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html",
+      "accessed": "2026-11-22",
+      "supports": "snapshot of the initialised environment taken at version publish and restored on invoke; supported for Java 11+, Python 3.12+ and .NET 8+; sub-second startup in optimal cases",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Lambda pricing\"",
+      "url": "https://aws.amazon.com/lambda/pricing/",
+      "accessed": "2026-11-22",
+      "supports": "requests plus GB-seconds; $0.20 per million requests and $0.0000166667 per GB-second (x86, US East N. Virginia); free tier of one million requests and 400,000 GB-seconds per month; provisioned concurrency priced per GB-second configured",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Invoking Lambda with events from other AWS services\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-services.html",
+      "accessed": "2026-11-22",
+      "supports": "triggers versus event source mappings; API Gateway REST integration timeout of 29 seconds by default; S3, SNS and EventBridge as asynchronous sources; SQS, Kinesis, DynamoDB and Kafka as event source mappings",
+      "status": "verified"
+    },
+    {
+      "title": "AWS, \"Understanding Lambda function invocation methods\" (Developer Guide)",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-invocation.html",
+      "accessed": "2026-11-22",
+      "supports": "synchronous versus asynchronous invocation; function URLs; asynchronous retries handled by Lambda",
+      "status": "verified"
+    },
+    {
+      "title": "AWS What's New, \"AWS Lambda supports functions that can run up to 15 minutes\" (10 October 2018, China-region mirror)",
+      "url": "https://amazonaws.cn/en/new/2018/aws-lambda-enables-functions-that-can-run-up-to-15-minutes",
+      "accessed": "2026-11-22",
+      "supports": "the timeout was 5 minutes before October 2018 and 15 minutes after",
+      "status": "verified"
+    },
+    {
+      "title": "Mike Roberts, \"Serverless Architectures\" (martinfowler.com)",
+      "url": "https://martinfowler.com/articles/serverless.html",
+      "accessed": "2026-11-22",
+      "supports": "the BaaS and FaaS halves of serverless; statelessness; cold-start factors (language, dependencies, environment); vendor lock-in; 'no local environment can fully simulate the cloud environment'",
+      "status": "verified"
+    },
+    {
+      "title": "Google Cloud Blog, \"Cloud Functions is now Cloud Run functions\" (22 August 2024)",
+      "url": "https://cloud.google.com/blog/products/serverless/google-cloud-functions-is-now-cloud-run-functions",
+      "accessed": "2026-11-22",
+      "supports": "the rename of Cloud Functions to Cloud Run functions in 2024",
+      "status": "verified"
+    },
+    {
+      "title": "Google Cloud, \"Cloud Run functions\" (Cloud Run docs)",
+      "url": "https://docs.cloud.google.com/run/docs/functions-with-run",
+      "accessed": "2026-11-22",
+      "supports": "HTTP triggers, Pub/Sub messages and Cloud Storage changes as function triggers",
+      "status": "verified"
+    }
+  ]
+}

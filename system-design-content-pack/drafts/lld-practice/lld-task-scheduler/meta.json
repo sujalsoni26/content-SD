@@ -1,0 +1,69 @@
+{
+  "slug": "lld-task-scheduler",
+  "title": "LLD: Task scheduler",
+  "moduleId": "lld-practice",
+  "level": "advanced",
+  "minutes": 13,
+  "problem": "Recurring jobs overrun their period and pile up, a failed run silently ends the schedule, and nobody can cancel a job that is already running.",
+  "summary": "Model a Task as a Command and a Schedule as a Strategy, queue the pair in a DelayQueue ordered by next run, and let one dispatcher thread feed a bounded worker pool. The next run is computed after a run finishes, so jobs never overlap.",
+  "catTip": "I nap on a fixed delay: twenty minutes after the last nap ends. A fixed rate would have the next nap due before I woke up, and I refuse to run concurrently with myself. Two of me on one radiator is a scheduling bug.",
+  "recall": {
+    "q": "What is the key design decision in the task-scheduler case study, and how does it stop a task from running concurrently with itself when a run overruns its period?",
+    "a": "One dispatcher thread drains a time-ordered DelayQueue of ScheduledJobs into a bounded worker pool, and the Schedule computes the next run only after the current run finishes. A job is out of the queue while it runs, so it cannot be dispatched twice; fixed-rate adds the period to the due time (late runs catch up), fixed-delay adds it to the finish time (nothing piles up)."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without one owner of 'what runs next' and a next-run time computed after the run, a slow task is started again on top of itself, a thrown exception ends a recurring job for good, and cancellation races the dispatcher.",
+    "tradeoffs": "A single dispatcher thread, a DelayQueue and a semaphore of worker permits add moving parts, serialise dispatch, give no priority among jobs due at the same instant, and must move to a shared store with a conditional claim once the scheduler spans machines.",
+    "explainSimply": "Think of a clinic's appointment book sorted by time. One receptionist calls the next patient only when their time has come and a room is free, a doctor who runs late pushes later patients back but never puts two in one room, and a no-show is rebooked with growing gaps a few times before being struck off. The book, the receptionist and the rooms are three separate things.",
+    "hint": "Ask who is allowed to touch the queue, and at which moment the next run time is computed."
+  },
+  "meow": "Due? Take, run. Finished? Ask the schedule, re-offer, nap till the next one. Never two of me at once, purr-iodically.",
+  "quiz": [
+    {
+      "prompt": "A 'sync exchange rates' task is scheduled every 10 minutes, but one run takes 25 minutes because the upstream is slow. Which rule guarantees the next run starts only after this one and that runs do not bunch up afterwards?",
+      "options": [
+        "Fixed-rate: the next run is due at the previous due time plus 10 minutes, so the late runs catch up one after another",
+        "Fixed-delay: the next run is due 10 minutes after this run finishes, so there is always a gap and nothing piles up",
+        "Fixed-rate with a larger worker pool, so the late runs can execute in parallel",
+        "A cron expression, because cron only fires on minute boundaries"
+      ],
+      "answer": 1,
+      "explanation": "Fixed-delay measures from the finish, so a slow run pushes the schedule back instead of queuing catch-up runs. Fixed-rate with a bigger pool is the strongest distractor: this design, like the JDK's ScheduledThreadPoolExecutor, never runs one periodic task concurrently with itself, so more workers change nothing, and catching up is exactly the pile-up to avoid."
+    },
+    {
+      "prompt": "A caller cancels a job while one of its runs is executing on a worker. In this design, what stops the job from being requeued when the run finishes?",
+      "options": [
+        "The worker checks a volatile cancelled flag just before calling queue.offer",
+        "cancel moves the job's AtomicReference state from Running to Cancelled with compareAndSet, so the worker's own compareAndSet from Running to Scheduled fails and it never offers the job",
+        "cancel removes the job from the DelayQueue, so the next take never returns it",
+        "The worker pool's shutdownNow interrupts the running task"
+      ],
+      "answer": 1,
+      "explanation": "Every transition goes through one compareAndSet on the state, so whichever of cancel and requeue runs second fails and does nothing. Removing from the queue is the strongest distractor: it is right for a scheduled job, but a running job is not in the queue, so there is nothing to remove, and a volatile flag read before offer leaves a check-then-act gap."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In the task scheduler, why does Schedule.nextRun receive both the due time and the finish time, and which rule uses which?",
+      "a": "Fixed-rate returns dueAt plus the period, so a slow run is followed by late catch-up runs; fixed-delay returns finishedAt plus the delay, so a slow run just pushes everything back. Passing both lets each rule choose, and calling nextRun only after the run finishes is what keeps a task from overlapping itself."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Java SE 21 API: java.util.concurrent.ScheduledExecutorService", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html", "accessed": "2026-11-22", "supports": "scheduleAtFixedRate: executions commence at initialDelay, initialDelay + period, and so on, and if an execution takes longer than its period subsequent executions may start late but will not concurrently execute; scheduleWithFixedDelay: the delay runs from the termination of one execution to the commencement of the next; an execution that throws suppresses subsequent executions of the periodic task", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ScheduledThreadPoolExecutor", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledThreadPoolExecutor.html", "accessed": "2026-11-22", "supports": "acts as a fixed-size pool using corePoolSize threads and an unbounded queue so maximumPoolSize has no effect; successive executions of a periodic task do not overlap; a cancelled task stays in the work queue until its delay elapses unless setRemoveOnCancelPolicy is set; on shutdown delayed tasks still execute by default while periodic tasks are cancelled by default", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.DelayQueue", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/DelayQueue.html", "accessed": "2026-11-22", "supports": "an unbounded blocking queue of Delayed elements; take() blocks until the expired head is available; the head is the element with the earliest expiration; poll() returns null when nothing has expired; size() counts expired and unexpired elements", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.PriorityBlockingQueue", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/PriorityBlockingQueue.html", "accessed": "2026-11-22", "supports": "unbounded; put never blocks; no guarantee of ordering among elements with equal priority, with the documented suggestion of a secondary sequence-number key to enforce FIFO; take() blocks when empty", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.Future", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Future.html", "accessed": "2026-11-22", "supports": "cancel(mayInterruptIfRunning): a task that has not started should never run; for a running task the flag decides whether the executing thread is interrupted; cancel has no effect once the task has completed; get() throws CancellationException after cancellation", "status": "verified" },
+    { "title": "Java SE 21 API: java.lang.Thread (interrupt, isInterrupted, interrupted)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Thread.html", "accessed": "2026-11-22", "supports": "interrupt() causes an InterruptedException in a thread blocked in wait, join or sleep and otherwise only sets the interrupt status, so a task that never checks the status keeps running", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ExecutorService", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ExecutorService.html", "accessed": "2026-11-22", "supports": "the two-phase shutdown idiom: shutdown() stops new submissions and lets submitted tasks run, awaitTermination waits with a timeout, shutdownNow() attempts to stop running tasks (typically via Thread.interrupt) and returns the tasks that never started", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ThreadPoolExecutor", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ThreadPoolExecutor.html", "accessed": "2026-11-22", "supports": "CallerRunsPolicy makes the thread that invokes execute run the task itself, which is why it is the wrong rejection policy for a single dispatcher thread; AbortPolicy is the default", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.Semaphore", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Semaphore.html", "accessed": "2026-11-22", "supports": "a counting semaphore whose acquire blocks until a permit is available and whose release adds a permit, used to restrict the number of threads using a resource: the worker-permit back-pressure in the dispatcher", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.AtomicReference", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicReference.html", "accessed": "2026-11-22", "supports": "compareAndSet atomically sets the value to newValue if the current value == expectedValue and returns false otherwise, so every job state transition succeeds for exactly one caller", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.CompletableFuture", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/CompletableFuture.html", "accessed": "2026-11-22", "supports": "orTimeout (since 9) exceptionally completes the future with a TimeoutException; cancel completes it with a CancellationException and mayInterruptIfRunning has no effect because interrupts are not used to control processing, so neither stops the running code", "status": "verified" },
+    { "title": "Java SE 21 API: java.time.Clock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/Clock.html", "accessed": "2026-11-22", "supports": "passing a Clock into code that needs the current instant so a fixed or offset clock can be used in tests; implementations must be thread-safe", "status": "verified" },
+    { "title": "crontab(5) Linux manual page", "url": "https://man7.org/linux/man-pages/man5/crontab.5.html", "accessed": "2026-11-22", "supports": "the five time fields minute 0-59, hour 0-23, day of month 1-31, month 1-12, day of week 0-7; an asterisk means every value; cron examines entries every minute, so one minute is the finest granularity", "status": "verified" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, Command, Facade, Observer, Singleton and Template Method as used and as deliberately not used here", "status": "reference" }
+  ]
+}

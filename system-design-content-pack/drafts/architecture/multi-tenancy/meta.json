@@ -1,0 +1,82 @@
+{
+  "slug": "multi-tenancy",
+  "title": "Multi-tenant architecture",
+  "moduleId": "architecture",
+  "level": "advanced",
+  "minutes": 8,
+  "problem": "One customer's nightly export slows every other customer, a bank demands its data stay in-country, and nobody knows what any tenant actually costs.",
+  "summary": "Multi-tenancy is deciding what tenants share. Pool small tenants in one schema with a tenant id, row-level security and per-tenant limits; give regulated or very large tenants their own database or cell; route by a tenant catalogue and meter every tenant.",
+  "catTip": "Eight cats, one house, one bowl rack: the pool. The greedy cat gets rationed, not evicted. The cat with the vet's letter gets her own room with the door shut: the silo. I keep the list of who lives where. Nobody moves without telling me.",
+  "recall": {
+    "q": "When does a tenant get dedicated resources, and when does it share?",
+    "a": "Regulated or very large tenants get a silo: their own database or cell, often in a required region. The long tail of small tenants shares a pool: one schema with a tenant id on every row, row-level security and per-tenant limits. Most systems are a bridge of both."
+  },
+  "archNodes": ["gateway", "db"],
+  "guide": {
+    "breaks": "In a pool with no per-tenant limits one tenant's load degrades everyone, and a tenant id taken from the URL instead of the token lets any customer read another's rows.",
+    "tradeoffs": "Dedicated databases and cells multiply migrations, connection pools and idle cost, while pooling demands row-level enforcement, per-tenant limits and metering to know who costs what.",
+    "explainSimply": "A block of flats shares one building and one boiler, with a meter in each flat and a rule about late parties: that is pooling small customers. A detached house has its own boiler and its own bill: that is a dedicated database for a big or regulated customer. The building manager keeps the list of who lives where.",
+    "hint": "Think about which two kinds of tenant justify their own building, and what everyone else gets instead."
+  },
+  "meow": "Small cats share the rack with rations, meow. The bank cat and the giant cat get their own rooms. The catalogue knows where every cat sleeps.",
+  "quiz": [
+    {
+      "prompt": "A SaaS product has 40,000 small tenants and three banks as customers who require audited isolation and in-country data. Which tenancy layout fits?",
+      "options": [
+        "Database per tenant for everyone, so that isolation is uniform",
+        "Shared schema for everyone with row-level security, because it is cheapest",
+        "A bridge: the long tail in a shared schema with row-level security and per-tenant limits, the banks in dedicated databases or cells in their region",
+        "Schema per tenant for everyone, as a compromise between the two"
+      ],
+      "answer": 2,
+      "explanation": "The deciding condition is regulated or very large tenants dedicated, the long tail shared, which is the bridge model. Database per tenant for everyone is the tempting error: 40,000 databases multiply migrations, connection pools and idle cost for tenants that would never notice shared hardware."
+    },
+    {
+      "prompt": "Where should a service take the tenant identifier from on each request?",
+      "options": [
+        "A tenant query parameter or path segment supplied by the client",
+        "A claim in the verified access token, propagated in request context and enforced again at the data layer",
+        "The Host header, since each tenant has its own subdomain",
+        "A lookup keyed by the caller's IP address"
+      ],
+      "answer": 1,
+      "explanation": "Only the signed token binds the authenticated user to a tenant; everything else is client-controlled input. The subdomain is the plausible distractor because it is convenient for routing, but a client can send any Host header it likes."
+    }
+  ],
+  "cards": [
+    {
+      "q": "One tenant's nightly export is slowing every other tenant on the shared cluster. List the tools in the order you would reach for them.",
+      "a": "Per-tenant rate limits and quotas keyed by tenant id; a bulkhead, a separate worker pool or queue for export jobs; a tier whose limits throttle exports; and, if the tenant is big enough to pay for it, moving it to its own shard, database or cell."
+    },
+    {
+      "q": "What does schema-per-tenant cost you that a shared schema does not?",
+      "a": "Every migration runs once per tenant, so one change becomes thousands of DDL statements with partial-failure states; connection pools are per database and user, so pooling fragments; and the catalogue bloats with duplicated tables and indexes."
+    }
+  ],
+  "glossary": [
+    { "term": "SaaS", "full": "Software as a Service", "note": "Software run by its vendor and used by many customers over the network; multi-tenancy is how one deployment serves them all." },
+    { "term": "RLS", "full": "Row-Level Security", "note": "Database policies that filter every query by a predicate such as the current tenant id, so a missing WHERE clause returns nothing rather than another tenant's rows." }
+  ],
+  "sources": [
+    { "title": "AWS Well-Architected SaaS Lens, Silo, Pool, and Bridge Models", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/silo-pool-and-bridge-models.html", "accessed": "2026-11-22", "supports": "definitions of the silo, pool and bridge models", "status": "verified" },
+    { "title": "AWS Well-Architected SaaS Lens, Noisy Neighbor", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/noisy-neighbor.html", "accessed": "2026-11-22", "supports": "the definition of a noisy neighbour as one tenant's load adversely affecting others", "status": "verified" },
+    { "title": "AWS Well-Architected SaaS Lens, General design principles", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/general-design-principles.html", "accessed": "2026-11-22", "supports": "isolate tenant resources across all layers of the architecture; measure the cost impact of individual tenants", "status": "verified" },
+    { "title": "AWS Well-Architected SaaS Lens, Identity and access management", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/identity-and-access-management.html", "accessed": "2026-11-22", "supports": "tenant context carried as custom claims in the JWT; the binding of user to tenant called a SaaS identity", "status": "verified" },
+    { "title": "AWS Well-Architected SaaS Lens, Expenditure awareness", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/expenditure-awareness.html", "accessed": "2026-11-22", "supports": "measuring per-tenant consumption and correlating it with infrastructure cost; cost per tenant guides pricing and tiering", "status": "verified" },
+    { "title": "AWS Well-Architected SaaS Lens, Tenant tiers", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/tenant-tiers.html", "accessed": "2026-11-22", "supports": "tenant profiles expressed as tiers", "status": "verified" },
+    { "title": "AWS Well-Architected SaaS Lens, Tier-based isolation", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/tier-based-isolation.html", "accessed": "2026-11-22", "supports": "lower tiers in the pooled environment and a premium tier in dedicated resources", "status": "verified" },
+    { "title": "AWS Well-Architected SaaS Lens, Monitoring (throttling by tier)", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/monitoring.html", "accessed": "2026-11-22", "supports": "throttling policies associated with tenant tiers; the example of a reserved concurrency of 100 for Basic and 300 for Advanced", "status": "verified" },
+    { "title": "AWS Well-Architected SaaS Lens, Silo isolation", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/silo-isolation.html", "accessed": "2026-11-22", "supports": "a dedicated environment removes noisy-neighbour scenarios", "status": "verified" },
+    { "title": "AWS, Reducing the Scope of Impact with Cell-Based Architecture: What is a cell-based architecture?", "url": "https://docs.aws.amazon.com/wellarchitected/latest/reducing-scope-of-impact-with-cell-based-architecture/what-is-a-cell-based-architecture.html", "accessed": "2026-11-22", "supports": "a cell as a complete independent workload; the thinnest possible router keyed by a partition key such as customer id", "status": "verified" },
+    { "title": "Citus documentation, Multi-tenant Applications", "url": "https://docs.citusdata.com/en/stable/use_cases/multi_tenant.html", "accessed": "2026-11-22", "supports": "distributing tables by the tenant column so all of a tenant's data lives on one node; isolating a large tenant into its own shard", "status": "verified" },
+    { "title": "Citus documentation, Cluster Management (Tenant Isolation)", "url": "https://docs.citusdata.com/en/stable/admin_guide/cluster_management.html", "accessed": "2026-11-22", "supports": "isolate_tenant_to_new_shard moves a tenant into a dedicated shard", "status": "verified" },
+    { "title": "PostgreSQL documentation, Schemas", "url": "https://www.postgresql.org/docs/current/ddl-schemas.html", "accessed": "2026-11-22", "supports": "a database holds many named schemas resolved through the search path", "status": "verified" },
+    { "title": "PostgreSQL documentation, Row Security Policies", "url": "https://www.postgresql.org/docs/current/ddl-rowsecurity.html", "accessed": "2026-11-22", "supports": "row-level security with a default-deny policy when none matches; owners and superusers bypass unless forced", "status": "verified" },
+    { "title": "PgBouncer documentation, Configuration (default_pool_size)", "url": "https://www.pgbouncer.org/config.html", "accessed": "2026-11-22", "supports": "connection pools are per user and database pair", "status": "verified" },
+    { "title": "Microsoft Learn, Access token claims reference (tid)", "url": "https://learn.microsoft.com/en-us/entra/identity-platform/access-token-claims-reference", "accessed": "2026-11-22", "supports": "the tid claim identifies the tenant the user is signing in to", "status": "verified" },
+    { "title": "GDPR Article 44, General principle for transfers", "url": "https://gdpr-info.eu/art-44-gdpr/", "accessed": "2026-11-22", "supports": "Chapter V restricts transfers of personal data to third countries", "status": "verified" },
+    { "title": "Reserve Bank of India, \"Storage of Payment System Data\", 6 April 2018", "url": "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11244", "accessed": "2026-11-22", "supports": "payment system data must be stored in a system only in India", "status": "verified" },
+    { "title": "Xavier Denis, \"A Pods Architecture To Allow Shopify To Scale\", Shopify Engineering, 2018", "url": "https://shopify.engineering/a-pods-architecture-to-allow-shopify-to-scale", "accessed": "2026-11-22", "supports": "a pod is a set of shops on a fully isolated set of datastores", "status": "verified" },
+    { "title": "Salesforce Architects, Platform Multitenant Architecture", "url": "https://architect.salesforce.com/fundamentals/platform-multitenant-architecture", "accessed": "2026-11-22", "supports": "a metadata-driven shared schema in which every record carries an OrgID and storage is partitioned by it", "status": "verified" }
+  ]
+}

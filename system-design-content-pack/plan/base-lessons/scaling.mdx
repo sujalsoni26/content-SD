@@ -1,0 +1,50 @@
+**Scalability** is a system's ability to handle growing load (more users, more requests, even attack traffic) without failing.
+
+Signs you've hit the limit: **latency climbing into seconds**, **database connection timeouts**, **out-of-memory errors** and **503 Service Unavailable**.
+
+<Comparison>
+
+<ComparisonItem title="Vertical (scale up)">
+
+A bigger machine: more CPU, more RAM, faster disks.
+
+</ComparisonItem>
+
+<ComparisonItem title="Horizontal (scale out)">
+
+More machines behind a load balancer.
+
+</ComparisonItem>
+
+</Comparison>
+
+<Diagram name="scale-up-vs-out" caption="Scaling up buys a bigger box; scaling out buys more boxes and a load balancer in front." />
+
+<Callout type="analogy" title="The restaurant">
+
+Scaling up is a bigger kitchen or a faster chef. Scaling out is more chefs and waiters, or more branches.
+
+</Callout>
+
+|  | Vertical | Horizontal |
+| --- | --- | --- |
+| Simplicity | No code changes | Needs an LB and coordination |
+| Limit | Hard ceiling; cost rises steeply | Practically unlimited |
+| Failure | Single point of failure | Survives losing machines (fault tolerance) |
+| Upgrades | Often needs downtime | Add or remove machines live |
+
+<Interactive name="scaling-compare" />
+
+<Callout type="idea" title="Prerequisite: stateless servers">
+
+If server A keeps your session in memory and your next request lands on server B, you are logged out. Keep state in a shared store (Redis, the database) or in a token, so <mark>any server can serve any request</mark>.
+
+</Callout>
+
+**Start vertical; go horizontal for scale and availability.** Databases usually scale vertically first, because spreading them is hard (see the [Data module](/learn#data)).
+
+## Elasticity (autoscaling)
+
+Autoscaling adds machines automatically when load rises (IPL finals, Black Friday, Flipkart's Big Billion Days) and removes them when it falls, so you pay only for what you use. It needs stateless servers behind a load balancer.
+
+New machines take a while to boot, so trigger on **early signals** (CPU, queue depth) and keep some headroom. When a spike outruns autoscaling, you shed load instead (see [Backpressure and load shedding](/learn/backpressure)). Scaling policies and their lag are covered in [Autoscaling](/learn/autoscaling); sizing the headroom they need is [Capacity planning and load testing](/learn/capacity-planning).

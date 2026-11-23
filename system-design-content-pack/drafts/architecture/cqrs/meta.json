@@ -1,0 +1,67 @@
+{
+  "slug": "cqrs",
+  "title": "CQRS",
+  "moduleId": "architecture",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "One model has to enforce the ordering rules and serve a hot list screen that joins five tables, so it does both badly and every read competes with every write.",
+  "summary": "CQRS separates a write model that validates commands from read models (projections) shaped like the screens, fed by events or CDC. Reads scale and simplify, but they lag the writes, and the pattern only pays off in complex, collaborative contexts.",
+  "catTip": "The kitchen decides whether my dinner is allowed. The board by my bowl says 'coming' a few seconds after the decision. I do not stare into the pan. Mostly.",
+  "recall": {
+    "q": "In CQRS, what do the write model and the read models each do, and what new problem appears between them?",
+    "a": "The write model accepts commands, enforces the business rules and commits; read models are denormalised projections, one per screen, rebuilt from the events or CDC stream. Because projections update asynchronously, reads lag writes, so the UI must render from the command response or wait for the projection's version."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without the split, the same normalised model serves a hot read path with five-table joins and a write path with complex rules, so one grows denormalised copies that break the rules and the other slows every screen.",
+    "tradeoffs": "Two models mean two codebases to keep in step, projections that lag the write side, and a UI that must cope with not seeing its own write for a moment; applied outside a complex bounded context, that complexity buys nothing.",
+    "explainSimply": "A restaurant kitchen decides which orders are allowed and cooks them; the boards in the dining room show what is ready, each updated from the kitchen a few seconds behind. Guests read the boards, never the pans. CQRS keeps the deciding and the showing in separate places.",
+    "hint": "Think about who is allowed to change the data and who only looks at it, and what happens in the gap between a change and the board being updated."
+  },
+  "meow": "Kitchen decides, board displays, board runs a whisker late. Do not stare into the pan.",
+  "quiz": [
+    {
+      "prompt": "A user places an order and the API returns success; the app immediately queries 'my orders' and the order is missing. In a CQRS system, what is the most likely cause and the right fix?",
+      "options": [
+        "The command failed silently, so the app should resend it",
+        "The order-list projection has not yet consumed the OrderPlaced event; render the order from the command response or wait for the projection's version to catch up",
+        "The write database lost the row, so synchronous replication must be enabled",
+        "Read models can only be queried through the write model, so the query went to the wrong place"
+      ],
+      "answer": 1,
+      "explanation": "The read side is eventually consistent with the write side, and the gap is what the UI must handle. Resending the command is the dangerous distractor: unless it is idempotent, the user gets two orders."
+    },
+    {
+      "prompt": "Which situation is the weakest justification for introducing CQRS?",
+      "options": [
+        "Thousands of users competing for the same seats under complex allocation rules",
+        "A back-office admin tool used by twenty staff to edit records",
+        "Reads outnumber writes a thousand to one and the screens need data from five tables",
+        "Separate teams own the ordering rules and the analytics dashboards"
+      ],
+      "answer": 1,
+      "explanation": "A small CRUD tool fits the plain information-base model, where Fowler and Young both warn that CQRS only adds complexity. The others show contested collaborative data, read-write imbalance or team boundaries, which are the classic reasons to split the models."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Your 'customer order list' screen needs the restaurant name, item count and live status from four tables and is the hottest query in the app. How does CQRS handle it, and what new failure appears?",
+      "a": "Build a projection table shaped like the screen, maintained by a projector that consumes OrderPlaced and OrderStatusChanged events (or a CDC stream); the read becomes one indexed lookup. New failure: lag, so a user may not see an order they just placed unless the UI renders from the command response or waits for the projection to catch up."
+    },
+    {
+      "q": "Name two signs that CQRS fits a bounded context and two signs that it does not.",
+      "a": "Fits: many actors collaborating on the same data with contested outcomes (seat booking), and read shapes very different from the write model under heavy read load. Does not fit: simple CRUD with one actor per record, or a small team where a normalised schema plus indexes serves every screen."
+    }
+  ],
+  "glossary": [
+    { "term": "CQRS", "full": "Command Query Responsibility Segregation", "note": "Separate models for changing state (commands) and for reading it (queries served by projections)." }
+  ],
+  "sources": [
+    { "title": "Martin Fowler, \"CQRS\" (bliki, 14 July 2011)", "url": "https://martinfowler.com/bliki/CQRS.html", "accessed": "2026-11-22", "supports": "definition; first heard from Greg Young; 'a significant mental leap'; most systems fit an information base; use only in specific portions (a bounded context); 'reducing productivity and increasing risk'; fit with event-based models and eventual consistency", "status": "verified" },
+    { "title": "Martin Fowler, \"CommandQuerySeparation\" (bliki, 5 December 2005)", "url": "https://martinfowler.com/bliki/CommandQuerySeparation.html", "accessed": "2026-11-22", "supports": "Bertrand Meyer's principle that methods are either commands that change state or queries that return data", "status": "verified" },
+    { "title": "Microsoft patterns & practices, \"Reference 2: Introducing the Command Query Responsibility Segregation Pattern\" (Exploring CQRS and Event Sourcing, 2012, archived)", "url": "https://learn.microsoft.com/en-us/previous-versions/msp-n-p/jj591573(v=pandp.10)", "accessed": "2026-11-22", "supports": "Greg Young's 'creation of two objects where there was previously only one' and 'CQRS is not a top-level architecture'; Udi Dahan's 'Most people using CQRS (and event sourcing too) shouldn't have done so'; commands as imperatives and events as notifications; collaborative domains as the fit; CQRS does not mandate separate data stores", "status": "verified" },
+    { "title": "Greg Young, \"CQRS Documents\" (2010)", "url": "https://cqrs.wordpress.com/wp-content/uploads/2010/11/cqrs_documents.pdf", "accessed": "2026-11-22", "supports": "the original description of task-based UIs and a thin denormalised read side; the PDF could not be machine-read on the access date, so the claims above rest on the Microsoft guide's quotations", "status": "reference" },
+    { "title": "Martin Fowler, \"What do you mean by 'Event-Driven'?\" (7 February 2017)", "url": "https://martinfowler.com/articles/201701-event-driven.html", "accessed": "2026-11-22", "supports": "CQRS is not strictly about events though often combined with them; the gain must be balanced against two models; colleagues 'deeply wary' of misuse", "status": "verified" },
+    { "title": "Gunnar Morling, \"Reliable Microservices Data Exchange With the Outbox Pattern\" (Debezium blog, 19 February 2019)", "url": "https://debezium.io/blog/2019/02/19/reliable-microservices-data-exchange-with-the-outbox-pattern/", "accessed": "2026-11-22", "supports": "outbox table written in the same transaction and relayed by CDC as the way to publish events from the write side", "status": "verified" }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "slug": "btree-vs-lsm",
+  "title": "B-trees vs LSM trees",
+  "moduleId": "internals",
+  "level": "advanced",
+  "minutes": 11,
+  "problem": "An engine that rewrites whole pages for every small change cannot keep up with a write-heavy stream, and one that appends everything cannot answer reads without visiting many files.",
+  "summary": "B-trees update fixed-size pages in place for predictable reads at the cost of random page writes; LSM trees append to a memtable, flush immutable SSTables and compact in the background, trading read and space amplification for sequential writes.",
+  "catTip": "A B-tree is my food cupboard: every tin in its labelled place, tidy but fussy to restock. An LSM tree is me shoving each new toy under the sofa and sorting the pile at midnight.",
+  "recall": {
+    "q": "A key-value store ingests 200,000 sensor writes per second and serves occasional point lookups. Which structure fits, and what makes the lookups tolerable?",
+    "a": "An LSM tree: writes are sequential appends to a memtable that is flushed as SSTables. Bloom filters on each SSTable let a point lookup skip files that cannot hold the key, so reads touch few files despite the many levels."
+  },
+  "archNodes": ["db"],
+  "guide": {
+    "breaks": "Pick a B-tree for a firehose of writes and random page rewrites saturate the disk; pick an LSM tree for a latency-sensitive read workload without tuning compaction and reads wander across many files while stalls appear at peak write load.",
+    "tradeoffs": "Every engine pays in some mix of read, write and space amplification: B-trees pay on writes, size-tiered LSM pays in space and reads, leveled LSM pays by rewriting data at every level.",
+    "explainSimply": "A B-tree is a filing cabinet: each change goes straight into its folder, so finding things is quick but filing is slow when folders fill up. An LSM tree is an inbox tray: everything lands on top instantly and gets sorted into bundles later. The tray is faster to fill; the cabinet is faster to search.",
+    "hint": "Ask whether the workload is dominated by writes or reads, then think about what keeps reads from checking every file."
+  },
+  "meow": "Memtable full? Flush to SSTable, compact at midnight. Bloom filter says not here and saves a paw-ful of reads.",
+  "quiz": [
+    {
+      "prompt": "In an LSM store a row was deleted, but after a replica that had been offline for three weeks rejoined, the row reappeared everywhere. What most likely happened?",
+      "options": [
+        "The memtable was never flushed",
+        "Compaction removed the tombstone after gc_grace_seconds expired, before the lagging replica learned of the delete",
+        "A bloom filter returned a false negative",
+        "Leveled compaction merged the wrong level"
+      ],
+      "answer": 1,
+      "explanation": "A tombstone shadows older copies only while it exists; once compaction drops it, a replica still holding the old row re-propagates it as new data. Bloom filters never produce false negatives."
+    },
+    {
+      "prompt": "Which statement about amplification is correct?",
+      "options": [
+        "Leveled compaction minimises write amplification and size-tiered minimises space amplification",
+        "B-trees have the lowest write amplification because each key is written once",
+        "Size-tiered compaction has low write amplification but higher read and space amplification; leveled compaction reverses that trade",
+        "Bloom filters reduce write amplification"
+      ],
+      "answer": 2,
+      "explanation": "Size-tiered rewrites data rarely but leaves duplicates across files; leveled keeps one copy per level at the cost of rewriting. B-trees write whole pages per change, so their per-row write amplification is high, not low."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A RocksDB-backed service shows write latency spikes exactly during traffic peaks while disks are busy with background work. What is happening, and name two mitigations.",
+      "a": "Compaction debt: flushes and compactions cannot keep up, level 0 fills, and RocksDB throttles and then stops writes at its thresholds. Mitigations: give compaction more threads or I/O bandwidth, switch to universal (size-tiered) compaction to cut write amplification, or shed or buffer load upstream."
+    },
+    {
+      "q": "Explain why a single B-tree insert can trigger writes to pages far apart on disk.",
+      "a": "The row goes into its leaf, every secondary index leaf for that row must be updated too, and a full leaf splits, pushing a separator into the parent. Each of those pages lives elsewhere on disk, so one logical insert becomes several random page writes."
+    }
+  ],
+  "glossary": [
+    { "term": "SSTable", "full": "Sorted String Table", "note": "An immutable file of key-value pairs in key order, written by flushing a memtable; the on-disk unit of an LSM tree." }
+  ],
+  "sources": [
+    { "title": "R. Bayer and E. McCreight, \"Organization and Maintenance of Large Ordered Indexes\", Acta Informatica 1(3), 1972", "url": "https://doi.org/10.1007/BF00288683", "accessed": "2026-11-22", "supports": "origin of the B-tree and its logarithmic page-based operations", "status": "reference" },
+    { "title": "P. O'Neil, E. Cheng, D. Gawlick, E. O'Neil, \"The log-structured merge-tree (LSM-tree)\", Acta Informatica 33, 1996", "url": "https://doi.org/10.1007/s002360050048", "accessed": "2026-11-22", "supports": "origin of the LSM tree: deferring and batching index changes from a memory component through disk components", "status": "reference" },
+    { "title": "F. Chang et al., \"Bigtable: A Distributed Storage System for Structured Data\", OSDI 2006", "url": "https://research.google.com/archive/bigtable-osdi06.pdf", "accessed": "2026-11-22", "supports": "the SSTable file format as an immutable ordered map", "status": "reference" },
+    { "title": "B. H. Bloom, \"Space/Time Trade-offs in Hash Coding with Allowable Errors\", CACM 13(7), 1970", "url": "https://doi.org/10.1145/362686.362692", "accessed": "2026-11-22", "supports": "origin of the Bloom filter", "status": "reference" },
+    { "title": "PostgreSQL documentation, CREATE INDEX (fillfactor)", "url": "https://www.postgresql.org/docs/current/sql-createindex.html", "accessed": "2026-11-22", "supports": "B-tree default fillfactor 90; full pages split, fragmenting the index", "status": "verified" },
+    { "title": "RocksDB wiki, MemTable", "url": "https://github.com/facebook/rocksdb/wiki/MemTable", "accessed": "2026-11-22", "supports": "memtable definition, immutable memtable and background flush; skip list default; write_buffer_size 64 MB", "status": "verified" },
+    { "title": "RocksDB wiki, RocksDB Bloom Filter", "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter", "accessed": "2026-11-22", "supports": "per-SST bloom filters, about 10 bits per key for roughly 1% false positives, point lookups only", "status": "verified" },
+    { "title": "RocksDB wiki, Compaction", "url": "https://github.com/facebook/rocksdb/wiki/Compaction", "accessed": "2026-11-22", "supports": "leveled compaction as default; universal compaction as RocksDB's tiered style; the amplification trade-off between them", "status": "verified" },
+    { "title": "RocksDB wiki, Leveled Compaction", "url": "https://github.com/facebook/rocksdb/wiki/Leveled-Compaction", "accessed": "2026-11-22", "supports": "overlapping L0 files, non-overlapping sorted runs per level, exponentially growing level targets, merging with overlapping files in the next level", "status": "verified" },
+    { "title": "RocksDB wiki, Universal Compaction", "url": "https://github.com/facebook/rocksdb/wiki/Universal-Compaction", "accessed": "2026-11-22", "supports": "merging similar-size sorted runs; lower write amplification at the cost of read and space amplification, including temporary doubling of space", "status": "verified" },
+    { "title": "RocksDB wiki, RocksDB Tuning Guide", "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Tuning-Guide", "accessed": "2026-11-22", "supports": "definitions of write, read and space amplification; compaction as the trade-off dial", "status": "verified" },
+    { "title": "RocksDB wiki, Write Stalls", "url": "https://github.com/facebook/rocksdb/wiki/Write-Stalls", "accessed": "2026-11-22", "supports": "writes slowed and stopped when L0 files or pending compaction bytes exceed thresholds", "status": "verified" },
+    { "title": "Apache Cassandra documentation, Compaction overview", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/overview.html", "accessed": "2026-11-22", "supports": "compaction merges SSTables and discards old data; STCS is the default; list of strategies", "status": "verified" },
+    { "title": "Apache Cassandra documentation, Size Tiered Compaction Strategy", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/stcs.html", "accessed": "2026-11-22", "supports": "merging four similar-sized SSTables; rows spread across files; space needed for old and new files", "status": "verified" },
+    { "title": "Apache Cassandra documentation, Leveled Compaction Strategy", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/lcs.html", "accessed": "2026-11-22", "supports": "non-overlapping SSTables per level, levels ten times the previous, one SSTable per level per read, higher I/O", "status": "verified" },
+    { "title": "Apache Cassandra documentation, Tombstones", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/tombstones.html", "accessed": "2026-11-22", "supports": "deletes written as timestamped tombstones; gc_grace_seconds default 864000; deleted data reappearing if a node misses the delete", "status": "verified" },
+    { "title": "WiredTiger documentation, Architecture Guide: B-Trees", "url": "https://source.wiredtiger.com/develop/arch-btree.html", "accessed": "2026-11-22", "supports": "WiredTiger represents tables with B-trees", "status": "verified" },
+    { "title": "SQLite documentation, Architecture of SQLite", "url": "https://www.sqlite.org/arch.html", "accessed": "2026-11-22", "supports": "SQLite stores tables and indexes as B-trees", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Clustered and Secondary Indexes", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html", "accessed": "2026-11-22", "supports": "the InnoDB clustered index stores the row data", "status": "verified" },
+    { "title": "CockroachDB documentation, Storage Layer", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/storage-layer", "accessed": "2026-11-22", "supports": "Pebble as an LSM engine inspired by RocksDB with memtable, immutable SSTs, WAL and compaction", "status": "verified" },
+    { "title": "Apache HBase documentation, Regions", "url": "https://hbase.apache.org/docs/architecture/regions/", "accessed": "2026-11-22", "supports": "MemStore flushed to StoreFiles and merged by minor and major compactions", "status": "verified" },
+    { "title": "MyRocks project site", "url": "http://myrocks.io/", "accessed": "2026-11-22", "supports": "MyRocks as a RocksDB storage engine for MySQL (engine table)", "status": "verified" }
+  ]
+}

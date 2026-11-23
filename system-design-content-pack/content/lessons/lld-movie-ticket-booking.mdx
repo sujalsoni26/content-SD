@@ -1,0 +1,359 @@
+A **movie ticket booking system** sells every seat of every show exactly once, even when thousands of people are choosing seats for the same Friday-night show at the same moment. The design turns on one object, the **seat hold**: a short-lived, all-or-nothing claim on a set of seats that gives a buyer time to pay, blocks everyone else meanwhile, and expires on its own when the payment never arrives. Get the hold right and the rest of the system is bookkeeping around it.
+
+## Requirements and assumptions
+
+**Functional**
+
+- Browse theatres, screens and shows for a city and date; view a show's seat map with each seat's availability and price.
+- Select one to ten seats and hold them. A hold lasts a fixed time (assume 10 minutes) and then releases the seats.
+- Pay for a held booking through an external payment gateway; on success the booking is confirmed and a ticket is issued.
+- Cancel a confirmed booking before a cut-off, with a refund.
+
+**Non-functional**
+
+- No double booking, ever. Correctness beats availability: when in doubt the system refuses a hold rather than risk two tickets for one seat.
+- A hold must expire reliably even if the server that created it dies.
+- Confirming must be **idempotent** (see [Idempotency](/learn/idempotency)): gateway callbacks are retried and users double-click.
+- The seat map may be a few seconds stale; the hold, not the map, is where truth is enforced.
+
+**Assumptions and out of scope.** One show per booking; one currency; price depends only on seat category; the gateway owns card handling; a relational database is the source of truth. Search, recommendations, offers, food and loyalty are out of scope.
+
+## Core entities and responsibilities
+
+The split that matters most is between a physical `Seat` and a `ShowSeat`. A seat is a fixed position in a screen; whether it is available is a fact about one *show*. This is the same move as book versus copy in [Library management](/learn/lld-library-management): the thing with identity and the thing with state are different objects.
+
+| Entity | Responsibility |
+| --- | --- |
+| `Theatre`, `Screen` | Know their screens and seat layout, nothing about shows |
+| `Seat` | Knows its row, number and category; immutable |
+| `Show` | Knows its movie, screen and start time; owns one `ShowSeat` per seat and the price per category |
+| `ShowSeat` | Knows whether it is free, held (by whom, until when) or booked; the only object a hold changes |
+| `Booking` | Knows its user, show, seats, status, amount and payment reference; owns its status transitions |
+| `BookingService` | Does hold, pay and cancel by coordinating inventory, payments and the repository |
+| `SeatInventory` | Does the all-or-nothing hold, release and book of seats; hides where the lock lives |
+| `PaymentGateway` | Charges an amount under an idempotency key; a boundary interface around the vendor |
+| `HoldExpiryJob` | Does the sweep that turns expired holds back into free seats |
+
+`Movie`, `User` and `Ticket` are plain data and earn no row here.
+
+## Class design
+
+<Mermaid caption="Static structure. Filled diamonds are ownership: a screen owns its seats, a show owns the per-show state of each seat. A booking refers to show seats but does not own them." chart={`classDiagram
+    direction LR
+    class SeatInventory {
+        <<interface>>
+        +hold(ShowId show, Set seats, BookingId by, Instant until) HoldResult
+        +extend(BookingId by, Instant until)
+        +book(BookingId by)
+        +release(BookingId by)
+        +releaseExpired(Instant now) int
+    }
+    class PaymentGateway {
+        <<interface>>
+        +charge(Money amount, String idempotencyKey) PaymentResult
+    }
+    class ShowSeat {
+        -SeatState state
+        -Instant holdExpiresAt
+        -BookingId heldBy
+        -long version
+        +isAvailable(Instant now) boolean
+    }
+    class Booking {
+        -BookingStatus status
+        -Money total
+        +transition(BookingStatus next)
+    }
+    class BookingService {
+        +hold(UserId u, ShowId s, Set seats) Booking
+        +pay(BookingId id) Booking
+        +cancel(BookingId id) Booking
+    }
+    class Show {
+        -Instant startsAt
+        +priceOf(Seat s) Money
+    }
+    Theatre "1" *-- "1..*" Screen
+    Screen "1" *-- "1..*" Seat
+    Show "1" --> "1" Screen : runs on
+    Show "1" *-- "1..*" ShowSeat : owns state of
+    ShowSeat "0..*" --> "1" Seat : refers to
+    Booking "0..*" --> "1" User
+    Booking "1" --> "1..10" ShowSeat : holds or books
+    BookingService --> SeatInventory
+    BookingService --> PaymentGateway
+    BookingService ..> Booking : creates
+    HoldExpiryJob --> SeatInventory : sweeps through
+    SqlSeatInventory ..|> SeatInventory
+`} />
+
+Twelve classes is the most one diagram should carry; in an interview draw eight and name the rest. `Booking` to `ShowSeat` is an association, not composition: a booking that expires leaves the seats intact. `BookingService` to `SeatInventory` is an association to an *interface*, which is where the concurrency decision plugs in.
+
+## Key interfaces and methods
+
+The per-show seat carries everything a hold needs to decide, plus a `version` for the optimistic approach under Concurrency.
+
+```java
+enum SeatState { FREE, HELD, BOOKED }
+
+final class ShowSeat {                                   // per-show state of one physical seat
+    private final ShowId show;  private final SeatId seat;
+    private SeatState state = SeatState.FREE;
+    private Instant holdExpiresAt;  private BookingId heldBy;
+    private long version;                                // bumped on every change, see Concurrency
+    boolean isAvailable(Instant now) {                   // an expired hold counts as free
+        return state == SeatState.FREE
+            || (state == SeatState.HELD && holdExpiresAt.isBefore(now));
+    }
+}
+```
+
+Expiry is decided at *read* time: a hold whose time has passed is free whether or not the sweeper has run. Correctness never depends on a background job being punctual; the job only tidies up.
+
+```java
+interface SeatInventory {
+    HoldResult hold(ShowId show, Set<SeatId> seats, BookingId by, Instant until);  // all or none
+    void extend(BookingId by, Instant until);             // a payment in flight stretches the hold
+    void book(BookingId by);                              // HELD -> BOOKED for that booking's seats
+    void release(BookingId by);                           // HELD -> FREE
+    int releaseExpired(Instant now);                      // the sweep: returns how many it freed
+}
+
+interface PaymentGateway {
+    PaymentResult charge(Money amount, String idempotencyKey);
+}
+```
+
+The service is a coordinator with no state of its own. The `Clock` is injected so a test can move time past a hold's expiry.
+
+```java
+final class BookingService {
+    private static final Duration HOLD_TTL = Duration.ofMinutes(10), PAY_GRACE = Duration.ofMinutes(5);
+    private final SeatInventory seats;  private final PaymentGateway payments;
+    private final BookingRepository bookings;  private final Clock clock;
+
+    Booking hold(UserId user, ShowId show, Set<SeatId> wanted) {
+        if (wanted.isEmpty() || wanted.size() > 10) throw new InvalidSelection(wanted.size());
+        Instant until = clock.instant().plus(HOLD_TTL);
+        Booking b = Booking.held(user, show, wanted, until);           // status HELD
+        HoldResult r = seats.hold(show, wanted, b.id(), until);        // all seats or none
+        if (!r.ok()) throw new SeatsUnavailable(r.taken());            // tells the user which ones
+        return bookings.save(b);
+    }
+
+    Booking pay(BookingId id) {
+        Booking b = bookings.find(id).orElseThrow(() -> new NoSuchBooking(id));
+        if (b.status() == BookingStatus.CONFIRMED) return b;           // idempotent: a retry gets the same answer
+        if (!b.isHeldAt(clock.instant())) throw new HoldExpired(id);
+        seats.extend(id, clock.instant().plus(PAY_GRACE));             // the hold cannot lapse mid-payment
+        bookings.save(b.transition(BookingStatus.PAYMENT_PENDING));
+        PaymentResult p = payments.charge(b.total(), "booking-" + id); // same key on every retry
+        if (!p.success()) { bookings.save(b.transition(BookingStatus.HELD)); throw new PaymentFailed(p.reason()); }
+        bookings.save(b.transition(BookingStatus.PAID, p.reference()));
+        seats.book(id);                                                // HELD -> BOOKED
+        return bookings.save(b.transition(BookingStatus.CONFIRMED));
+    }
+}
+```
+
+The status rules live in one place, a transition table on the enum. Six states with a handful of events do not justify one class per state; the [behavioural patterns lesson](/learn/design-patterns-behavioural) explains when the full State pattern would.
+
+```java
+enum BookingStatus {
+    HELD, PAYMENT_PENDING, PAID, CONFIRMED, EXPIRED, CANCELLED;
+    private static final Map<BookingStatus, Set<BookingStatus>> NEXT = Map.of(
+        HELD, Set.of(PAYMENT_PENDING, EXPIRED),   PAYMENT_PENDING, Set.of(PAID, HELD),
+        PAID, Set.of(CONFIRMED),                  CONFIRMED, Set.of(CANCELLED),
+        EXPIRED, Set.of(),                        CANCELLED, Set.of());
+    boolean canGoTo(BookingStatus next) { return NEXT.get(this).contains(next); }
+}
+// Booking.transition(next) throws IllegalTransition unless status.canGoTo(next)
+```
+
+## Interactions
+
+<Mermaid caption="The main flow. Note where the booking changes status, and that the inventory answers for all requested seats at once." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant U as User
+    participant B as BookingService
+    participant I as SeatInventory
+    participant P as PaymentGateway
+    U->>B: hold(show 42, seats E7 and E8)
+    B->>I: hold(show 42, E7 and E8, booking 9001, until 20.10)
+    alt both seats free
+        I-->>B: ok
+        B-->>U: Booking 9001 HELD, pay within 10 minutes
+        U->>B: pay(9001)
+        B->>I: extend(9001, now + 5 minutes)
+        Note over B: HELD to PAYMENT_PENDING
+        B->>P: charge(₹600, key booking-9001)
+        P-->>B: success, reference pay_77
+        Note over B: PAID
+        B->>I: book(9001)
+        Note over B: CONFIRMED
+        B-->>U: Ticket for E7 and E8
+    else E8 already held by someone else
+        I-->>B: taken E8
+        B-->>U: SeatsUnavailable E8
+    end
+`} />
+
+The booking's lifecycle is the state machine the interviewer wants to see drawn before the classes.
+
+<Mermaid caption="Booking lifecycle. The sweeper only acts on Held; a payment in flight extends the hold so it cannot lapse while the gateway is deciding." chart={`stateDiagram-v2
+    state "Payment pending" as PaymentPending
+    [*] --> Held: seats held, TTL starts
+    Held --> PaymentPending: pay starts, hold extended
+    Held --> Expired: TTL passes, seats freed
+    PaymentPending --> Paid: gateway reports success
+    PaymentPending --> Held: gateway declines, hold still valid
+    Paid --> Confirmed: seats marked BOOKED, ticket issued
+    Confirmed --> Cancelled: user cancels before cut-off, refund
+    Expired --> [*]
+    Cancelled --> [*]
+    Confirmed --> [*]
+`} />
+
+`Paid` and `Confirmed` are separate on purpose. Money is captured at `Paid`; seats are permanently booked at `Confirmed`. A crash between the two is the one place where the system holds a customer's money without a ticket, so it is made visible as a state that a recovery job can find and finish.
+
+<Callout type="analogy" title="The fifteen-minute table">
+
+A restaurant holds your table for fifteen minutes after your reservation time; if you do not arrive, the host gives it away. Where the analogy fails: the host notices that you did not turn up. Software has no host, so expiry must be a check in code that runs when someone *reads* the seat, with a sweeper behind it, or holds leak until a human notices.
+
+</Callout>
+
+## Design patterns used and why
+
+- **State machine as a transition table.** `BookingStatus` owns which transitions are legal, so nothing can move a booking from `Expired` to `Confirmed`. It stays an enum because the behaviour per state is tiny; if fees or notifications start to differ by state, promote it to State classes.
+- **Interface with swappable implementations, Strategy in shape.** `SeatInventory` has an in-memory implementation for tests and SQL implementations that differ in how they lock. The service does not know which it has.
+- **Observer, later.** A `BookingConfirmed` event lets ticket email, analytics and the seat-map cache react without `BookingService` knowing about them.
+- **Not used.** No Singleton for the service (the composition root creates and injects one) and no Factory, because bookings are already created in one place.
+
+## Edge cases and error handling
+
+| Case | Decision |
+| --- | --- |
+| Two users pick the same seat | All-or-nothing hold; the loser is told which seats are taken |
+| Three seats wanted, one taken | No partial holds: refuse all three and say which failed |
+| User abandons payment | The hold expires at TTL; readers see the seat as free at once, the sweeper tidies later |
+| Gateway times out or declines | Payment pending keeps its extended hold; a reconciliation job asks the gateway under the same idempotency key, then Paid or back to Held |
+| Crash between Paid and Confirmed | A recovery job finds Paid bookings and completes them, or refunds if the hold lapsed and the seats were resold |
+| Duplicate confirm: double click, repeated callback | `pay` returns the existing Confirmed booking; the gateway replays the first charge for the same key |
+| Hold expires a second before payment starts | `pay` checks the hold *before* charging and extends it, so money is never taken for a seat that may be resold mid-payment |
+| Clock skew across servers | Compare expiry with the database clock in SQL; inject `Clock` in code so tests control time |
+
+Domain failures are unchecked exceptions named from the domain, `SeatsUnavailable`, `HoldExpired`, `PaymentFailed`, `IllegalTransition`, thrown where the rule lives and translated to responses at the boundary, as the [error handling](/learn/error-handling) lesson recommends. `SeatsUnavailable` carries the list of seats, because the user's next action depends on it.
+
+## Concurrency
+
+Two requests read E7 as free and both try to hold it. In one process the fix is the one from [Concurrency and thread safety](/learn/concurrency-basics): name the shared state, then guard the check-then-act with a lock. One lock per show, not one for the whole inventory, so a sold-out blockbuster does not slow the afternoon show next door.
+
+```java
+final class InMemorySeatInventory implements SeatInventory {
+    private final ConcurrentHashMap<SeatKey, ShowSeat> seats = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<ShowId, ReentrantLock> locks = new ConcurrentHashMap<>();
+    private final Clock clock;
+
+    public HoldResult hold(ShowId show, Set<SeatId> wanted, BookingId by, Instant until) {
+        ReentrantLock lock = locks.computeIfAbsent(show, s -> new ReentrantLock()); // atomic: one lock per show
+        lock.lock();
+        try {                                              // check all, then mark all, under one lock
+            Instant now = clock.instant();
+            var taken = wanted.stream().filter(s -> !seats.get(new SeatKey(show, s)).isAvailable(now)).toList();
+            if (!taken.isEmpty()) return HoldResult.taken(taken);
+            wanted.forEach(s -> seats.get(new SeatKey(show, s)).hold(by, until));
+            return HoldResult.ok();
+        } finally { lock.unlock(); }
+    }
+}
+```
+
+`computeIfAbsent` is performed atomically, so two threads asking for the lock of a new show get the same lock object, and the `try`/`finally` around `unlock()` is not optional: an exception inside the block would otherwise leave the show locked forever. The sweeper is a `ScheduledExecutorService` task, either `scheduleWithFixedDelay` running `releaseExpired(now)` every few seconds, or one `schedule(release, 10, MINUTES)` per hold whose `ScheduledFuture` is cancelled when the booking is paid. The periodic form survives a restart if the holds are in the database; per-hold timers die with the process.
+
+Once bookings run on several servers, the lock has to live where the data lives, and there are two shapes to compare.
+
+**Optimistic: a version column.** Read the seats and remember each `version`. Write with a condition, and treat "zero rows updated" as "someone moved first".
+
+```sql
+UPDATE show_seat
+   SET state = 'HELD', held_by = :booking, hold_expires_at = :until, version = version + 1
+ WHERE show_id = :show AND seat_id = :seat AND version = :seen_version
+   AND (state = 'FREE' OR (state = 'HELD' AND hold_expires_at < now()));
+-- 0 rows updated: roll back the whole hold and report this seat as taken
+```
+
+Jakarta Persistence (JPA) does this for an entity field marked `@Version`: the provider checks and increments it on write and throws `OptimisticLockException` when another transaction changed the row first, marking the transaction for rollback.
+
+**Pessimistic: a row lock.** Lock the rows first, then decide, inside one transaction.
+
+```sql
+SELECT * FROM show_seat
+ WHERE show_id = :show AND seat_id IN (:seats)
+ ORDER BY seat_id
+   FOR UPDATE NOWAIT;   -- fail at once instead of queueing behind another buyer
+-- inspect state and expiry, then UPDATE the same rows, then COMMIT
+```
+
+In PostgreSQL, `FOR UPDATE` blocks other transactions from updating, deleting or locking those rows until the transaction ends; `NOWAIT` turns the wait into an immediate error, right for a seat because the user wants to pick another one, not queue. Lock rows in a fixed order, ascending seat id, so two bookings for E7 and E8 cannot deadlock by taking them in opposite orders; PostgreSQL would detect that and abort one transaction, but a consistent order means it never has to.
+
+<Mermaid caption="Two buyers, one seat, optimistic version check. Exactly one UPDATE matches the version it read." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant A as Asha
+    participant I as SeatInventory
+    participant R as Ravi
+    A->>I: hold(E7), read version 3
+    R->>I: hold(E7), read version 3
+    Note over I: both run UPDATE ... WHERE version = 3
+    I-->>A: 1 row updated, hold ok, version is now 4
+    I-->>R: 0 rows updated, SeatsUnavailable E7
+    Note over R: refresh the map and choose again
+`} />
+
+| | Optimistic (version column) | Pessimistic (row lock) |
+| --- | --- | --- |
+| Best when | Most seats are uncontested, the usual case | The last seats of a sold-out show, where retries would thrash |
+| On conflict | Zero rows updated: roll back, tell the user | Blocked, or an immediate error with NOWAIT |
+| Risk | Retry storms under heavy contention | Deadlock without a fixed lock order; long transactions if the app is slow |
+| Common form | JPA `@Version`, a conditional UPDATE | `SELECT ... FOR UPDATE`, JPA pessimistic write mode |
+
+Whichever you choose, add a backstop that needs no application code: a unique constraint on (show, seat) for booked seats. A bug can produce two holds; it cannot produce two committed bookings for one seat. Readers of the seat map never take locks; they read a snapshot (see [MVCC and isolation](/learn/mvcc-isolation)) that may be seconds stale.
+
+## Extensibility and trade-offs
+
+- **Pricing**: a `PricingPolicy` strategy on `Show`, so weekend, premium and dynamic pricing are new classes, not new branches.
+- **Seat units**: recliners and couple seats that sell as one unit become a `SeatGroup` the inventory holds atomically; the hold is already a set.
+- **Cancellation policy**: refund percentage by time-to-show is a second strategy; `Confirmed` to `Cancelled` is already in the table.
+- **Scale**: the hold is per show, so shows shard cleanly; the [high-level ticket booking case study](/learn/design-ticket-booking) continues from here.
+
+| Decision | You gain | You pay |
+| --- | --- | --- |
+| 10-minute hold | Time to pay, fewer frustrated users | Inventory off the market while carts are abandoned |
+| Read-time expiry plus sweeper | Correctness independent of job timing | Two places that must agree on the rule |
+| Optimistic by default | No locks on the common path | Retry logic in the service |
+| Database as the lock | Survives server crashes, one source of truth | A database round trip inside every hold |
+
+<Callout type="interview" title="The two-minute version">
+
+"Seats are physical; availability is per show, so `ShowSeat` carries the state. A hold is an all-or-nothing claim with a TTL, enforced when anyone reads the seat and tidied by a sweeper. The booking is a state machine, held, payment pending, paid, confirmed, with expired and cancelled as exits. Paying is idempotent on the booking id, and the gateway charge carries that id as its idempotency key. In the database the hold is a conditional UPDATE with a version column, or `SELECT FOR UPDATE NOWAIT` in seat order, with a unique constraint on booked seats as the backstop." Then expect the follow-up about the crash between paid and confirmed.
+
+</Callout>
+
+<DeepDive title="Go deeper: the hold as a Redis key">
+
+An alternative to seat rows is to make the hold itself a key with a time to live: `SET hold:show42:E7 booking9001 NX EX 600` sets the key only if it does not exist and expires it after 600 seconds, atomically. The Redis documentation presents this command as a simple lock and recommends a random token as the value, released by a script that deletes the key only if the token still matches, so a slow client cannot release a hold that has passed to someone else. The costs: a multi-seat hold is several keys, so all-or-nothing needs a script; an expired key vanishes without telling your booking table; and a single Redis node that fails loses every hold in flight, which the documentation flags by pointing at Redlock (see [distributed locks](/learn/distributed-locks)). A common split is Redis for the fast "is it held?" check behind the seat map and the database for the booking that must survive.
+
+</DeepDive>
+
+<mark>Separate the seat from its per-show state, make the hold an expiring all-or-nothing claim, and make every confirm idempotent on the booking id.</mark>

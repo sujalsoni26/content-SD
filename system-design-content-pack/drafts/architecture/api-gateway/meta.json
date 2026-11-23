@@ -1,0 +1,69 @@
+{
+  "slug": "api-gateway",
+  "title": "API gateway and backend-for-frontend",
+  "moduleId": "architecture",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Every client talks to every service directly, so TLS, authentication and rate limits are reimplemented per service and a phone needs five round trips to draw one screen.",
+  "summary": "An API gateway is a reverse proxy that knows your API: it terminates TLS, authenticates, rate-limits, routes and aggregates, and keeps business rules out. A backend-for-frontend gives each client type its own gateway, owned by that client's team.",
+  "catTip": "One door to the house, one human checking collars at it. Behind the door, a small flap sized for me and a big one for the dog. Nobody at the door decides what is for dinner.",
+  "recall": {
+    "q": "Which jobs belong at an API gateway, what must stay out, and why have a BFF per client type?",
+    "a": "TLS termination, authentication, rate limiting, routing, aggregation and protocol translation belong there because they apply to every request and need no domain knowledge. Business rules stay in the owning service, or the gateway becomes a monolith nobody owns. A BFF per client lets each front-end team shape and aggregate for its own screens without queueing behind a central API team."
+  },
+  "archNodes": ["gateway"],
+  "guide": {
+    "breaks": "Without a gateway each service terminates TLS, validates tokens and rate-limits on its own, clients must know every service address, and a phone pays several round trips per screen.",
+    "tradeoffs": "The gateway is an extra hop on every request and a single component in front of everything, so it must be stateless and replicated, its timeouts and limits must agree with the backends, and it must be kept free of business logic.",
+    "explainSimply": "An API gateway is like the reception desk of a large office: it checks your badge, keeps the queue orderly and points you to the right floor, but it does not do the work of any department. A backend-for-frontend is a separate desk for a particular kind of visitor, run by the people who know what that visitor needs.",
+    "hint": "List the things that are true of every request regardless of what it is for, then notice that business rules are not on the list."
+  },
+  "meow": "Collar checked at the door, one flap per cat size, dinner decided in the kitchen. Purr-fect separation.",
+  "quiz": [
+    {
+      "prompt": "Where should the rule 'orders above ₹5,000 require a second authentication factor' live?",
+      "options": [
+        "In the API gateway's request filter, so that every client gets it",
+        "In the mobile BFF, since most orders come from the phone app",
+        "In the order service's domain logic, with the gateway only passing a verified identity",
+        "In the service mesh as an authorisation policy between services"
+      ],
+      "answer": 2,
+      "explanation": "It is a business rule that depends on order data, so it belongs to the service that owns orders. The BFF is the strongest distractor, but it serves only one client, so web and partner orders would bypass the rule."
+    },
+    {
+      "prompt": "A company's single general-purpose API layer serves web, iOS and Android, and every mobile change waits weeks for the API team. Which change addresses the cause?",
+      "options": [
+        "Replace the API gateway with a service mesh",
+        "Give each client type its own backend-for-frontend, owned by that client's team, behind a shared edge gateway",
+        "Move response aggregation into each microservice",
+        "Run more gateway instances behind the load balancer"
+      ],
+      "answer": 1,
+      "explanation": "The bottleneck is ownership, not capacity, so adding instances changes nothing. A mesh handles service-to-service traffic, and aggregating inside microservices couples them to specific screens."
+    }
+  ],
+  "cards": [
+    {
+      "q": "List what an API gateway should do and name two things it should not.",
+      "a": "Do: TLS termination, authentication, rate limiting and quotas, routing and canary splits, request aggregation, protocol translation, access logs. Not: business rules and orchestration of writes; those belong in the owning service or a saga, otherwise the gateway becomes a monolith that no team owns."
+    },
+    {
+      "q": "Gateway, reverse proxy, service mesh: which handles east-west traffic, and what does a gateway know that a plain reverse proxy does not?",
+      "a": "The mesh handles east-west (service-to-service) traffic with mTLS, retries and circuit breakers. A gateway knows your API: clients, keys, routes and versions, so it can authenticate, meter and aggregate; a reverse proxy knows only hosts and paths."
+    }
+  ],
+  "glossary": [
+    { "term": "BFF", "full": "Backend For Frontend", "note": "A gateway built for one client type (phone, web, partner) and owned by the team that builds that client." }
+  ],
+  "sources": [
+    { "title": "Sam Newman, \"Pattern: Backends For Frontends\" (samnewman.io, 18 November 2015)", "url": "https://samnewman.io/patterns/architectural/bff/", "accessed": "2026-11-22", "supports": "one backend per user experience; seen at REA and SoundCloud; name coined by Phil Calçado; Stewart Gleadow's 'one experience, one BFF'; the general-purpose API backend as a bottleneck; tolerate duplication and extract on the third repetition", "status": "verified" },
+    { "title": "Chris Richardson, \"Pattern: API Gateway / Backends for Frontends\" (microservices.io)", "url": "https://microservices.io/patterns/apigateway.html", "accessed": "2026-11-22", "supports": "gateway responsibilities: routing, API composition, protocol translation, authentication; drawbacks: extra component and added response time; BFF variation with one gateway per client kind", "status": "verified" },
+    { "title": "Kong, \"Kong Gateway\" documentation", "url": "https://developer.konghq.com/gateway/", "accessed": "2026-11-22", "supports": "Kong Gateway as a cloud-native API gateway with plugins for authentication, rate limiting, load balancing with health checks and circuit breakers", "status": "verified" },
+    { "title": "Envoy Gateway documentation", "url": "https://gateway.envoyproxy.io/docs/", "accessed": "2026-11-22", "supports": "Envoy Gateway manages Envoy Proxy as an application gateway, configured through Kubernetes Gateway API resources", "status": "verified" },
+    { "title": "AWS, \"What is Amazon API Gateway?\" (Developer Guide)", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/welcome.html", "accessed": "2026-11-22", "supports": "REST, HTTP and WebSocket APIs; authorizers via IAM policies, Lambda authorizer functions and Cognito user pools; canary release deployments; AWS WAF integration", "status": "verified" },
+    { "title": "AWS, \"Lambda quotas\" (Developer Guide)", "url": "https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html", "accessed": "2026-11-22", "supports": "API Gateway default throttle of 10,000 requests per second versus Lambda's default concurrency of 1,000", "status": "verified" },
+    { "title": "AWS, \"Invoking Lambda with events from other AWS services\" (Developer Guide)", "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-services.html", "accessed": "2026-11-22", "supports": "Amazon API Gateway REST APIs wait 29 seconds by default (integration timeout)", "status": "verified" },
+    { "title": "Istio, \"Architecture\" (docs)", "url": "https://istio.io/latest/docs/ops/deployment/architecture/", "accessed": "2026-11-22", "supports": "the service-mesh column: Envoy sidecars as the data plane handling mTLS, retries, circuit breaking and telemetry between services", "status": "verified" }
+  ]
+}

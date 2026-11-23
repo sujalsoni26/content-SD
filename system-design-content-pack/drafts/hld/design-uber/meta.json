@@ -1,0 +1,121 @@
+{
+  "slug": "design-uber",
+  "title": "Design Uber",
+  "moduleId": "hld",
+  "level": "advanced",
+  "minutes": 18,
+  "problem": "A quarter of a million driver positions a second must be searchable by location, and each ride must go to exactly one driver even when two dispatchers race.",
+  "summary": "Driver positions stream into an in-memory grid of H3 or geohash cells that answers nearby-driver queries; a dispatcher ranks candidates by road ETA and offers trips one driver at a time; a conditional transaction assigns exactly one; surge and ETA run as separate services.",
+  "catTip": "Four hundred location pings arrive for every ride anyone actually books. I let the pings pile up in hexagonal baskets and forget the old ones, and I save my one careful transaction for the moment a driver says yes.",
+  "recall": {
+    "q": "A quarter of a million driver positions a second arrive, but only six hundred ride requests. What does that ratio tell you about where to spend durability and consistency?",
+    "a": "Spend none on positions: each sample supersedes the last, so they go to an in-memory grid index of H3 or geohash cells plus an append-only log, and losing one costs nothing. Spend all of it on the match: the trip and driver rows change state in one conditional transaction on one shard so exactly one driver is assigned, and the rider's request carries an idempotency key."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Writing every driver position to a database drowns it in a quarter of a million writes a second that are obsolete in four seconds, and matching without a conditional transaction sends two cars to one rider the first time a dispatcher retries.",
+    "tradeoffs": "Keeping positions only in memory means a crashed index node forgets a city for a few seconds, sharding trips and drivers by city makes cross-city trips a special case, and offering one driver at a time makes riders wait through declines.",
+    "explainSimply": "Picture a taxi rank with a whiteboard and a ledger. Drivers shout where they are and the dispatcher scribbles it on the whiteboard, wiping old scribbles as new shouts arrive. When a fare comes in, the dispatcher radios one driver at a time, and only when one says yes writes the fare in the ledger, in ink, against that driver.",
+    "hint": "Ask which data can be regenerated in four seconds and which data is money, and which shard key lets the trip and the driver change together."
+  },
+  "meow": "Pings in hex baskets, old ones forgotten. One driver, one trip, one transaction. Surge is someone else's whiskers. Meow.",
+  "quiz": [
+    {
+      "prompt": "Two dispatch workers, one of them retrying after a timeout, offer two different trips to the same idle driver, and the driver taps accept on both offers within a second. What guarantees the driver ends up with exactly one trip?",
+      "options": [
+        "The geo index removes the driver from its cell the moment the first offer is sent, so the second worker never sees them as a candidate",
+        "A conditional transaction on one shard: the driver row flips from available to assigned only if it is still available, and the trip row flips from requested to matched in the same transaction; the second accept changes zero rows and gets 409",
+        "The driver app disables the accept button after the first tap, so the second accept is never sent",
+        "A distributed lock on the rider id held by the dispatch worker for the length of the offer"
+      ],
+      "answer": 1,
+      "explanation": "Only the conditional update on the driver's own state, committed together with the trip's transition, is authoritative under a race. The geo index option is the strongest distractor: it is a lossy in-memory cache that both workers may have read before either offer was sent, and it was never the source of truth for assignment."
+    },
+    {
+      "prompt": "An airport taxi rank puts 3,000 idle drivers inside one 0.74 km² H3 cell. A rider two kilometres away requests a ride and dispatch pulls every driver in the covering cells for ETA ranking. What breaks, and what is the right fix?",
+      "options": [
+        "Replace the grid with a quadtree, which splits dense cells automatically as drivers arrive",
+        "The ETA ranker is handed thousands of candidates; because H3 cells nest, index the hot cell's drivers at a finer resolution too, query the finer level first and cap the candidates passed to ranking",
+        "Widen the search radius so that candidates from other cells dilute the dense one",
+        "Shard the hot cell's driver set across more index machines by driver id"
+      ],
+      "answer": 1,
+      "explanation": "The grid stays O(1) per position update and the nested resolution gives density adaptivity only where it is needed. The quadtree is the strongest distractor: it would adapt to density, but it pays for splits and merges on every one of 250k position writes a second, which is the reason the design chose a grid in the first place."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: a million drivers report their position every 4 s, and \"which drivers are within 2 km\" must answer in milliseconds. Decision and why?",
+      "a": "An in-memory grid index: map each position to an H3 (or geohash or S2) cell, keep a hash map from cell to drivers sharded by region, and answer a query by reading the cells in the k-ring around the pickup and filtering by distance. A grid makes a move one delete and one insert, where a quadtree would split or merge on every one of 250k writes a second; H3 is preferred because its hexagons have one neighbour distance, nest across 16 resolutions for hot cells like airports, and are the same cells surge uses. Positions are never written to a database: the next sample replaces them in 4 s."
+    },
+    {
+      "q": "Problem: a driver taps accept just as the offer expires, or two dispatchers race for the same driver, and two cars must never go to one rider. Decision and why?",
+      "a": "Shard trips and drivers by city so the two rows share a shard, then make the match one transaction with two conditional updates: the driver flips available to assigned only if still available and the trip flips requested to matched only if still requested; zero rows changed means 409 and re-dispatch, and a late accept is rejected by its expired offer id. Choose the shard key so the invariant lives on one shard; reach for a saga or a globally consistent store only when cross-region trips make that impossible, which is the trade Uber describes making in its own rebuild."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "ETA",
+      "full": "Estimated Time of Arrival",
+      "note": "A routing engine's road-graph travel time, corrected by a model trained on actual trips; the hot read path of a ride-hailing design."
+    }
+  ],
+  "sources": [
+    {
+      "title": "Uber Engineering, \"H3: Uber's Hexagonal Hierarchical Spatial Index\" (27 June 2018)",
+      "url": "https://www.uber.com/blog/h3/",
+      "accessed": "2026-11-22",
+      "supports": "hexagons minimise the quantisation error of users moving through a city; a hexagon has one neighbour distance where a square has two and a triangle three; sixteen resolutions with each child one seventh of the parent's area; Uber buckets marketplace events into hexagons and calculates surge pricing by measuring supply and demand in hexagons",
+      "status": "verified"
+    },
+    {
+      "title": "H3 documentation, \"Tables of cell statistics across resolutions\"",
+      "url": "https://h3geo.org/docs/core-library/restable",
+      "accessed": "2026-11-22",
+      "supports": "16 resolutions (0 to 15); average hexagon area 0.737 km² at resolution 8, 0.105 km² at resolution 9 and 0.015 km² at resolution 10; average edge length about 0.53 km at resolution 8 and 0.20 km at resolution 9",
+      "status": "verified"
+    },
+    {
+      "title": "Uber Engineering, \"Building Uber's Fulfillment Platform for Planet-Scale using Google Cloud Spanner\"",
+      "url": "https://www.uber.com/blog/building-ubers-fulfillment-platform/",
+      "accessed": "2026-11-22",
+      "supports": "the previous stack used Ringpop application-level sharding with an in-memory serial queue, an AP design that traded consistency for availability; saga-based multi-entity writes could leave entities inconsistent and needed manual repair; consistency became a primary evaluation criterion; the move to Cloud Spanner; billions of database transactions a day and billions of trips a month",
+      "status": "verified"
+    },
+    {
+      "title": "Uber Engineering, \"DeepETA: How Uber Predicts Arrival Times Using Deep Learning\"",
+      "url": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/",
+      "accessed": "2026-11-22",
+      "supports": "the routing engine estimates a sum of segment traversal times along the best path using map data and real-time traffic; machine learning predicts the residual between the routing-engine ETA and observed outcomes (ETA post-processing); the model must return within a few milliseconds; it is the highest-QPS model at Uber",
+      "status": "verified"
+    },
+    {
+      "title": "High Scalability, \"How Uber Scales Their Real-time Market Platform\" (14 September 2015)",
+      "url": "http://highscalability.com/blog/2015/9/14/how-uber-scales-their-real-time-market-platform.html",
+      "accessed": "2026-11-22",
+      "supports": "drivers send a location update every 4 seconds; Google S2 level-12 cells (about 3 to 6 km²) used as the sharding key for supply, with the circle around a rider covered by cells; DISCO ranks candidates by road-based ETA before offering a trip; ringpop as a consistent hash ring with SWIM gossip, an AP system; a summary of a conference talk, so secondary",
+      "status": "secondary"
+    },
+    {
+      "title": "Uber, \"How surge pricing works\"",
+      "url": "https://www.uber.com/us/en/drive/driver-app/how-surge-works/",
+      "accessed": "2026-11-22",
+      "supports": "surge applies when so many people request rides that there are not enough cars; it is specific to areas within a city and updates in real time; it appears as a multiplier, an additional surge amount or an upfront fare depending on the city",
+      "status": "verified"
+    },
+    {
+      "title": "S2 Geometry, \"S2 Cell Statistics\"",
+      "url": "https://s2geometry.io/resources/s2cell_statistics",
+      "accessed": "2026-11-22",
+      "supports": "31 levels (0 to 30); level-12 cells range from 3.04 to 6.38 km² with an average of 5.07 km²",
+      "status": "verified"
+    },
+    {
+      "title": "Wikipedia, \"Geohash\"",
+      "url": "https://en.wikipedia.org/wiki/Geohash",
+      "accessed": "2026-11-22",
+      "supports": "a 6-character geohash has an error of about ±0.61 km and a 7-character one about ±76 m (so a 6-character cell is roughly 1.2 km by 0.6 km); a longer shared prefix means spatially closer, but two close points on either side of a cell boundary (notably the Equator or Greenwich meridian) may share no prefix, so neighbours must be queried explicitly",
+      "status": "secondary"
+    }
+  ]
+}

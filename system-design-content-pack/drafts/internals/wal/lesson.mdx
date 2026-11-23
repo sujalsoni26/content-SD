@@ -1,0 +1,78 @@
+A **write-ahead log (WAL)** is an append-only file that receives a description of every change before the change may touch a data page. [ACID](/learn/acid) said durability is built on it; this lesson is the machinery beneath that sentence.
+
+## Why the log goes first
+
+A single `UPDATE` can dirty a heap page and a page in each of five indexes. Writing all six at commit means six random writes, and a half-updated database if the power fails halfway. Instead the engine appends one record describing the change to a sequential file, forces that file to disk, and acknowledges the commit. The pages stay dirty in the buffer pool (see [How a database stores data](/learn/storage-engines)) and are written whenever convenient.
+
+The rule has two halves: a dirty page may not be written until the log records describing its changes are on disk, and a commit may not be acknowledged until its commit record is. Each record carries a **log sequence number (LSN)**, its byte position in the log, and each page stores the LSN of the last record applied to it, so recovery can tell whether a page already contains a change.
+
+<Mermaid caption="Commit latency is the WAL flush. The data page is written later, and if the server crashes before that, recovery rebuilds it from the log." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client
+    participant DB as Database
+    participant W as WAL file
+    participant P as Data pages
+    C->>DB: COMMIT
+    DB->>W: append commit record
+    DB->>W: fsync
+    W-->>DB: durable
+    DB-->>C: committed
+    Note over P: Page still dirty in memory
+    DB->>P: write page (seconds or minutes later)
+`} />
+
+## fsync and group commit
+
+**fsync** pushes bytes past the operating system's cache and the drive's own volatile cache to permanent media before returning. PostgreSQL's documentation is blunt: many consumer drives and SSDs have volatile caches, some ignore flush commands by default, and turning `fsync` off (it is on by default) can leave an unrecoverable database after a power cut.
+
+With `synchronous_commit = off` the commit returns before the flush; a crash can lose transactions acknowledged in roughly the last three times `wal_writer_delay` (200 ms by default, so about 600 ms), but the database stays consistent, as if those transactions had been rolled back. InnoDB's `innodb_flush_log_at_trx_commit` offers the same choice: 1 (the default) flushes at every commit; 0 and 2 flush about once a second.
+
+A flush costs about the same whether it carries one commit record or fifty, so engines batch them: **group commit**. In PostgreSQL the first backend to reach the flush leads it, and any backend arriving while a flush is in progress rides on the next one; `commit_delay` (default 0) can hold the leader for a few microseconds to collect more followers.
+
+## Checkpoints, redo and undo
+
+A **checkpoint** flushes every dirty page and writes a checkpoint record; recovery starts from the latest one, and older log can be recycled. PostgreSQL begins a checkpoint every `checkpoint_timeout` (5 minutes) or when `max_wal_size` (1 GB) is about to be exceeded, spreading the page writes over 90% of the interval.
+
+Recovery follows the **ARIES** pattern (Mohan and colleagues, 1992):
+
+<Steps>
+
+1. **Analysis.** Scan the log from the last checkpoint to find which transactions were in flight and which pages might be dirty.
+2. **Redo.** Reapply every logged change whose page LSN shows it never reached disk, including changes by transactions that will be rolled back: ARIES calls this repeating history.
+3. **Undo.** Roll back uncommitted transactions, logging each undo step as a compensation record so a crash during recovery cannot undo it twice.
+
+</Steps>
+
+InnoDB keeps a redo log (under `#innodb_redo`) and separate **undo logs** holding each changed row's previous version. PostgreSQL is redo-only: its [MVCC](/learn/mvcc-isolation) scheme leaves old row versions in the heap, so an aborted transaction's rows simply stay invisible once its status is recorded as not committed, and vacuum removes them later.
+
+## Torn pages
+
+An 8 kB PostgreSQL page is written as sixteen 512-byte sectors, and power can fail between them, leaving a page half old and half new. PostgreSQL's answer is **full-page writes**: the first change to a page after each checkpoint logs the whole page image (`full_page_writes`, on by default). It inflates the log, which is why very short checkpoint intervals are expensive. InnoDB solves the same problem with a **doublewrite buffer**, writing each flushed page to a scratch area before its real position.
+
+<Callout type="analogy" title="Journal before ledger">
+
+An accountant writes every transaction in a dated journal first and posts to the ledger later. If the office burns down, the ledger is rebuilt by replaying the journal from the last reconciliation. The journal is the WAL, the reconciliation the checkpoint.
+
+</Callout>
+
+## One log, many readers
+
+PostgreSQL's streaming replication ships WAL records to a standby, which replays them exactly as recovery would (see [Replication strategies in depth](/learn/replication-internals)). **Logical decoding** reads the same log and turns it into row-level insert, update and delete events, delivered through a replication slot and an output plugin such as `pgoutput`; that is what logical replication and [change data capture](/learn/cdc) tools consume. The extra detail decoding needs is why `wal_level` must be raised from its default `replica` to `logical`.
+
+<Callout type="interview" title="Say the order of events">
+
+"Commit means the log record is flushed, not that the data page is written. Pages are written at checkpoints; after a crash we replay the log from the last checkpoint. Synchronous commit trades latency for durability; group commit lets one flush carry many commits."
+
+</Callout>
+
+<DeepDive title="Go deeper: what an LSN buys you">
+
+An LSN is a position in the log, so any progress can be expressed as one. A standby reports the LSN it has received, written and replayed, so replication lag is a difference of two LSNs in bytes as well as a time. Redo is idempotent because of LSNs: a record whose LSN is not beyond the page's is skipped, which lets recovery itself crash and restart safely.
+
+</DeepDive>

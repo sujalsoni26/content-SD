@@ -1,0 +1,396 @@
+A food-ordering system is an order lifecycle with money attached and three outside parties, a restaurant, a payment provider and a delivery partner, each of which can say no after you have said yes. The decision that carries the design: **the cart is a mutable scratchpad, the order is an immutable snapshot of it priced once in paise, and every step after placement is a state transition with a named compensation**. Payment is a separate, idempotent step. A restaurant rejecting an order after the charge succeeded is not an error to roll back; it is a refund to execute.
+
+## Requirements and assumptions
+
+**Functional requirements**
+
+- Browse restaurants and menus. A menu item has a price and an availability flag the restaurant can flip at any moment.
+- A cart holds items from one restaurant; quantities change; a coupon may apply.
+- Checkout validates availability and prices, computes subtotal, discount, tax and delivery fee, takes payment, and places the order.
+- An order moves through placed, accepted, preparing, ready, picked up and delivered. The restaurant may reject it; the customer may cancel it, free before acceptance and for a fee after; the system cancels it when no partner can be found.
+- A delivery partner is assigned around the time the food is ready.
+- Customer, restaurant and partner are notified of every change, and money is returned whenever it was taken and no food will arrive.
+
+**Assumptions**: one city, 2,000 restaurants, 20,000 orders an hour at peak, prices in rupees stored as paise, one tax rate applied to the discounted subtotal (the real rulebook is longer), a payment provider that honours idempotency keys, a restaurant that must answer within 3 minutes, one process.
+
+**Out of scope**: search and ranking, maps, provider integrations beyond an interface, restaurant onboarding, multi-restaurant carts.
+
+**Non-functional**: a customer is never charged twice for one checkout; a placed order's totals never change when the menu does; money arithmetic is exact; a rejection after payment always ends in a refund, even when the first refund call fails.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility | Knows |
+| --- | --- | --- |
+| Restaurant | Open or closed, its menu, how many orders its kitchen takes at once | id, menu, open flag, capacity |
+| Menu, MenuItem | The catalogue; an item has a price in paise and an availability flag | id, name, price, available |
+| Cart | Mutable scratchpad: one restaurant, lines of item id and quantity, a coupon code; holds no prices | restaurant id, lines, coupon code |
+| CartSnapshot | The frozen, priced view produced at checkout, with any problems found | priced lines, subtotal, problems |
+| Order | Immutable aggregate: items copied with names and prices, totals, address, payment, state | everything the receipt shows |
+| OrderItem | Name, unit price and quantity as they were at placement | name, unit price, quantity |
+| Payment | One per checkout key: amount, status, idempotency key, provider reference | key, amount, status, reference |
+| PaymentGateway | Charge and refund behind an interface | provider client |
+| Coupon | Strategy: whether it applies and how much it takes off | its rule |
+| DeliveryPartner | Identity, location and a status claimed atomically | id, location, status |
+| DeliveryAssignmentStrategy | Ranks candidate partners for an order | nothing, it is stateless |
+| OrderEventListener | Reacts to a transition | its channel |
+| OrderService | Facade: checkout, accept, reject, ready, pickedUp, delivered, cancel | all of the above |
+
+Cart and Order are kept apart on purpose. A cart sits for twenty minutes while prices and availability change under it, so it stores ids and quantities and re-reads everything at checkout. An order is a receipt: once placed, nothing in the menu can change what the customer agreed to pay.
+
+## Class design
+
+Two diagrams, because the catalogue and the order aggregate are one concern and the services around the order are another.
+
+<Mermaid caption="Catalogue, cart and order. The cart holds ids; the snapshot reads prices and availability at checkout; the order copies them so later menu edits cannot touch it." chart={`classDiagram
+    class Restaurant {
+        +String id
+        +boolean open
+        +menu() Menu
+    }
+    class Menu {
+        +item(String itemId) Optional
+    }
+    class MenuItem {
+        +String id
+        +String name
+        +Money price
+        -boolean available
+    }
+    class Cart {
+        -String restaurantId
+        -Map lines
+        +add(String itemId, int qty)
+        +snapshot(Menu menu, Coupon coupon) CartSnapshot
+    }
+    class CartLine {
+        +String itemId
+        +int quantity
+    }
+    class CartSnapshot {
+        +List lines
+        +Money subtotal
+        +List problems
+        +totals(TaxPolicy tax, Money deliveryFee) Totals
+    }
+    class Order {
+        +String id
+        +OrderState state
+        +List items
+        +Totals totals
+    }
+    class OrderItem {
+        +String name
+        +Money unitPrice
+        +int quantity
+    }
+    class Coupon {
+        <<interface>>
+        +rejectionReason(CartSnapshot cart) Optional
+        +discount(CartSnapshot cart) Money
+    }
+    class PercentOff
+    class Money {
+        +long paise
+        +plus(Money other) Money
+        +percent(BigDecimal rate) Money
+    }
+    Restaurant *-- Menu
+    Menu *-- MenuItem
+    Cart *-- CartLine
+    Cart ..> CartSnapshot : produces at checkout
+    CartSnapshot ..> MenuItem : reads price and availability
+    CartSnapshot --> Coupon : applies
+    PercentOff ..|> Coupon
+    Order *-- OrderItem
+    CartSnapshot ..> Order : becomes
+    OrderItem --> Money
+`} />
+
+<Mermaid caption="Services around the order. Payment and refund sit behind one interface, delivery assignment is a Strategy, listeners are the Observer, and a refund is a Task handed to the scheduler." chart={`classDiagram
+    class OrderService {
+        +checkout(String cartId, Address to, PaymentMethod method, String key) CheckoutResult
+        +accept(String orderId)
+        +reject(String orderId, String reason)
+        +cancel(String orderId, Party by)
+    }
+    class Order {
+        +moveTo(OrderState next, Instant at) OrderEvent
+    }
+    class Payment {
+        +String key
+        +Money amount
+        +PaymentStatus status
+        +String providerRef
+    }
+    class PaymentGateway {
+        <<interface>>
+        +charge(PaymentRequest request) PaymentResult
+        +refund(String providerRef, Money amount, String key) RefundResult
+    }
+    class DeliveryPartner {
+        -AtomicReference status
+        +tryAssign() boolean
+        +release()
+    }
+    class DeliveryAssignmentStrategy {
+        <<interface>>
+        +rank(Order order, List candidates) List
+    }
+    class NearestPartner
+    class OrderEventListener {
+        <<interface>>
+        +onTransition(OrderEvent event)
+    }
+    class CustomerNotifier
+    class RestaurantNotifier
+    class Task {
+        <<interface>>
+        +id() String
+        +run(TaskContext ctx)
+    }
+    class RefundPayment
+    OrderService --> Order : drives
+    OrderService --> PaymentGateway : charge
+    OrderService --> Payment : one per checkout key
+    OrderService --> DeliveryAssignmentStrategy : uses
+    OrderService o-- OrderEventListener : notifies
+    OrderService --> Task : submits compensations
+    NearestPartner ..|> DeliveryAssignmentStrategy
+    NearestPartner --> DeliveryPartner : claims with tryAssign
+    CustomerNotifier ..|> OrderEventListener
+    RestaurantNotifier ..|> OrderEventListener
+    RefundPayment ..|> Task
+    RefundPayment --> PaymentGateway : refund
+`} />
+
+## Key interfaces and methods
+
+Money first, because every other method depends on getting it right. Amounts are `long` paise, so sums and products are exact integer arithmetic that fails loudly on overflow. `BigDecimal` appears in exactly one place, where a fraction does: a percentage. The constructor refuses a negative amount, which is the fail-fast rule from [Error handling](/learn/error-handling) applied to the one type that must never be wrong.
+
+```java
+record Money(long paise) implements Comparable<Money> {
+    Money { if (paise < 0) throw new IllegalArgumentException("amount must be >= 0, got " + paise); }
+    Money plus(Money o)  { return new Money(Math.addExact(paise, o.paise)); }
+    Money minus(Money o) { return new Money(Math.subtractExact(paise, o.paise)); }     // negative result fails in the constructor
+    Money times(int qty) { return new Money(Math.multiplyExact(paise, qty)); }
+    Money percent(BigDecimal rate) {                                                     // the only place a fraction appears
+        BigDecimal exact = BigDecimal.valueOf(paise).multiply(rate);
+        return new Money(exact.setScale(0, RoundingMode.HALF_EVEN).longValueExact());
+    }
+    public int compareTo(Money o) { return Long.compare(paise, o.paise); }
+}
+```
+
+Three `BigDecimal` traps are worth saying out loud. Build rates from strings (`new BigDecimal("0.18")`), because `new BigDecimal(0.18)` carries the binary error of the `double`. Compare with `compareTo`, because `equals` treats 2.0 and 2.00 as different. And name the rounding mode: `HALF_UP` is school arithmetic, `HALF_EVEN` minimises cumulative bias over many lines; either is defensible, and the mistake is to let a default decide.
+
+A coupon is a Strategy with two methods, and ineligibility is a *value*, because an expired coupon is an expected outcome the checkout screen will show, not a failure that stops the operation:
+
+```java
+interface Coupon {
+    Optional<String> rejectionReason(CartSnapshot cart);     // present means "does not apply, and here is why"
+    Money discount(CartSnapshot cart);
+}
+record PercentOff(BigDecimal rate, Money cap, Money minimumSubtotal) implements Coupon {
+    public Optional<String> rejectionReason(CartSnapshot c) {
+        return c.subtotal().compareTo(minimumSubtotal) < 0 ? Optional.of("minimum order " + minimumSubtotal) : Optional.empty();
+    }
+    public Money discount(CartSnapshot c) { return Money.min(c.subtotal().percent(rate), cap); }
+}
+```
+
+Totals are computed once, from the snapshot, with one rounding step:
+
+```text
+subtotal  = sum over lines of unitPrice × quantity        (paise, exact)
+discount  = min(coupon.discount(snapshot), subtotal)
+taxable   = subtotal − discount
+tax       = round(taxable × taxRate)                      (the one rounding, back to whole paise)
+total     = taxable + tax + deliveryFee + platformFee
+```
+
+The order's states and transitions are an enum table, the same shape as the trip in [ride booking](/learn/lld-ride-booking):
+
+```java
+enum OrderState {
+    PLACED, ACCEPTED, PREPARING, READY, PICKED_UP, DELIVERED, REJECTED, CANCELLED;
+
+    boolean canMoveTo(OrderState next) {
+        return switch (this) {
+            case PLACED    -> next == ACCEPTED || next == REJECTED || next == CANCELLED;
+            case ACCEPTED  -> next == PREPARING || next == CANCELLED;
+            case PREPARING -> next == READY || next == CANCELLED;      // restaurant-initiated only
+            case READY     -> next == PICKED_UP;
+            case PICKED_UP -> next == DELIVERED;
+            case DELIVERED, REJECTED, CANCELLED -> false;
+        };
+    }
+}
+```
+
+Checkout returns a sealed result rather than throwing, because all three outcomes are ones the app branches on. The idempotency key is the client's, generated once per checkout attempt, and it is the key the gateway sees, so a retried charge returns the original answer:
+
+```java
+sealed interface CheckoutResult permits Placed, NeedsAttention, Declined {}
+record Placed(Order order) implements CheckoutResult {}
+record NeedsAttention(List<CartProblem> problems) implements CheckoutResult {}    // unavailable item, price changed
+record Declined(String reason) implements CheckoutResult {}
+
+CheckoutResult checkout(String cartId, Address to, PaymentMethod method, String key) {
+    Order done = ordersByKey.get(key);
+    if (done != null) return new Placed(done);                                     // retry of a checkout that succeeded
+    Cart cart = carts.get(cartId);
+    CartSnapshot snap = cart.snapshot(menus.of(cart.restaurantId()), coupons.lookup(cart.couponCode()));
+    if (!snap.problems().isEmpty()) return new NeedsAttention(snap.problems());
+    Totals totals = snap.totals(taxPolicy, deliveryFees.quote(cart.restaurantId(), to));
+    PaymentResult r = gateway.charge(new PaymentRequest(key, totals.total(), method));  // same key, same answer
+    if (!r.captured()) return new Declined(r.reason());                            // nothing placed, nothing to undo
+    Order order = Order.place(snap, totals, to, Payment.captured(key, r), clock.instant());
+    ordersByKey.put(key, order);
+    scheduler.schedule(new AutoReject(order.id()), new OneShot(clock.instant().plus(Duration.ofMinutes(3))));
+    publish(order.placedEvent());
+    return new Placed(order);
+}
+```
+
+Rejection after payment is the compensation that gives this lesson its shape. The refund is not a call made inline and hoped for; it is a `Task` handed to the scheduler with retries, keyed so that running it twice refunds once:
+
+```java
+void reject(String orderId, String reason) {
+    Order order = orders.get(orderId);
+    OrderEvent e = order.moveTo(OrderState.REJECTED, clock.instant());      // IllegalTransition if already accepted
+    scheduler.schedule(new RefundPayment(gateway, order.payment()), new OneShot(clock.instant()), backoff);
+    publish(e.withReason(reason));
+}
+
+record RefundPayment(PaymentGateway gateway, Payment payment) implements Task {
+    public String id() { return "refund-" + payment.key(); }
+    public void run(TaskContext ctx) {                                      // idempotent: same refund key on every attempt
+        RefundResult r = gateway.refund(payment.providerRef(), payment.amount(), "refund-" + payment.key());
+        if (!r.ok()) throw new RetryableFailure(r.reason());
+        payment.refunded(r.providerRef());
+    }
+}
+```
+
+Delivery assignment reuses the matching idea from ride booking wholesale: an index of available partners, a `DeliveryAssignmentStrategy` that ranks them, and a `tryAssign()` that is `compareAndSet(AVAILABLE, ASSIGNED)` on the partner's status, so two orders ready at the same moment cannot take one partner. The new question is *when*: assigning at acceptance lets the partner arrive as the food is ready but idles them if the kitchen is slow; assigning at ready leaves food waiting. The condition is the gap between predicted preparation time and partner ETA, and it lives in the strategy.
+
+## Interactions
+
+<Mermaid caption="Checkout twice: the first attempt finds an item that went unavailable while it sat in the cart, the second pays and places. Notification and the auto-reject timer hang off the Placed transition." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Customer app
+    participant O as OrderService
+    participant K as Cart
+    participant M as Menu
+    participant G as Payment gateway
+    participant S as Scheduler
+    participant L as Listeners
+    participant R as Restaurant console
+    C->>O: checkout(cart, address, card, key K1)
+    O->>K: snapshot(menu, coupon)
+    K->>M: price and availability per line
+    M-->>K: 2 lines ok, paneer tikka unavailable
+    K-->>O: snapshot with 1 problem
+    O-->>C: NeedsAttention, paneer tikka unavailable
+    C->>O: checkout(cart without tikka, key K2)
+    O->>K: snapshot(menu, coupon)
+    K-->>O: subtotal ₹540, discount ₹54, no problems
+    O->>G: charge(key K2, ₹540.30)
+    G-->>O: captured, ref P-77
+    Note over O: Order O-9001 Placed, totals frozen
+    O->>S: schedule(AutoReject O-9001, in 3 min)
+    O->>L: onTransition(Placed)
+    L-->>R: new order prints in the kitchen
+    O-->>C: Placed, O-9001
+    R->>O: accept(O-9001)
+    O->>L: onTransition(Placed to Accepted)
+    L-->>C: accepted, about 25 minutes
+    Note over S: AutoReject fires at 3 min, finds Accepted, does nothing
+`} />
+
+<Mermaid caption="Order lifecycle. Every arrow into Rejected or Cancelled after payment carries a refund, full or partial, as a compensation job." chart={`stateDiagram-v2
+    state "Picked up" as PickedUp
+    [*] --> Placed: payment captured, snapshot frozen
+    Placed --> Accepted: restaurant accepts within 3 min
+    Placed --> Rejected: restaurant rejects or 3 min pass, refund queued
+    Placed --> Cancelled: customer cancels, full refund
+    Accepted --> Preparing: kitchen starts
+    Accepted --> Cancelled: customer cancels, fee kept, rest refunded
+    Preparing --> Ready: kitchen done
+    Preparing --> Cancelled: restaurant cannot complete, full refund
+    Ready --> PickedUp: partner confirms pickup
+    PickedUp --> Delivered: partner hands over
+    Delivered --> [*]
+    Rejected --> [*]
+    Cancelled --> [*]
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Strategy | Coupon | Percent off, flat off, free delivery, each tested alone with a snapshot | One coupon type for ever |
+| Strategy | DeliveryAssignmentStrategy | Nearest, fewest active orders, batch with a neighbouring order | One rule, never tuned |
+| State, as a table | OrderState | Eight states, a handful of events, little behaviour per state | Per-state behaviour grows: then classes |
+| Observer | OrderEventListener | Customer, restaurant, partner and analytics react without the service knowing them | A single fixed listener |
+| Command | RefundPayment as a Task | A compensation that can be queued, retried and audited | A refund can never fail |
+| Static factory | Order.place | One place turns a snapshot and totals into an order | Optional fields multiply, then a Builder |
+| Facade | OrderService | Apps see seven methods, not carts, menus, gateways or partners | One caller |
+
+Absent on purpose: a Builder for Order until instructions, tips and scheduled times multiply its optional fields, and Memento for the snapshot, which exists to be priced and placed, not restored.
+
+## Edge cases and error handling
+
+- **An item goes unavailable while it sits in the cart.** The cart never stored its price or availability, so `snapshot` re-reads both and reports a `CartProblem`; checkout returns `NeedsAttention` and the app shows the line to fix. The flag on `MenuItem` is `volatile`: one writer, many readers, visibility is all it needs. An Observer that pushes menu changes into open carts is right only when the screen must update live; polling at checkout is enough here.
+- **A price changes between cart and checkout.** The snapshot compares the price the customer last saw with the current one and reports a problem that needs confirmation. After placement the question cannot arise, because `OrderItem` copied the price.
+- **The payment call times out.** The outcome is unknown, so the service never charges again with a fresh key; it queries the gateway by the same key, or lets the customer's retry carry the same key, and the gateway returns the original result (see [Idempotency](/learn/idempotency)).
+- **Charged, then the process dies before the order is saved.** A reconciler job compares captured payments with orders and refunds the orphans, which only works if the payment intent was persisted with its key before the gateway call.
+- **Restaurant rejects after payment.** `reject` moves the order and schedules `RefundPayment`. If the refund fails five times it is `Failed` on the scheduler and lands in an operator queue; the customer is told, and the money is never silently forgotten.
+- **Restaurant is silent for 3 minutes.** `AutoReject` runs `moveTo(REJECTED)`; if the restaurant accepted meanwhile, the transition is illegal and the job treats that specific exception as "nothing to do".
+- **Coupon used twice at once.** Redemption is a claim, `redemptions.putIfAbsent(code + customerId, orderId)`, released when the order is rejected or cancelled.
+
+<Callout type="analogy" title="The waiter's order pad">
+
+A waiter writes your order on a pad and the kitchen cooks from the pad, never from the menu board, so a price change at the door does not change your bill. If the kitchen runs out of an item after the ticket is in, the waiter comes back, strikes it off and returns the money; nobody pretends the ticket never existed. The pad is the snapshot, the strike-through is the compensation. Where the analogy fails: the waiter can see the kitchen. Our service hears about a rejection seconds later over a network, so it must assume that payment, rejection and the customer's own cancellation can arrive in any order, which is why every transition is checked against the table.
+
+</Callout>
+
+## Concurrency
+
+Shared mutable state, named first: each menu item's availability, each cart, each order's state, the payments-by-key map, each partner's status, each restaurant's kitchen capacity, and the listener list.
+
+Availability is one boolean with one writer, so `volatile` gives readers visibility and nothing more is needed. A cart is confined to one customer; when two devices edit it, its methods are `synchronized`, which is cheap because nobody else contends. Order state is guarded by the order's own monitor, one lock per order, and no code path takes two, so there is no ordering to get wrong. A partner's status is an `AtomicReference` claimed with `compareAndSet`, the parking lot's spot flag and the ride's driver status in a third costume. Kitchen capacity is a `Semaphore` per restaurant: `accept` calls `tryAcquire()`, which returns at once rather than waiting, and a full kitchen becomes a "busy" response instead of a blocked thread; `Ready` releases the permit.
+
+Double charging is prevented twice. Inside the process, `ordersByKey` is a `ConcurrentHashMap` and a key reservation with `putIfAbsent` before the gateway call makes two concurrent checkouts with the same key produce one order. Across the network, the gateway's own idempotency on the same key is what protects the money, because the process can die between the charge and the `put`. Listeners live in a `CopyOnWriteArrayList` and each is isolated in its own `try`, so a slow analytics hook cannot stop the kitchen printer.
+
+## Extensibility and trade-offs
+
+- **A new coupon.** One record implementing `Coupon`. Stacking two coupons is a `CompositeCoupon` that applies them in a stated order, not a flag.
+- **A new payment provider.** One `PaymentGateway` implementation. The idempotency key is ours, so the adapter translates it into whatever the provider calls theirs.
+- **Each party as its own service.** Payment, restaurant and delivery each become a service, and the compensations above become a saga with the order service as orchestrator. That is [Sagas](/learn/sagas), and the condition for crossing into it is when one process no longer owns all three.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| Cart holds ids, order copies prices | Carts survive menu edits, orders are immune to them | A re-read and a confirmation step at checkout |
+| Money as long paise, BigDecimal for rates | Exact sums, one explicit rounding | Every percentage passes through one method, by design |
+| Payment before placement | A placed order is always paid | Rejections need a refund, not a void |
+| Refund as a retried Task | No forgotten refunds, auditable | A failed refund is a job to watch, not an exception to catch |
+| Enum table for OrderState | Twelve lines, exhaustive switch | Per-state behaviour has nowhere to live yet |
+
+<Callout type="interview" title="The two-minute version">
+
+"The cart is a mutable scratchpad of item ids and quantities; checkout snapshots it against the live menu, reports problems as a value, prices it once in paise with BigDecimal only for percentages, and charges with a client idempotency key before placing. The order is immutable except for its state, which is an enum transition table: placed, accepted, preparing, ready, picked up, delivered, with rejected and cancelled as exits. Anything that fails after payment is a compensation, a refund Task on the scheduler with retries and the same key every time, not a rollback. Delivery partners are claimed with compareAndSet like drivers, coupons and assignment are Strategies, and listeners hear every transition." Then ask whether they want the saga version.
+
+</Callout>
+
+<DeepDive title="Go deeper: authorise now, capture on acceptance">
+
+Charging at checkout makes rejection the expensive path: money left the customer and must come back. Where a payment method supports it, a two-step flow authorises the amount at checkout, captures it when the restaurant accepts, and voids the authorisation on rejection. The common failure becomes a void, which is cheaper and faster for the customer than a refund. The costs: `Payment` gains an Authorised state and a capture that can itself fail after acceptance, so the compensation moves rather than disappears (a failed capture after the kitchen has started is a harder conversation than a refund); authorisations expire, so a restaurant that accepts late may find nothing to capture; and not every payment method supports a hold, so the charge-then-refund path must exist anyway. The condition that decides is the rejection rate: with rejections rare, one path is simpler; with rejections common, the void saves real money and goodwill.
+
+</DeepDive>

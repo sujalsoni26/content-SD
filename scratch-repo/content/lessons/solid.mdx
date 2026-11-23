@@ -1,0 +1,152 @@
+**SOLID** is five rules of thumb for deciding where code should live so that one change lands in one place. Robert C. Martin collected them in a 2000 paper and a series of articles; Michael Feathers later arranged the initials into the acronym. Each principle names a smell, a direction to move in, and a cost that tells you when to stop.
+
+## S: single responsibility
+
+The **single responsibility principle (SRP)** says a class should have one reason to change, which Martin later sharpened to: gather what changes for the same reasons, separate what changes for different reasons. The smell is a class answering to several stakeholders.
+
+```java
+class Invoice {
+    private final List<Line> lines = new ArrayList<>();
+    Money total() { return lines.stream().map(Line::amount).reduce(Money.ZERO, Money::add); }
+    void print(PdfWriter out) { /* fonts, layout, logo */ }           // the design team changes this
+    void save(Connection db) { /* INSERT INTO invoices ... */ }      // the database team changes this
+}
+```
+
+Finance, design and the database team all edit `Invoice`. Split along the reasons:
+
+```java
+final class Invoice { /* lines and total() as before */ }
+final class InvoicePrinter { void print(Invoice invoice, PdfWriter out) { /* layout */ } }
+interface InvoiceRepository { void save(Invoice invoice); }
+```
+
+**Trade-off.** Three classes instead of one, and a reader now follows a feature across files. Taken to the letter, SRP produces classes of one method each; the unit is *reason to change*, not method count.
+
+## O: open for extension, closed for modification
+
+The **open/closed principle** says you should be able to add behaviour without editing code that already works. The smell is a chain of conditionals that grows with every new case.
+
+```java
+Money discounted(Money subtotal, Coupon c) {
+    if (c.kind() == Kind.FLAT)    return subtotal.minus(c.amount());
+    if (c.kind() == Kind.PERCENT) return subtotal.times(1 - c.percent() / 100.0);
+    throw new IllegalArgumentException("unknown coupon");   // every new kind edits this method
+}
+```
+
+Put the varying part behind an interface, so a new kind of discount is a new class and `Checkout` is never reopened:
+
+```java
+interface Discount { Money apply(Money subtotal); }
+record FlatDiscount(Money amount) implements Discount {
+    public Money apply(Money subtotal) { return subtotal.minus(amount); }
+}
+// PercentDiscount, FestivalDiscount: new classes; Checkout takes a List<Discount> and never changes
+```
+
+This is the Strategy pattern, composition applied to behaviour as in [Composition over inheritance](/learn/composition-over-inheritance); a new subclass in a hierarchy does the same job. **Trade-off.** You can only close a class against changes you anticipated, and an abstraction built for a change that never comes is dead weight; apply the principle once the second case has shown the axis of change.
+
+## L: Liskov substitution
+
+The **Liskov substitution principle (LSP)**: anywhere the program expects a parent, a subclass must work without the caller noticing. Barbara Liskov stated the idea in 1987 and formalised it with Jeannette Wing in 1994. The smell is a subclass that weakens a promise: stricter preconditions, weaker postconditions, or an `UnsupportedOperationException` where the parent did the work.
+
+```java
+class Square extends Rectangle {                  // Rectangle has setWidth, setHeight, area
+    @Override void setWidth(int w)  { super.setWidth(w);  super.setHeight(w); }
+    @Override void setHeight(int h) { super.setWidth(h);  super.setHeight(h); }
+}
+// r.setWidth(5); r.setHeight(4); assert r.area() == 20;   fails when r is a Square
+```
+
+The square keeps itself square and breaks every caller promised independent sides: a square is a rectangle, but a *mutable* square is not a mutable rectangle. Remove the broken promise rather than the subclass:
+
+```java
+sealed interface Shape permits Rectangle, Square { int area(); }
+record Rectangle(int w, int h) implements Shape { public int area() { return w * h; } }
+record Square(int side) implements Shape { public int area() { return side * side; } }
+```
+
+Java's own collections show the cost of bending this rule: `List.add` is documented as an "optional operation", and an unmodifiable list throws on it, so every caller holding a `List` has to know which kind it was given. **Trade-off.** Honouring LSP sometimes means flatter hierarchies and a little duplication; that is cheaper than every caller carrying an `instanceof`.
+
+## I: interface segregation
+
+The **interface segregation principle** says no client should be forced to depend on methods it does not use. The smell is a fat interface that every client, and every test fake, must implement in full.
+
+```java
+interface PaymentGateway {                        // one interface, four unrelated clients
+    Receipt charge(Money amount, Card card);      void refund(Receipt receipt);
+    void payout(Merchant to, Money amount);       Report reconcile(LocalDate day);
+}
+```
+
+Checkout only charges; the finance batch only reconciles; a change to `reconcile` recompiles `Checkout` and breaks its fake. Split by client:
+
+```java
+interface Charger  { Receipt charge(Money amount, Card card); }
+interface Refunder { void refund(Receipt receipt); }
+final class RazorpayGateway implements Charger, Refunder /* , Payer, Reconciler */ { /* ... */ }
+```
+
+One class can still implement all four; what changes is what each caller is allowed to see. **Trade-off.** Many tiny interfaces are a navigation cost, and an interface per method is the over-correction. Segregate along clients, not along methods.
+
+## D: dependency inversion
+
+The **dependency inversion principle**: high-level policy should not depend on low-level detail; both should depend on abstractions, and the abstractions should belong to the policy. The smell is business logic that constructs its own infrastructure.
+
+```java
+class OrderService {
+    private final MySqlOrderRepository repo = new MySqlOrderRepository("jdbc:mysql://prod/orders");
+    private final SmtpMailer mailer = new SmtpMailer("smtp.internal");
+    void place(Order o) { repo.save(o); mailer.send(o.customerEmail(), "Order placed"); }
+}
+```
+
+`OrderService` cannot be tested without MySQL and a mail server, and swapping either means editing the policy. Invert the arrow: the service declares the interfaces it needs and owns, and someone outside hands in the implementations.
+
+```java
+class OrderService {
+    private final OrderRepository repo;  private final Mailer mailer;
+    OrderService(OrderRepository repo, Mailer mailer) { this.repo = repo; this.mailer = mailer; }
+    void place(Order o) { repo.save(o); mailer.send(o.customerEmail(), "Order placed"); }
+}
+```
+
+<Mermaid caption="Dependency inversion: the policy owns the interface and the detail depends on it. Both arrows now point towards the abstraction." chart={`classDiagram
+    class OrderRepository {
+        <<interface>>
+        +save(Order order)
+    }
+    class OrderService {
+        +place(Order order)
+    }
+    OrderService --> OrderRepository : depends on
+    MySqlOrderRepository ..|> OrderRepository : implements
+    InMemoryOrderRepository ..|> OrderRepository : implements, in tests
+`} />
+
+**Trade-off.** Somebody must now construct the graph and pass the pieces in, which is the subject of [Interfaces, abstractions and dependency injection](/learn/interfaces-abstractions-di). Inverting a dependency on something that will never vary and never needs faking, such as a `Money` arithmetic helper, is ceremony.
+
+<Callout type="analogy" title="A kitchen with stations">
+
+A well-run kitchen already follows all five. One cook per station, so a change to the sauce never touches the grill (single responsibility). A new dish is a new recipe card, not a rewritten menu (open/closed). Any trained cook can cover any station without the diners noticing (Liskov). The waiter's pad shows only what the waiter needs, not the supplier's price list (interface segregation). The head chef asks for "a fridge", not one brand of fridge, and the fitters decide which one arrives (dependency inversion). Where the analogy stops: a kitchen is designed once and rarely rebuilt, while code changes weekly, which is why each principle here comes with the smell that says it is being over-applied.
+
+</Callout>
+
+## When SOLID becomes the problem
+
+Every principle above answers a felt pain: a class edited by three teams, a conditional that keeps growing, a subclass that surprises callers, a fake with twelve stubbed methods, a test that needs a database. Applied before the pain, the same moves produce a familiar codebase: an interface for every class with exactly one implementation, named `FooService` and `FooServiceImpl`; `Manager`, `Handler` and `Helper` classes whose single responsibility nobody can state; a feature spread across fifteen files of three lines each; abstractions built for a second implementation that never arrives.
+
+The smell of over-application is <mark>indirection without a second case</mark>. SOLID describes a direction to move when change hurts, not a target state to reach on day one.
+
+<Callout type="interview" title={"\"Which one would you break here?\""}>
+
+Name the principle you are deliberately not applying, and why: "I am keeping the pricing switch; there are three cases, they have not changed in a year, and a strategy per case would be more code than the switch. If a fourth arrives I will extract it then."
+
+</Callout>
+
+<DeepDive title="Go deeper: substitutability as a contract">
+
+Liskov and Wing's formal version is about behaviour, not signatures. A subtype may not strengthen a method's preconditions (demand more of callers), may not weaken its postconditions (promise less), must preserve the parent's invariants, and must not introduce state changes the parent's callers could not expect from its history. Checked exceptions and `UnsupportedOperationException` are postcondition weakening in disguise. The practical test: write the assertion a caller of the parent would write, then run it against the child.
+
+</DeepDive>

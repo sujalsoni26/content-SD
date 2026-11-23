@@ -1,0 +1,65 @@
+{
+  "slug": "lld-food-ordering",
+  "title": "LLD: Food ordering system",
+  "moduleId": "lld-practice",
+  "level": "advanced",
+  "minutes": 14,
+  "problem": "A menu price changes while the cart sits there, a double tap charges twice, and the restaurant rejects an order whose payment has already gone through.",
+  "summary": "Keep the cart as a mutable scratchpad and the order as an immutable snapshot priced once in paise, pay as a separate idempotent step, drive the order through an enum state machine, and treat failure after payment as a compensating refund job, not a rollback.",
+  "catTip": "My bowl becomes an order once it is paid for and frozen; the humans cannot re-price it when the menu changes. If the kitchen says no after I have paid, I do not pretend I never ordered. I run the refund, loudly.",
+  "recall": {
+    "q": "What is the key design decision in the food-ordering case study, and how does it handle a restaurant that rejects an order after the payment has already been captured?",
+    "a": "Keep the cart as a mutable scratchpad and make the order an immutable priced snapshot driven by a state machine, with payment as a separate idempotent step. A rejection after capture is not rolled back: the order moves to Rejected and a RefundPayment compensation runs as a retried, idempotent Task on the scheduler, the in-process shape of a saga."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a frozen snapshot, one idempotency key per checkout and named compensations, a placed order's total drifts with the menu, a retried charge takes the money twice, and a rejection after payment leaves the customer unpaid because there is nothing to roll back.",
+    "tradeoffs": "Re-reading the menu at checkout adds a confirmation step, paying before placement turns every rejection into a refund, and modelling refunds as retried jobs means a failed refund is something to monitor rather than an exception to catch.",
+    "explainSimply": "A waiter writes your order on a pad and the kitchen cooks from the pad, never from the menu board, so a price change at the door cannot change your bill. If the kitchen runs out of a dish after the ticket is in, the waiter strikes it off and gives the money back rather than pretending the ticket never existed. The pad is the order; the strike-through is the refund.",
+    "hint": "Ask what the cart stores, when the price becomes final, and what happens to money that has already moved when a later step says no."
+  },
+  "meow": "Cart is scribbles, order is stone. Paid once with one key. Kitchen says no? Refund job, not a rollback. Exact to the paisa, meow.",
+  "quiz": [
+    {
+      "prompt": "A 20% coupon applies to a ₹1,234.50 cart and tax is a fractional rate. Which way of computing totals avoids the one-paisa discrepancies finance keeps finding?",
+      "options": [
+        "Keep all amounts as double and round to two decimals when displaying",
+        "Store amounts as long paise, do sums and products in integer arithmetic, and use BigDecimal only for the percentage, rounding once with an explicit RoundingMode back to whole paise",
+        "Store amounts as BigDecimal built with new BigDecimal(0.2) and compare them with equals()",
+        "Store amounts as float rupees and call Math.round after every step"
+      ],
+      "answer": 1,
+      "explanation": "Integer paise are exact, and the single explicit rounding is a stated business rule. The BigDecimal option is the strongest distractor: BigDecimal is the right tool, but new BigDecimal(0.2) carries the double's binary error (use the String constructor or valueOf), and equals() treats 2.0 and 2.00 as different, so compareTo is the comparison to use."
+    },
+    {
+      "prompt": "Payment was captured and the order is Placed. The restaurant now rejects it. What should OrderService do?",
+      "options": [
+        "Throw a PaymentException so the transaction that placed the order rolls back",
+        "Move the order to Rejected and schedule an idempotent RefundPayment job with retries, keyed on the original payment",
+        "Call gateway.refund once inline, and if it fails log the error and continue",
+        "Keep the order Placed and offer it to another nearby restaurant automatically"
+      ],
+      "answer": 1,
+      "explanation": "The charge already happened at a third party, so there is nothing to roll back; the correct move is a compensating action that is retried until it succeeds and is safe to repeat. Calling refund once inline is the strongest distractor: it is the right action with the wrong failure handling, because a timed-out refund would be swallowed and the customer never repaid."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In the food-ordering design, why does the Cart store only item ids and quantities while the Order copies item names and prices?",
+      "a": "The cart is a live scratchpad: prices and availability change while it sits there, so it re-reads them at checkout and reports problems as a NeedsAttention value. The order is a receipt: copying names and prices into OrderItem at placement means later menu edits can never change what the customer agreed to pay."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Java SE 21 API: java.math.BigDecimal", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/math/BigDecimal.html", "accessed": "2026-11-22", "supports": "a BigDecimal is an unscaled integer value and a scale; setScale(newScale, roundingMode) applies the rounding mode when the scale is reduced; new BigDecimal(0.1) is not exactly 0.1 while the String constructor and valueOf(double) are predictable; equals considers scale while compareTo does not", "status": "verified" },
+    { "title": "Java SE 21 API: java.math.RoundingMode", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/math/RoundingMode.html", "accessed": "2026-11-22", "supports": "HALF_UP rounds ties away from zero and is the mode commonly taught at school; HALF_EVEN rounds ties to the even neighbour, statistically minimises cumulative error and is known as banker's rounding; 2.5 rounds to 3 under HALF_UP and 2 under HALF_EVEN", "status": "verified" },
+    { "title": "Java SE 21 API: java.lang.Math (addExact, subtractExact, multiplyExact)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Math.html", "accessed": "2026-11-22", "supports": "the Exact methods return the sum, difference or product and throw ArithmeticException if the result overflows a long, so Money arithmetic fails loudly instead of wrapping", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ConcurrentHashMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html", "accessed": "2026-11-22", "supports": "putIfAbsent associates the key only if it is not already present and returns the previous value, performed atomically, which is the in-process guard against two checkouts with one key and against a coupon redeemed twice", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.Semaphore", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Semaphore.html", "accessed": "2026-11-22", "supports": "a counting semaphore restricts how many threads use a resource; tryAcquire() takes a permit only if one is available at the time of the call and otherwise returns false immediately, which turns a full kitchen into a busy response rather than a blocked thread", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.AtomicReference", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicReference.html", "accessed": "2026-11-22", "supports": "compareAndSet atomically sets the value if the current value == expectedValue and returns false otherwise, so tryAssign claims a delivery partner for exactly one order", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.CopyOnWriteArrayList", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/CopyOnWriteArrayList.html", "accessed": "2026-11-22", "supports": "a thread-safe list whose iterators work on a snapshot, suited to a listener list that is traversed far more often than it changes", "status": "verified" },
+    { "title": "Java SE 21 API: java.time.Clock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/Clock.html", "accessed": "2026-11-22", "supports": "injecting a Clock so the 3-minute auto-reject and cancellation windows are testable with a fixed or offset clock", "status": "verified" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, State, Observer, Command, Facade, Builder and Memento as used and as deliberately not used here", "status": "reference" },
+    { "title": "Hector Garcia-Molina and Kenneth Salem, \"Sagas\", SIGMOD 1987", "url": "https://dl.acm.org/doi/10.1145/38713.38742", "accessed": "2026-11-22", "supports": "the idea that a long-lived transaction is a sequence of steps each with a compensating action, which the in-process refund job mirrors and the Sagas lesson covers across services", "status": "reference" }
+  ]
+}

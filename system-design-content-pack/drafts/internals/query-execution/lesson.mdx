@@ -1,0 +1,85 @@
+A SQL statement says *what* you want; the **planner** (often called the optimiser) decides *how*: which index to use, in which order to join tables, whether a full scan is actually cheaper. `EXPLAIN` prints that decision, and most "the database is slow" tickets turn out to be a disagreement between the plan you imagined and the plan that ran. This lesson builds on [Indexing](/learn/indexing) and on pages and the buffer pool from [How a database stores data](/learn/storage-engines). The names are PostgreSQL's; other databases have the same ideas under different labels.
+
+## From SQL to a plan
+
+The server parses the statement, rewrites it (views expanded, rules applied), then plans it. The planner enumerates ways to access each table and orders in which to join them, estimates a cost for each from table statistics, and picks the cheapest. Costs are in arbitrary units anchored to a sequential page read at 1.0. With many tables the search space explodes, so PostgreSQL switches to a genetic search once a query joins more than `geqo_threshold` tables. The executor then runs the plan as a tree of nodes, each pulling rows from its children.
+
+<Interactive name="index-scan" />
+
+## Reading EXPLAIN
+
+`EXPLAIN` shows the estimates; `EXPLAIN ANALYZE` runs the query and adds what actually happened. The lines below are shortened from the PostgreSQL manual's sample tables.
+
+```text
+EXPLAIN ANALYZE SELECT * FROM tenk1 t1, tenk2 t2
+  WHERE t1.unique1 < 10 AND t1.unique2 = t2.unique2;
+
+ Nested Loop  (cost=4.65..118.50 rows=10 width=488) (actual time=0.017..0.051 rows=10.00 loops=1)
+   ->  Bitmap Heap Scan on tenk1 t1  (cost=4.36..39.38 rows=10 width=244) (actual time=0.009..0.017 rows=10.00 loops=1)
+         ...
+   ->  Index Scan using tenk2_unique2 on tenk2 t2  (cost=0.29..7.90 rows=1 width=244) (actual time=0.003..0.003 rows=1.00 loops=10)
+         Index Cond: (unique2 = t1.unique2)
+ Execution Time: 0.073 ms
+```
+
+Read it inside out and bottom up. Each node's first parentheses give the estimated start-up cost, total cost, row count and average row width in bytes; the second give real milliseconds and real rows. `loops=10` on the inner index scan means it ran once per outer row, and its time and rows are *per loop*, so multiply to get totals. Add `BUFFERS` to see `shared hit` and `read` counts, the page reads from the storage lesson. The number to stare at is estimated `rows` against actual `rows`: when they differ by orders of magnitude the planner was working from bad information, and every decision above that node is suspect.
+
+<Callout type="warning" title="EXPLAIN ANALYZE really runs the statement">
+
+It executes the query and discards the output, so an `EXPLAIN ANALYZE` of a `DELETE` deletes. Wrap writes in `BEGIN` and `ROLLBACK`.
+
+</Callout>
+
+## Four ways to read a table
+
+| Node | What it does | When the planner picks it |
+| --- | --- | --- |
+| Seq Scan | Reads every page of the table in order | A large fraction of rows match, or the table is tiny |
+| Index Scan | Walks the index and fetches each matching heap row in index order | Few rows match, or results are needed in index order |
+| Index Only Scan | Answers from the index alone when every needed column is in it and the visibility map says the page is all-visible | Covering indexes on tables that change slowly |
+| Bitmap Index Scan + Bitmap Heap Scan | Builds a bitmap of matching row locations, optionally ANDs or ORs several indexes, then visits heap pages in physical order | A middling fraction of rows, or several indexed conditions combined; index order is lost |
+
+A **covering index** turns index scans into index-only scans. PostgreSQL's `INCLUDE` clause adds payload columns that are stored in the leaf but are not part of the search key:
+
+```sql
+CREATE INDEX orders_customer_idx
+  ON orders (customer_id, created_at) INCLUDE (status, total);
+```
+
+A Flipkart customer's order history, which filters on `customer_id`, sorts on `created_at` and shows status and total, is now served from the index alone. The costs are a wider index, slower writes, and heap fetches on pages that recent updates have made not-all-visible, so the trick pays off most on tables read far more than written.
+
+<Callout type="analogy" title="Four ways to find a book">
+
+A sequential scan walks every shelf in the library. An index scan looks up one card in the catalogue, then fetches the book from the shelf it names, and repeats for each card. A bitmap scan collects all the matching card numbers first, sorts them, and walks the shelves once in order, which is why it wins when there are many matches. An index-only scan is a catalogue card that already contains the answer, so the shelf is never visited. Where the analogy stops: the planner does not count the cards before choosing; it guesses how many will match from statistics gathered earlier, and a stale guess picks the wrong walk.
+
+</Callout>
+
+## Selectivity and statistics
+
+The planner's choices rest on **statistics**: how many rows and pages a table has, each column's most common values and a histogram of the rest, the number of distinct values. `ANALYZE` gathers them from a random sample (autovacuum runs it for you), keeping up to `default_statistics_target` entries per column, 100 by default. From these it estimates **selectivity**, the fraction of rows a condition keeps. `WHERE country = 'IN'` matching 60% of a table should not use an index: fetching most rows one at a time costs more than reading every page once, and the planner knows it. Plans go wrong when statistics are stale after a bulk load, when a distribution is lumpier than 100 buckets can describe, or when two columns are correlated and the planner multiplies their selectivities as if independent.
+
+## Joining two tables
+
+| Algorithm | How it works | Wins when |
+| --- | --- | --- |
+| Nested Loop | For each row of the outer input, scan the inner input | The outer side is small and the inner side has an index on the join key |
+| Hash Join | Build a hash table from one input, probe it with the other | Large inputs joined on equality, with enough memory (4 MB of work memory by default) that the table does not spill to disk in batches |
+| Merge Join | Both inputs sorted on the join key and scanned once in step | Inputs already sorted, often by an index, or sorted output is needed anyway |
+
+The planner also chooses the join *order*, and one wrong row estimate can turn a hash join into a nested loop over millions of rows. The `loops` count in `EXPLAIN ANALYZE` exposes that instantly.
+
+## The N+1 problem
+
+The planner can only optimise the query it is given, and the commonest performance bug never reaches it as one query. Code loads 100 orders, then loops and loads each order's customer: 1 + 100 round trips, each fast, together slow, because every trip pays the network latency from [Latency](/learn/latency). The Rails guide's example turns 11 queries into 2 with eager loading; in SQL terms, join the tables or fetch all the customers with one `WHERE id IN (...)`. Any ORM can produce the problem, and the query log gives it away: the same statement repeated with different parameters.
+
+<Callout type="interview" title="Show you would look before guessing">
+
+"I'd run EXPLAIN ANALYZE, compare estimated and actual rows, look for Seq Scans on large tables and nested loops with high loop counts, then add a composite or covering index matching the filter and sort columns. If the application fires one query per row, that is an N+1 and no index fixes it."
+
+</Callout>
+
+<DeepDive title="Go deeper: when the row estimate is wrong">
+
+Correlated columns are the classic trap: a filter on both city and state has two selectivities the planner multiplies as if independent, so it predicts far fewer rows than appear and picks a nested loop that then runs a hundred thousand times. PostgreSQL's `CREATE STATISTICS` builds multi-column statistics so the planner can see the dependency, raising a column's statistics target helps with skewed distributions, and running `ANALYZE` after a bulk load fixes the stale case. The lever is better information for the planner.
+
+</DeepDive>

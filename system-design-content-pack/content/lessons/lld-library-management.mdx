@@ -1,0 +1,305 @@
+A library system looks like a catalogue with a borrow button, and the first design most people draw has a `Book` with a `status` field. That design cannot say "all three copies of this title are out, put me in the queue", because the title and the thing on the shelf are different objects. The decision that carries this case study is to **model a `Book` as what the catalogue describes and a `BookCopy` as what is actually lent**, and to attach every rule to the right one: search and reservations to the book; loans, status, holds and fines to the copy.
+
+## Requirements and assumptions
+
+**Functional requirements**
+
+- Members search by title, author or ISBN and see how many copies of a title are available.
+- A member borrows a specific copy at the desk (the librarian scans its barcode), returns it, and may renew once if nobody is waiting for the title.
+- When no copy is available, a member reserves the title and joins a first-in, first-out (FIFO) queue. When a copy comes back it is held for the first member in the queue for three days, then passes to the next.
+- A late return incurs a fine, and the fine rule depends on the membership tier. A member at the loan limit or with unpaid fines above a threshold cannot borrow.
+- Members are told when a hold is ready, when a loan is due soon and when it is overdue.
+- Librarians add copies, withdraw them and mark them lost.
+
+**Assumptions**: one branch in one process; roughly 50,000 titles, 200,000 copies and 10,000 members, for the shape of the data rather than capacity; a 14-day loan; a limit of 5 loans and a ₹200 fine block for ordinary members; money in paise; dates as `LocalDate` from an injected `Clock`.
+
+**Out of scope**: payments, transfers between branches, e-books, authentication and the user interface.
+
+**Non-functional**: a copy is never on loan to two members; a fine is the same whichever librarian computes it; a failed notification must never fail the loan it reports.
+
+## Core entities and responsibilities
+
+The split along stakeholder lines is the single responsibility principle from [SOLID](/learn/solid): cataloguers change books, the circulation desk changes copies and loans, the finance committee changes fines, and none of them should have to read the others' code.
+
+| Entity | Responsibility | Holds |
+| --- | --- | --- |
+| Catalogue | Books by ISBN and a search index over titles and authors | books, index |
+| Book | The title-level record | ISBN, title, authors |
+| BookCopy | One physical item and its status; who it is held for | barcode, book, status, holder |
+| Member | Identity and tier; active loans and outstanding fines | id, tier, loans, fines |
+| Loan | One copy lent to one member, with its dates and lifecycle | copy, member, issued, due, returned, status |
+| Reservation | A member waiting for a title | member, book, placed at |
+| ReservationQueue | The FIFO queue per title | deque per ISBN |
+| LendingService | The use cases: borrow, return, renew, reserve; enforces the rules; publishes events | copies, loans, policies, listeners |
+| FinePolicy, LendingPolicy | Fine rule and limits per tier | rates, limits |
+| LibraryListener | Anything that wants to know a loan or hold happened: notifications, audit | its channel |
+
+A `Book` is an immutable record, and so is `BookCopy`: a status change produces a new copy value rather than mutating the old one, which is what makes the atomic update in the concurrency section possible.
+
+## Class design
+
+<Mermaid caption="Book is what you search and reserve; BookCopy is what you borrow, hold, lose and pay fines on. LendingService is the only class that changes a copy's status." chart={`classDiagram
+    class LendingService {
+        +borrow(String memberId, String barcode) Loan
+        +giveBack(String barcode)
+        +renew(String loanId) Loan
+        +reserve(String memberId, String isbn) Reservation
+    }
+    class Catalogue {
+        +search(String query) List
+        +byIsbn(String isbn) Optional
+    }
+    class Book {
+        +String isbn
+        +String title
+        +List authors
+    }
+    class BookCopy {
+        +String barcode
+        +CopyStatus status
+        +String heldForMemberId
+        +with(CopyStatus next, String holder) BookCopy
+    }
+    class Member {
+        +String id
+        +Tier tier
+        +activeLoans() int
+        +fines() Money
+    }
+    class Loan {
+        +LocalDate issuedOn
+        +LocalDate dueOn
+        +LoanStatus status
+        +close(LocalDate on, Money fine)
+    }
+    class Reservation {
+        +String memberId
+        +Instant placedAt
+    }
+    class ReservationQueue {
+        +add(Book book, Reservation r)
+        +nextFor(Book book) Reservation
+        +fulfil(Book book, String memberId)
+    }
+    class FinePolicy {
+        <<interface>>
+        +fineFor(Loan loan, LocalDate returnedOn) Money
+    }
+    class PerDayFine
+    class LibraryListener {
+        <<interface>>
+        +on(LibraryEvent event)
+    }
+    class NotificationService
+    Catalogue o-- Book
+    BookCopy --> Book
+    Loan --> BookCopy
+    Loan --> Member
+    Reservation --> Book
+    ReservationQueue o-- Reservation
+    LendingService --> Catalogue
+    LendingService --> ReservationQueue
+    LendingService --> FinePolicy : uses
+    LendingService --> LibraryListener : publishes to
+    PerDayFine ..|> FinePolicy
+    NotificationService ..|> LibraryListener
+`} />
+
+## Key interfaces and methods
+
+```java
+record Book(String isbn, String title, List<String> authors) {}
+enum CopyStatus { AVAILABLE, ON_LOAN, ON_HOLD, LOST, WITHDRAWN }
+record BookCopy(String barcode, Book book, CopyStatus status, String heldForMemberId) {
+    BookCopy with(CopyStatus next, String holder) { return new BookCopy(barcode, book, next, holder); }
+}
+```
+
+The rules that differ by tier are two small Strategy interfaces, and the things that want to hear about loans are listeners the service never names:
+
+```java
+interface FinePolicy { Money fineFor(Loan loan, LocalDate returnedOn); }
+interface LendingPolicy { int maxLoans(Member m); Money fineBlock(Member m); int loanDays(Member m); }
+interface LibraryListener { void on(LibraryEvent event); }
+sealed interface LibraryEvent permits LoanCreated, LoanReturned, HoldReady, LoanOverdue {}
+
+final class PerDayFine implements FinePolicy {
+    private final Money perDay;  private final Money cap;  private final int graceDays;
+    public Money fineFor(Loan loan, LocalDate returnedOn) {
+        long lateDays = ChronoUnit.DAYS.between(loan.dueOn(), returnedOn);
+        if (lateDays <= graceDays) return Money.ZERO;
+        return perDay.times(lateDays - graceDays).min(cap);
+    }
+}
+```
+
+`borrow` checks the member first, because those checks touch nothing shared, and then changes the copy's status inside a single `compute` on the copies map. The whole function runs atomically for that barcode, and if it throws, the map is left exactly as it was:
+
+```java
+Loan borrow(String memberId, String barcode) {
+    Member m = members.get(memberId);
+    if (m.activeLoans() >= lending.maxLoans(m)) throw new BorrowRefused("loan limit reached");
+    if (m.fines().greaterThan(lending.fineBlock(m))) throw new BorrowRefused("unpaid fines");
+    BookCopy copy = copies.compute(barcode, (id, c) -> {                   // atomic: one desk wins the copy
+        if (c == null) throw new BorrowRefused("unknown copy");
+        if (c.status() == CopyStatus.ON_HOLD && !memberId.equals(c.heldForMemberId()))
+            throw new BorrowRefused("held for another member");
+        if (c.status() != CopyStatus.AVAILABLE && c.status() != CopyStatus.ON_HOLD)
+            throw new BorrowRefused("copy is " + c.status());
+        return c.with(CopyStatus.ON_LOAN, null);
+    });
+    LocalDate today = LocalDate.now(clock);
+    Loan loan = Loan.open(copy, m, today, today.plusDays(lending.loanDays(m)));
+    loans.put(loan.id(), loan);
+    m.add(loan);
+    reservations.fulfil(copy.book(), memberId);                          // clears this member's hold, if any
+    listeners.publish(new LoanCreated(loan));
+    return loan;
+}
+```
+
+`giveBack` computes the fine through the policy, then decides where the copy goes next: to the first member in the title's queue as a three-day hold, or back to the shelf.
+
+```java
+void giveBack(String barcode) {
+    Loan loan = openLoanFor(barcode).orElseThrow(() -> new ReturnRefused("not on loan"));
+    LocalDate today = LocalDate.now(clock);
+    Money fine = finePolicy.fineFor(loan, today);
+    loan.close(today, fine);
+    loan.member().addFine(fine);
+    Reservation next = reservations.nextFor(loan.copy().book());        // FIFO queue for this title
+    if (next != null) {
+        copies.put(barcode, loan.copy().with(CopyStatus.ON_HOLD, next.memberId()));
+        holdExpiry.schedule(() -> expireHold(barcode, next.memberId()), 3, TimeUnit.DAYS);
+        listeners.publish(new HoldReady(next, loan.copy()));
+    } else {
+        copies.put(barcode, loan.copy().with(CopyStatus.AVAILABLE, null));
+    }
+    listeners.publish(new LoanReturned(loan, fine));
+}
+```
+
+Search is an inverted index over normalised tokens, built when a book is catalogued, plus a counter of available copies per ISBN so a result can show "2 of 3 available" without scanning copies:
+
+```text
+index(book):
+  for token in normalise(book.title) + normalise(book.authors) + [book.isbn]:
+    postings[token].add(book.isbn)                      # token -> set of ISBNs
+
+search(query):
+  candidates = intersection of postings[t] for t in normalise(query)
+  rank by query tokens matched in the title, then by shorter title
+  return each book with availableCount[isbn]           # maintained on every status change
+```
+
+## Interactions
+
+<Mermaid caption="Borrow, then a late return while another member is waiting. The copy goes on hold for the first reservation and the listener does the telling." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant A as Asha
+    participant K as Desk
+    participant S as LendingService
+    participant C as Copies map
+    participant F as FinePolicy
+    participant Q as ReservationQueue
+    participant N as NotificationService
+    participant B as Bala
+    A->>K: card and copy 0042
+    K->>S: borrow(asha, 0042)
+    S->>C: compute(0042, check then ON_LOAN)
+    C-->>S: copy ON_LOAN
+    S->>N: LoanCreated
+    S-->>K: due in 14 days
+    Note over A: 16 days later
+    A->>K: returns copy 0042
+    K->>S: giveBack(0042)
+    S->>F: fineFor(loan, today)
+    F-->>S: ₹20
+    S->>Q: nextFor(book)
+    Q-->>S: reservation by Bala
+    S->>C: put(0042, ON_HOLD for Bala)
+    S->>N: HoldReady
+    N-->>B: your copy is ready until Friday
+`} />
+
+<Mermaid caption="Loan lifecycle. The daily sweep moves loans to Overdue once; renewal is refused while anyone is queued for the title." chart={`stateDiagram-v2
+    [*] --> Active: borrow
+    Active --> Active: renew, nobody waiting for the title
+    Active --> Returned: returned by the due date
+    Active --> Overdue: due date passed, daily sweep
+    Overdue --> Returned: returned, fine added to the member
+    Overdue --> Lost: 30 days overdue or reported lost
+    Lost --> Closed: replacement cost paid, copy withdrawn
+    Returned --> [*]
+    Closed --> [*]
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Strategy | FinePolicy, LendingPolicy | Students, staff and the public have different limits and fine rates, and the committee changes them without touching lending code | One tier, one rule |
+| Observer | LibraryListener | Notifications, audit and statistics all want to hear about loans; the service names none of them and gains a listener without an edit | Exactly one listener, forever |
+| Static factory | Loan.open | Dates and status are derived once, in one place | The constructor is already obvious |
+
+Not used: State classes for `CopyStatus`, because every status only answers "may this copy be lent", which an enum and the checks in `compute` express in four lines; a Singleton catalogue, which would hide the dependency that `LendingService` declares in its constructor; and a Command for each desk action, which would earn its place only if the desk needed undo or a replayable log.
+
+## Edge cases and error handling
+
+- **Member at the limit or blocked by fines.** `BorrowRefused` with the reason, before the copy is touched.
+- **Copy on hold for someone else.** Refused inside `compute`; the member it is held for borrows it normally, which also clears their reservation.
+- **Reserving a title that has a copy available.** Refused with "a copy is available, borrow it", so the queue only ever contains people who could not borrow.
+- **Reserving twice, or reserving a title already on loan to you.** Refused; the queue is a deque backed by a set of member ids.
+- **Hold expires.** The scheduled task re-checks under `computeIfPresent` that the copy is still `ON_HOLD` for that member before passing it on, so a hold already collected does nothing and a task that runs twice is harmless.
+- **Returning a copy that is not on loan.** `ReturnRefused`: a mis-scan, or a withdrawn copy coming back from a bin.
+- **Lost copy.** The loan moves to Lost, the replacement cost is charged, the copy becomes `WITHDRAWN` and the available count drops. If it turns up a year later, it is added as a new copy; the history stays simple.
+- **The overdue sweep runs twice in a day.** It must not notify twice: the loan records the date it was last reported, and the sweep skips loans already reported today.
+- **Midnight.** Fines are per calendar day in the branch's time zone, read through the `Clock`. A book dropped in the night box after closing is dated the previous day, which is a stated policy rather than an accident.
+- **A listener throws.** Each listener is called in its own try block; a failed notification is logged and retried, and the loan stands.
+
+<Callout type="analogy" title="One dish, many plates">
+
+A restaurant has one menu entry for biryani and many plates of it. You wait for *biryani*, not for plate seven; the kitchen hands you whichever plate comes up next, and only a plate can be spilt or sent back. Book and BookCopy are the menu entry and the plate. Where the analogy fails: plates are interchangeable in every way, while copies have their own barcodes, histories and fines, which is exactly why the copy must be its own object rather than a count.
+
+</Callout>
+
+## Concurrency
+
+The shared mutable state is the copies map, the reservation queues, each member's loan count and fines, and the available-count per title; desks, the hold-expiry scheduler and the overdue sweep all touch them, so the advice from [Concurrency and thread safety](/learn/concurrency-basics) applies: name it, then pick the cheapest tool.
+
+The copies map is a `ConcurrentHashMap`, and the race that matters, two desks scanning the same barcode within milliseconds, is settled by `compute`: the check and the status change run as one atomic step for that key, so one desk gets `ON_LOAN` and the other sees it and throws. Two properties of `compute` shape the code. The function must be short and must not modify the map, because other updates may block while it runs, so the member checks and the event publishing sit outside it. And a function that throws leaves the mapping unchanged, so a refused borrow needs no cleanup. Reads are not blocked by updates, so search stays fast while desks are busy.
+
+Each title's reservation queue is guarded by `synchronized` on the queue object, and `BookCopy` is immutable, so a status change is a new value and readers never see a half-updated copy. The member's loan count is an `AtomicInteger`; strictly, the limit check and the later `m.add(loan)` are two steps, so a member scanning cards at two desks in the same second could exceed the limit by one. Say that aloud and either accept it or make `Member.tryAddLoan` the atomic check. No code path holds two locks, and `compute` is never called from inside a queue's lock.
+
+## Extensibility and trade-offs
+
+- **A new member tier.** A `FinePolicy` and `LendingPolicy` implementation; `LendingService` does not change.
+- **New media.** `Book` generalises to a title record with a kind (book, magazine, DVD); copies, loans and holds are unchanged because they never cared what the item was.
+- **Several branches.** `BookCopy` gains a branch, reservations gain a pickup branch, and a transfer is a copy status. Every rule above still attaches to the same object.
+- **More channels.** Another listener. If notification volume grows, the publisher writes to a queue and a worker delivers, which keeps the desk fast.
+- **A database.** `compute` becomes a conditional update on the copy row and the reservation queue a table ordered by placement time.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| Book and BookCopy as two classes | Reservations for a title, fines for a copy, both expressible | An available-count per title to maintain for search results |
+| Status field on the copy | One lookup answers "can I lend this" | The field is a cache of loans and holds and must change in step with them |
+| FIFO reservations | Fair and explainable | A staff member cannot jump the queue without a second policy |
+| Synchronous listeners | Simple, ordered, easy to test | A slow listener slows the desk; isolate failures per listener |
+
+<Callout type="interview" title="The two-minute version">
+
+"Book is the title, BookCopy the physical item, and that split is the design: search and reservations attach to the book, loans, status, holds and fines to the copy. A LendingService owns the use cases, checks the member's limits and fines through a per-tier LendingPolicy, and changes the copy's status inside one ConcurrentHashMap.compute so two desks can never lend the same barcode. Returns compute the fine through a FinePolicy strategy, then either hold the copy for the first reservation in a FIFO queue with a three-day expiry or put it back on the shelf. Listeners get LoanCreated, HoldReady and LoanOverdue events, so notifications and audit are added without touching lending." Then offer the status-field-versus-derived-state trade-off as your follow-up.
+
+</Callout>
+
+<DeepDive title="Go deeper: should the copy have a status at all?">
+
+The alternative design keeps no `status` on the copy. Whether a copy is available is *derived*: it is available if no open loan and no live hold refer to it. The loans and holds become the only truth, there is nothing to drift out of step, and the full history of a copy is a query rather than a log you remembered to write. The cost is that every availability question becomes a lookup in two collections, and the two-desk race moves from `compute` on the copy to inserting the open loan: the loans store must refuse a second open loan for the same barcode, which in a database is a partial unique index on open loans, and in memory is a `putIfAbsent` keyed by barcode. The status field is a cache of exactly that fact, and like every cache it must change in the same step as the thing it summarises; in a database-backed version the `compute` and the `loans.put` would share a transaction. The event-sourced version of this idea is the subject of [Event sourcing](/learn/event-sourcing).
+
+</DeepDive>

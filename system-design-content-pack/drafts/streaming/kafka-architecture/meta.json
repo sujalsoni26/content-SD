@@ -1,0 +1,75 @@
+{
+  "slug": "kafka-architecture",
+  "title": "Kafka: a distributed log",
+  "moduleId": "streaming",
+  "level": "intermediate",
+  "minutes": 10,
+  "problem": "A queue deletes each message once one worker acks it, so a second team cannot read the same events later and nothing can be replayed after a bug.",
+  "summary": "Kafka is a partitioned, replicated, append-only log. Producers append to partition leaders, followers copy the records, consumers read by offset and keep their own position, and records stay for a retention period or are compacted down to the latest value per key.",
+  "catTip": "I nap on the broker because it never throws anything away: every record stays, in order, until retention says otherwise. I keep my own bookmark, called an offset, and if I oversleep for a week the log has moved on without me.",
+  "recall": {
+    "q": "A producer sends with acks=all. What does it actually wait for, and why does min.insync.replicas still matter?",
+    "a": "The leader acknowledges only after every replica in the in-sync replica set (ISR) has the record. If the ISR has shrunk to the leader alone that is a single copy, so min.insync.replicas (typically 2 with replication factor 3) makes the broker refuse the write with NotEnoughReplicas instead of accepting it on one broker."
+  },
+  "archNodes": ["queue"],
+  "guide": {
+    "breaks": "A classic queue deletes each message once a consumer acks it, so a second consumer never sees the same events, nothing can be replayed after a bug, and ordering is lost on redelivery.",
+    "tradeoffs": "Keeping every record for days costs disk and moves the what-have-I-handled bookkeeping to each consumer, and strong durability (acks=all with min.insync.replicas=2) adds a wait for a second broker on every write.",
+    "explainSimply": "Kafka is a numbered ledger that is never erased: new entries go at the end, and each reader keeps a bookmark instead of tearing pages out. The ledger is copied to several machines so losing one loses nothing, and old volumes are shredded after a set time.",
+    "hint": "Think about who must hold the record before the leader says yes, and what 'everyone in sync' means when only the leader is in sync."
+  },
+  "meow": "Meow-ssages go in at the end, stay for seven days, and I read them by offset. Three copies, two must purr back before the write counts.",
+  "quiz": [
+    {
+      "prompt": "A topic has replication factor 3 and min.insync.replicas=2, and the producer uses acks=all. One broker is down, so a partition's ISR is the leader plus one follower. What happens to a produce request?",
+      "options": [
+        "It fails with NotEnoughReplicas because one replica is missing",
+        "It succeeds once the leader and the remaining in-sync follower have both written it",
+        "It succeeds as soon as the leader has written it, because acks=all only waits for live followers",
+        "It blocks until the third replica comes back"
+      ],
+      "answer": 1,
+      "explanation": "acks=all waits for every current ISR member, here two brokers, which satisfies min.insync.replicas=2. It would fail only if the ISR shrank below two; the leader-only option describes acks=1, not acks=all."
+    },
+    {
+      "prompt": "Which statement correctly distinguishes a Kafka topic from a traditional message queue?",
+      "options": [
+        "Kafka deletes a record as soon as a consumer acknowledges it",
+        "Kafka keeps records for a retention period regardless of consumption, so several consumer groups can read and replay the same records",
+        "Kafka guarantees ordering across all partitions of a topic",
+        "Kafka pushes records to consumers to keep latency low"
+      ],
+      "answer": 1,
+      "explanation": "Retention is by time or size, not by consumption, which is what makes replay and independent readers possible. Ordering holds only within a partition, and consumers pull rather than being pushed to."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A follower broker's disk slows down and it stops keeping up. What happens to the partition's ISR, and to producers using acks=all?",
+      "a": "After replica.lag.time.max.ms (30 s by default) the leader drops it from the in-sync replica set. Writes keep being acknowledged by the remaining ISR members as long as the ISR still has at least min.insync.replicas brokers; below that, producers get NotEnoughReplicas."
+    },
+    {
+      "q": "You keep every product's current price in a Kafka topic that must never lose the latest value but must not grow forever. Which retention policy do you use, and how do you delete a product?",
+      "a": "Log compaction (cleanup.policy=compact), which keeps at least the latest record per key and leaves offsets and ordering intact. Delete a product by writing a tombstone, its key with a null value, which compaction keeps for delete.retention.ms (1 day by default) so slow consumers still see the deletion."
+    }
+  ],
+  "glossary": [
+    { "term": "ISR", "full": "In-Sync Replicas", "note": "The replicas of a partition that are caught up with the leader; a record is committed once all of them have it." },
+    { "term": "KIP", "full": "Kafka Improvement Proposal", "note": "The design document that precedes any user-visible change to Apache Kafka; cited by number, such as KIP-679." }
+  ],
+  "sources": [
+    { "title": "Apache Kafka 4.4 documentation, Design (Replication; Message Delivery Semantics; Log Compaction; The Consumer)", "url": "https://kafka.apache.org/44/design/design/", "accessed": "2026-11-22", "supports": "in-sync definition and ISR; committed = all ISR replicas have the record; f+1 replicas tolerate f failures; unclean leader election default; compaction guarantees and tombstones; consumers pull and track an offset", "status": "verified" },
+    { "title": "Apache Kafka 4.4 broker configuration reference", "url": "https://kafka.apache.org/44/generated/kafka_config.html", "accessed": "2026-11-22", "supports": "min.insync.replicas default 1 and NotEnoughReplicas behaviour; default.replication.factor 1; replica.lag.time.max.ms 30000; unclean.leader.election.enable false; log.retention.hours 168; log.segment.bytes 1 GiB; offsets.topic.replication.factor 3", "status": "verified" },
+    { "title": "Apache Kafka 4.4 topic configuration reference", "url": "https://kafka.apache.org/44/generated/topic_config.html", "accessed": "2026-11-22", "supports": "retention.ms 7 days; retention.bytes -1 (per partition); segment.bytes 1 GiB and segment rolling; cleanup.policy delete/compact and combination; delete.retention.ms 1 day", "status": "verified" },
+    { "title": "Apache Kafka 4.4 producer configuration reference", "url": "https://kafka.apache.org/44/generated/producer_config.html", "accessed": "2026-11-22", "supports": "acks default all; meaning of acks=0, 1, all; enable.idempotence default true", "status": "verified" },
+    { "title": "KIP-679: Producer will enable the strongest delivery guarantee by default", "url": "https://cwiki.apache.org/confluence/display/KAFKA/KIP-679%3A+Producer+will+enable+the+strongest+delivery+guarantee+by+default", "accessed": "2026-11-22", "supports": "defaults changed from acks=1 and enable.idempotence=false to acks=all and enable.idempotence=true in Kafka 3.0", "status": "verified" },
+    { "title": "Apache Kafka 4.4 consumer configuration reference", "url": "https://kafka.apache.org/44/generated/consumer_config.html", "accessed": "2026-11-22", "supports": "auto.offset.reset default latest", "status": "verified" },
+    { "title": "Apache Kafka 4.4 documentation, Implementation: Log", "url": "https://kafka.apache.org/44/implementation/log/", "accessed": "2026-11-22", "supports": "a partition is a directory of segment files named after their first offset; 64-bit offsets; deletion one segment at a time by time or size", "status": "verified" },
+    { "title": "Apache Kafka 4.4 documentation, Introduction", "url": "https://kafka.apache.org/44/getting-started/introduction/", "accessed": "2026-11-22", "supports": "events are not deleted after consumption; same key goes to the same partition and is read in order; replication factor 3 as the common production setting", "status": "verified" },
+    { "title": "Apache Kafka 4.4 documentation, Operations: KRaft", "url": "https://kafka.apache.org/44/operations/kraft/", "accessed": "2026-11-22", "supports": "process.roles; controller quorum of 3 or 5 with an active controller and hot standbys; majority required (3 tolerates 1, 5 tolerates 2); Kafka 3.9 is the last bridge release", "status": "verified" },
+    { "title": "KIP-833: Mark KRaft as Production Ready", "url": "https://cwiki.apache.org/confluence/display/KAFKA/KIP-833%3A+Mark+KRaft+as+Production+Ready", "accessed": "2026-11-22", "supports": "timeline: KRaft production-ready for new clusters in 3.3, ZooKeeper mode deprecated in 3.5, only KRaft in 4.0", "status": "verified" },
+    { "title": "Apache Kafka 3.3 release post, What's New in Apache Kafka 3.3 (3 October 2022)", "url": "https://blogsarchive.apache.org/kafka/entry/what-rsquo-s-new-in", "accessed": "2026-11-22", "supports": "KRaft marked production ready for new clusters in 3.3", "status": "verified" },
+    { "title": "Apache Kafka 3.5.0 release announcement (15 June 2023)", "url": "https://kafka.apache.org/blog/2023/06/15/apache-kafka-3.5.0-release-announcement/", "accessed": "2026-11-22", "supports": "ZooKeeper marked deprecated in 3.5 and planned for removal in 4.0", "status": "verified" },
+    { "title": "Apache Kafka 4.0.0 release announcement (18 March 2025)", "url": "https://kafka.apache.org/blog/2025/03/18/apache-kafka-4.0.0-release-announcement/", "accessed": "2026-11-22", "supports": "4.0 is the first major release to operate entirely without ZooKeeper, running in KRaft mode", "status": "verified" }
+  ]
+}

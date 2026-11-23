@@ -1,0 +1,47 @@
+If producers outpace consumers continuously, a queue only delays the crash: an **unbounded queue** grows until memory runs out. **Backpressure** lets the overloaded part signal upstream to slow down:
+
+- Slow or block the producer (TCP flow control does this).
+- Bounded buffers with a maximum size.
+- Load shedding: reject the excess with a fast 503, low-priority work first (below).
+- Scale consumers where possible.
+
+<Callout type="idea" title="Not the same as rate limiting">
+
+Rate limiting is a fixed per-client policy (see [Rate limiting](/learn/rate-limiting)); backpressure reacts to the system's capacity right now.
+
+</Callout>
+
+## Load shedding
+
+Load shedding is the sharpest form of backpressure: cheaply rejecting work with an immediate **503 Service Unavailable** instead of spending scarce CPU and memory on it.
+
+- **Why: autoscaling lags.** Serverless platforms (AWS Lambda, Google Cloud Functions) add capacity almost instantly; VM-based services need minutes. When a spike outruns them (a big release on BookMyShow, a thundering herd), a service can either slow down for everyone, which spreads latency and triggers cascading failures, or shed the excess and keep fast, predictable responses for the work it accepts. <mark>Shedding wins</mark>, and it buys time for autoscaling to catch up.
+- **Signals:** shed when CPU passes a threshold (say 80%), in-flight requests exceed what the server can hold (Little's Law: 100 req/s × 0.5 s = 50 in flight), or memory nears its limit (say 90%). In-flight requests drive memory use, since each one holds data until it finishes.
+- **Where:** inside each service (middleware or a sidecar), because only the server knows its own health.
+
+<Interactive name="littles-law" />
+
+## Shed the least important work first
+
+Tag each request with a criticality level (Google SRE's names below) and drop from the bottom up:
+
+| Level | Examples |
+| --- | --- |
+| `CRITICAL_PLUS` | Authentication, billing, checkout, payments |
+| `CRITICAL` | Inventory, posting content, direct messages |
+| `SHEDDABLE_PLUS` | Recommendations, reviews, wish lists, like counts, friend suggestions |
+| `SHEDDABLE` | Logging, metrics, background batch jobs |
+
+This is **graceful degradation**: during a Black Friday spike, recommendations and wish lists may switch off so checkout keeps working.
+
+<Callout type="analogy" title="A packed restaurant">
+
+A good restaurant at capacity tells new walk-ins "45-minute wait" at the door. A bad one seats everyone, and then every table waits an hour for food. Turning people away early is kinder to everyone, including the ones turned away.
+
+</Callout>
+
+<DeepDive title="Go deeper: serve the newest first under overload">
+
+Facebook's "Fail at Scale" (ACM Queue, 2015) describes two queue tricks for overload. **Controlled delay**: if a queue hasn't emptied recently, give queued requests a much shorter timeout so a standing queue drains. **Adaptive LIFO**: when a queue builds up, serve the newest requests first, because the oldest have often already been abandoned by users who gave up and refreshed.
+
+</DeepDive>

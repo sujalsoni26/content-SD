@@ -1,0 +1,268 @@
+A **notification system** turns an event ("order shipped", "one-time password requested", "sale starts at six") into a push notification, a text message or an email, delivered through providers you do not run. Where the shortener and the pastebin served reads, this system gets a side effect out of the door once, in the right order of urgency, through third parties that are slow, rate-limited and occasionally down. The queue is not a detail of this design. The queue *is* the design.
+
+## Requirements
+
+- **Functional:** triggered by events on a topic (see [Pub/sub](/learn/pubsub)) or a direct API call; mobile push through APNs and FCM, SMS and email through providers; templates; preferences per channel and category plus quiet hours in the user's time zone; deduplication; per-user caps (at most N marketing messages a day); two priorities, transactional and marketing; scheduling; delivery tracking; unsubscribe links.
+- **Out of scope:** an in-app inbox (one more channel on the same pipeline), the campaign authoring UI, an analytics warehouse, A/B testing of content.
+- **Non-functional:** transactional latency of a few seconds, because the user is staring at an OTP screen; absorb 100× spikes without dropping anything, because a campaign sends to millions at once; no lost notifications and no duplicates under retries, because a missing OTP locks a user out and a doubled push is a complaint; isolation, because a campaign must never delay an OTP; preferences are law, because a message after an opt-out is a legal problem, not a bug.
+
+## Estimation
+
+Assume 10M notifications a day; 70% push, 20% email, 10% SMS; a campaign spike of 100× the average arrival rate; provider latency of about 300 ms per call; negotiated provider limits of 2,000 emails/s and 500 SMS/s, with push providers taking our peak given enough connections; 50M users with 1 KB of preferences each; 1 KB per event and 500 B per delivery record across its status updates.
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Average rate | 10⁷ ÷ 10⁵ s | 100/s |
+| Campaign spike at ingestion | 100 × 100/s | 10k/s |
+| Email at the spike vs provider | 20% × 10k = 2k/s vs 2k/s accepted | Drains in real time |
+| SMS at the spike vs provider | 10% × 10k = 1k/s vs 500/s accepted | Backlog grows at 500/s; a 10-minute campaign (600 × 1k = 600k SMS) drains in 600k ÷ 500 = 1,200 s, 20 minutes |
+| Push at the spike | 70% × 10k | 7k/s across many provider connections |
+| In flight (Little's law) | 10k/s × 0.3 s at the spike; 100/s × 0.3 s normally | 3,000 concurrent calls, 30 workers at 100 each; 30 normally, one worker |
+| Events in the log | 10⁷ × 1 KB × 7 days | 70 GB |
+| Delivery records | 10⁷ × 500 B = 5 GB/day × 90 days | \~450 GB |
+| Dedup keys | 10⁷ × 100 B, 24 h TTL | \~1 GB in Redis |
+| Preferences | 5 × 10⁷ × 1 KB | 50 GB; the hot 20% is 10 GB |
+| Delivery-store writes at the spike | 10k inserts/s + 2 status updates each | \~30k writes/s, above one SQL primary |
+
+→ The dominant number is the mismatch between <mark>10k/s arriving and a fixed rate each provider accepts</mark>. Nothing about the storage is hard; what is hard is that a 20-minute SMS backlog must not contain one OTP waiting behind a coupon. That makes this a write-heavy stream with fan-out (see [Three system shapes](/learn/system-shapes)): durable queues to absorb, priority lanes to reorder, and workers sized by Little's law rather than by request rate.
+
+## API
+
+| Endpoint | Request | Success | Errors |
+| --- | --- | --- | --- |
+| `POST /v1/notifications` | `{ "idempotency_key", "user_id", "template_id", "params", "priority", "channels"?, "send_at"? }` | 202 + `{ "notification_id", "status": "accepted" }` | 400 · 401 · 409 same key, different body · 429 the caller's quota |
+| `POST /v1/campaigns` | `{ "template_id", "segment_id", "send_at", "channels" }` | 202 + `{ "campaign_id", "estimated_duration" }` | 400 · 403 |
+| `GET /v1/notifications/{notification_id}` | – | 200 + status timeline per channel | 404 |
+| `PUT /v1/users/{user_id}/preferences` | `{ "channels", "categories", "quiet_hours" }` | 200 | 400 |
+| `POST /v1/webhooks/{provider}` | the provider's signed status callback | 200 | 401 bad signature |
+
+Events on a topic such as `order.shipped` take the same path minus HTTP: a consumer maps the event to a template and user and injects it at the same point. `202 Accepted` is deliberate: the request is durable, not delivered. `idempotency_key` is the caller's, so a retried call returns the same 202 (see [Idempotency](/learn/idempotency)); `estimated_duration` is recipients ÷ the slowest channel's provider rate.
+
+## Data model
+
+```sql
+CREATE TABLE notifications (
+  notification_id  BIGINT PRIMARY KEY,
+  idempotency_key  TEXT UNIQUE NOT NULL,      -- the caller's key: a retried call is a no-op
+  user_id          BIGINT NOT NULL,
+  template_id      TEXT NOT NULL,
+  priority         SMALLINT NOT NULL,         -- 0 transactional, 1 marketing
+  params           JSONB NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL,
+  send_at          TIMESTAMPTZ
+);
+
+CREATE TABLE deliveries (
+  delivery_id      BIGINT PRIMARY KEY,
+  notification_id  BIGINT NOT NULL REFERENCES notifications,
+  channel          TEXT NOT NULL,             -- push, sms or email
+  provider         TEXT NOT NULL,             -- apns, fcm, sms-a, email-b
+  provider_msg_id  TEXT,                      -- what the provider returned: joins webhooks to rows
+  status           TEXT NOT NULL,             -- queued, sending, sent, delivered, failed, bounced, opened
+  attempts         SMALLINT NOT NULL DEFAULT 0,
+  claimed_at       TIMESTAMPTZ,               -- the lease (Deep dive 1)
+  last_error       TEXT,
+  updated_at       TIMESTAMPTZ NOT NULL,
+  UNIQUE (notification_id, channel)           -- one delivery per channel, enforced by the database
+);
+CREATE INDEX deliveries_provider_idx ON deliveries (provider, provider_msg_id);
+
+CREATE TABLE user_preferences (
+  user_id      BIGINT PRIMARY KEY,
+  channels     JSONB NOT NULL,                -- {"push": true, "sms": false, "email": true}
+  categories   JSONB NOT NULL,                -- {"orders": true, "marketing": false}
+  quiet_start  TIME, quiet_end TIME, tz TEXT,
+  updated_at   TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE device_tokens (
+  user_id BIGINT, token TEXT, platform TEXT, invalid_at TIMESTAMPTZ,
+  PRIMARY KEY (user_id, token)
+);
+```
+
+`notifications` is one row per request, with the unique idempotency key as the first duplicate guard. `deliveries` is one row per channel per notification; its unique constraint is the second guard, and `(provider, provider_msg_id)` is how a webhook finds its row. `user_preferences` is read on every send, so it lives behind a cache; `device_tokens` carries `invalid_at`, because providers tell you when a token dies.
+
+## High-level design
+
+<Mermaid caption="Everything after ingestion is asynchronous. Each channel has a high and a bulk queue; workers drain high first; providers report back through webhooks; failures retry and then dead-letter." chart={`flowchart LR
+    EV["Event topics, e.g. order.shipped, otp.requested"] --> ING["Ingestion: event consumers and POST /notifications"]
+    SV["Calling services"] --> ING
+    ING --> FLT["Dedup, preference and quiet-hours filter"]
+    PREF[("Preferences, device tokens")] --> FLT
+    FLT --> Q["Queues per channel and priority: push-high, push-bulk, sms-high, sms-bulk, email-high, email-bulk"]
+    Q --> W["Channel workers: render template, pace per provider"]
+    W --> AD["Provider adapters"]
+    AD --> PR["APNs, FCM, SMS and email providers"]
+    W --> DS[("Delivery status store")]
+    PR -. "status webhooks" .-> WH["Webhook receiver"]
+    WH --> DS
+    W -. "retry with backoff" .-> Q
+    Q -. "after N failures" .-> DLQ["Dead-letter queue"]
+    DS -. "events" .-> AN["Analytics"]
+`} />
+
+- **Ingestion** writes the `notifications` row and hands the work to a durable queue before answering 202, because nothing downstream may be allowed to lose a request.
+- **The filter** does dedup, preference and quiet-hours checks, template selection and channel fan-out, because these are the same for every channel and belong in one place.
+- **Queues per channel and priority** (see [Message queues](/learn/message-queues)) absorb the spike and keep transactional work ahead of bulk, because neither Kafka nor SQS reorders by priority inside one queue (Deep dive 2).
+- **Channel workers** render templates, pace calls to each provider's accepted rate and record outcomes, so that provider limits are enforced in one place rather than discovered as errors.
+- **Provider adapters** translate one internal request into APNs, FCM, SMS or email calls and classify each answer into retry, give up, or mark the recipient invalid (Deep dive 3).
+- **The delivery store** holds the status timeline, completed by the **webhook receiver**; **retries and the dead-letter queue** park messages that keep failing, so one poison template cannot block a lane.
+
+<Mermaid caption="A push notification end to end. The dedup key and the row-level claim are the two guards against sending twice; the APNs status decides whether to record, retry or retire the token." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant K as Topic order.shipped
+    participant I as Ingestion and filter
+    participant Q as Queue push-high
+    participant W as Push worker
+    participant A as APNs
+    participant D as Delivery store
+    K-->>I: OrderShipped, order 881, user 42
+    Note over I: SET dedup key NX with 24 h TTL. First time, so continue
+    Note over I: Preferences say push on, not quiet hours
+    I->>D: INSERT notification n9 and delivery (n9, push) as queued
+    I->>Q: Enqueue n9
+    Q-->>W: n9
+    W->>D: UPDATE delivery to sending if still queued (the claim)
+    W->>A: POST to device token, collapse id order-881, expiry now + 1 h
+    alt Accepted
+        A-->>W: 200 with apns-id
+        W->>D: sent, with apns-id
+    else Token dead
+        A-->>W: 410 Unregistered with timestamp
+        W->>D: failed, token marked invalid
+    else Transient
+        A-->>W: 503 or timeout
+        W->>Q: Requeue with backoff, attempts + 1
+    end
+`} />
+
+## Storage and caching
+
+| Data | Store | Why |
+| --- | --- | --- |
+| Inbound events | Kafka topics, 7-day retention (see [Kafka: a distributed log](/learn/kafka-architecture)) | Durable buffer with replay; other consumers read the same events |
+| Work queues, one per channel and priority | Kafka topics or SQS queues | Neither offers per-message priority, so a lane is a queue |
+| Dedup keys, 1 GB | Redis, `SET key NX EX 86400` | Atomic "claim if absent" with a TTL equal to the dedup window |
+| Notifications and deliveries, 5 GB/day | PostgreSQL partitioned by day, 90-day retention | Joins for the status timeline and for webhooks by provider id |
+| Preferences and tokens, 50 GB | PostgreSQL with Redis cache-aside, invalidated on write (see [Caching](/learn/caching)) | Read at 10k/s during a spike |
+| Templates | PostgreSQL, versioned, cached in every worker | Rendering at 10k/s must not touch a database |
+| Delivery events for analytics | Kafka → warehouse (see [Stream processing](/learn/stream-processing)) | Counts and funnels without loading the delivery store |
+
+Kafka or SQS for the lanes? Both are defensible. Kafka when you want replay, per-user ordering by key and other consumers on the same stream; SQS when you want per-message visibility timeouts, a built-in dead-letter redrive and no cluster to run. SQS standard queues are at-least-once with best-effort ordering; FIFO queues add exactly-once *processing* through a deduplication id at 300 API calls a second per action (3,000 messages a second with batching, more in high-throughput mode). Either way the consumer must tolerate redelivery (Deep dive 1).
+
+<Callout type="analogy" title="A post office sorting floor">
+
+Letters arrive in sacks (events), are sorted into express and bulk bins per destination (lanes per channel and priority), and leave on trucks that each carry a fixed load per hour (provider rates). A letter nobody can deliver goes to the returned-mail shelf (dead-letter queue). Where it fails: a post office cannot merge two letters into one (collapse ids can), and it does not phone you to say the letter was opened (webhooks do).
+
+</Callout>
+
+## Scaling
+
+- **Ingestion** is stateless; partition the inbound topic by `user_id`, so one user's notifications are processed in order and dedup and per-user caps have locality (see [Partitions, consumer groups and ordering](/learn/partitions-consumer-groups)).
+- **Workers** scale per channel and lane: 3,000 in flight at the spike means about 30 workers of 100 concurrent connections, autoscaled on queue age (see [Autoscaling](/learn/autoscaling)). Adding SMS workers beyond the provider's 500/s achieves nothing; the pacer sets SMS throughput.
+- **Campaign fan-out** is itself paced: a job expands a 10M-recipient segment at roughly the channel's provider rate, so the queue holds minutes of backlog rather than hours (see [Backpressure and load shedding](/learn/backpressure)).
+- **Preferences** are read 10k times a second at the spike; the hot 10 GB sits in a Redis cluster. **Delivery store:** 30k writes a second at the spike is beyond one PostgreSQL primary, so workers write status in batches of a hundred, the table is partitioned by day, and at 10× it becomes a wide-column store keyed by `notification_id`.
+
+## Consistency and availability
+
+- **Preferences:** read-your-writes for the user who just opted out, which invalidation on write provides. More important, preferences are checked **at send time** in the worker, not only at enqueue, because a marketing message can sit in a bulk lane for twenty minutes and the user may opt out in between.
+- **Dedup:** Redis `SET NX` is atomic per key, but a failover can lose recent keys; the `UNIQUE (notification_id, channel)` constraint is the second guard, so a lost dedup key costs a failed insert, not a duplicate send.
+- **Delivery status:** eventual. Webhooks arrive late and, as Twilio's documentation says of its status callbacks, not necessarily in order, so transitions are monotonic: a late `sent` never overwrites `delivered` (see [Consistency: strong vs eventual](/learn/consistency)).
+- **Availability:** ingestion depends on the queue, not on providers or the delivery store, so accepting keeps working while sending is degraded (see [CAP and PACELC](/learn/cap)).
+
+## Failure and recovery
+
+| Failure | What users see | How it heals |
+| --- | --- | --- |
+| Provider 5xx or timeout | A delay | Exponential backoff with jitter (see [Timeouts and retries](/learn/timeouts-retries)), honouring `Retry-After` when FCM sends one; after five attempts, dead-letter |
+| Provider says slow down (FCM `QUOTA_EXCEEDED`, APNs `TooManyRequests` for one token) | A delay | The pacer lowers that provider's rate; FCM asks for backoff starting at a minute |
+| Device token dead (APNs 410 `Unregistered`, FCM 404 `UNREGISTERED`) | Nothing: the device is gone | Mark the token invalid and stop; APNs includes a timestamp so a token re-registered after it is kept |
+| Worker crashes mid-send | Possibly a duplicate, in a narrow window | The queue redelivers; the row-level claim decides whether to resend (Deep dive 1) |
+| Redis (dedup) down | Nothing | Fall through to the database unique constraints: slower, still correct |
+| Queue unavailable | Callers get 503 | Callers retry with the same idempotency key; events wait in the inbound topic |
+| Webhook endpoint down | Status stuck at `sent` | A reconciler polls the provider for anything `sent` for over 12 hours, Twilio's own recommendation |
+| Quiet hours begin while a message is queued | Nothing until morning | The worker re-checks the window and parks the message in a delayed queue |
+
+## Security
+
+- **Callers** authenticate with service identities (see [Authentication](/learn/authentication)) and are authorised per template and audience (see [Authorisation](/learn/authorization)); they supply parameters, never raw text, because a system that sends arbitrary text to any phone is a phishing cannon.
+- **Provider credentials** live in a secrets manager and rotate on a schedule (see [Secrets management](/learn/secrets-management)); APNs limits provider-token refreshes to one every twenty minutes.
+- **Webhooks** are verified by signature before anything is written, because anyone can POST "delivered" to a public URL; SendGrid's signed event webhook and Twilio's request signatures exist for this, and stored event ids make a redelivered webhook a no-op.
+- **Personal data:** phone numbers, email addresses and device tokens are encrypted at rest (see [Encryption in transit and at rest](/learn/encryption)), redacted in logs, retained for 90 days and never placed in providers' free-text metadata fields.
+- **Consent:** preference checks run centrally and at send time; per-caller quotas (see [Rate limiting](/learn/rate-limiting)) stop a buggy service from spamming every user.
+
+## Observability
+
+- **SLIs:** event-to-provider-accepted latency on the transactional lane (p99 under 5 s); queue age per lane, where a campaign shows as bulk lag while high stays flat; provider acceptance rate and latency per provider; delivery rate (delivered ÷ sent) per channel from webhooks; email bounce and complaint rates, which decide sender reputation; dead-letter depth (see [Metrics and monitoring](/learn/metrics-monitoring) and [SLIs, SLOs and error budgets](/learn/slos-error-budgets)).
+- **One trace** per notification: event consumed → dedup → enqueue → queue wait → worker → provider call → status write, with the queue wait as its own span, because that span is the whole difference between a quiet day and a campaign (see [Distributed tracing](/learn/tracing)).
+
+## Trade-offs and bottlenecks
+
+- **The next thing to break** is the delivery store at 30k writes a second, then the single SMS provider's 500/s, then Kafka partition count capping worker parallelism.
+- **Not taken:** calling providers synchronously from the API (collapses at 100× and couples callers to provider latency); one queue with a priority field (unsupported by Kafka and SQS, and a consumer that always drains high first starves bulk); Kafka transactions for exactly-once (they cover Kafka-to-Kafka, not the HTTP call to a provider); ordering across channels (not needed).
+- **Accepted:** three layers of idempotency, a pacer per provider, a reconciler that polls, and queues that hold minutes of backlog by design.
+
+## How it evolves
+
+**At 10×** (100M a day, 100k/s spikes): the delivery store moves to a wide-column store keyed by `notification_id`; preferences move to a key-value store; each channel gets several providers with weighted routing by cost and deliverability; campaign fan-out becomes a stream job.
+
+**At 100×** (1B a day, 1M/s spikes): deploy per region near users and providers (see [Multi-region deployment](/learn/multi-region)) with regional lanes; provider connections become the scarce resource, and APNs' own advice to spread pushes across many long-lived connections becomes the capacity plan; an in-app channel over [WebSockets](/learn/websockets) absorbs the messages that used to be SMS, because at this volume SMS cost is the budget.
+
+## Deep dive 1: exactly-once-ish delivery over at-least-once queues
+
+Queues redeliver. In SQS a received message becomes invisible for the visibility timeout (30 seconds by default); if the worker has not deleted it by then, another worker receives it. In Kafka a consumer that commits its offset after processing reprocesses the batch after a crash (see [Delivery semantics and exactly-once](/learn/delivery-semantics)). Both are at-least-once, and the side effect at the end of this pipeline cannot be rolled back: once APNs has accepted a push, nothing un-sends it. Exactly-once end to end is impossible; the goal is *effectively once*, built from three guards at three layers:
+
+<Steps>
+
+1. **At the API:** the caller's `idempotency_key` is unique in `notifications`. A retried call hits the constraint and returns the original 202; the same key with a different body gets 409, the convention Stripe's API established.
+2. **At ingestion:** `SET dedup:order.shipped:881 NX EX 86400`. Redis sets the key only if it does not exist and returns nil otherwise, so of two consumers racing on a redelivered event exactly one proceeds. The TTL is the dedup window.
+3. **At the send:** a claim before the provider call. `UPDATE deliveries SET status = 'sending', claimed_at = now(), attempts = attempts + 1 WHERE delivery_id = ? AND status IN ('queued', 'retry')` updates one row or none; none means another worker owns it, so skip.
+
+</Steps>
+
+The window that remains is a worker that crashes after the provider accepted but before it wrote `sent`: on redelivery the row says `sending` with an old `claimed_at`, and nobody knows whether the message left. The decision is per priority: for transactional messages, resend once the lease has expired, because a user without an OTP is worse than a user with two; for marketing, drop, because a missed coupon is cheaper than a duplicate complaint. Where a provider offers collapsing, use it to make a resend harmless: APNs' `apns-collapse-id` merges notifications with the same id, and FCM's collapse key replaces an undelivered message with a newer one (at most four collapse keys per device). SMS and email have no such mechanism, which is why the lease decision matters most there.
+
+<Callout type="warning" title="Exactly-once settings are not exactly-once sends">
+
+SQS FIFO's exactly-once processing and Kafka's transactions deduplicate *enqueues* and keep Kafka-to-Kafka pipelines consistent. Neither reaches across the HTTP call to a provider. The claim in step 3 is the only thing standing between a redelivery and a second text message.
+
+</Callout>
+
+## Deep dive 2: priority and fairness under a campaign spike
+
+The estimation says it plainly: a ten-minute campaign puts twenty minutes of SMS into the queue. With one queue per channel, every OTP requested in that window waits behind coupons. The fix has four parts.
+
+- **Lanes.** One queue per channel and priority, `sms-high` and `sms-bulk`, because neither Kafka nor SQS has per-message priority: AWS's own guidance for prioritisation in SQS is separate queues, and Confluent's write-up of Kafka prioritisation starts from the same fact, that the log is immutable and the broker never reorders. Workers poll the high lane first and the bulk lane only when high is empty.
+- **Starvation control.** Strict priority is safe here because transactional traffic is small (10/s against a provider rate of 500/s). If a high lane could ever saturate a provider, switch to weighted polling (say 8:2) so bulk still moves.
+- **Reserved capacity.** The pacer for each provider keeps a slice of the accepted rate, say 20%, that only the high lane may use, so an OTP never waits for a token while bulk saturates the rest. Stripe's load shedder reserves a share of fleet capacity for critical traffic in the same spirit, with 20% as its example; the figure here is an assumption. These are bulkheads between lanes (see [Bulkheads and graceful degradation](/learn/bulkheads-degradation)).
+- **Pacing at the source.** The campaign fan-out job emits per-user notifications at the provider's rate rather than all at once, in per time-zone batches so quiet hours are respected, so queue depth stays bounded, the estimated duration is honest (10M emails at 2,000/s is 5,000 s, about 83 minutes), and two concurrent campaigns interleave rather than one finishing before the other starts.
+
+<Callout type="interview" title="Name the lanes and the guards">
+
+"Durable queue first, then lanes per channel and priority with reserved provider capacity, workers that pace to each provider's rate, three layers of idempotency because queues are at-least-once, provider adapters behind circuit breakers, and status from webhooks reconciled by polling." Say *why* the queue exists (10k/s in, 500/s out) and the design follows.
+
+</Callout>
+
+## Deep dive 3: provider failure and failover
+
+Every provider answer falls into one of four classes, and the adapter's job is to classify, not to retry blindly:
+
+| Class | Examples | Action |
+| --- | --- | --- |
+| Transient | 5xx, timeouts, FCM `UNAVAILABLE` (honour `Retry-After`), APNs 503 | Retry with backoff and jitter; APNs asks for a wait before retrying 5xx |
+| Rate limited | FCM `QUOTA_EXCEEDED` (back off at least a minute), APNs `TooManyRequests` for one token | Lower the pacer; retry later |
+| Recipient gone | APNs 410 `Unregistered`, FCM 404 `UNREGISTERED`, a hard email bounce | Mark the token or address invalid; never retry |
+| Our fault | 400 bad payload, 403 expired provider token, a payload over APNs' 4 KB limit | Dead-letter and alert; refresh credentials or fix the template |
+
+A **circuit breaker per provider** (see [Circuit breaker](/learn/circuit-breaker)) opens when the transient class dominates and sends traffic to the standby. For SMS and email a standby exists: a second provider or number pool, chosen by health and cost per country. For push there is none: APNs and FCM are the only roads to the device, so the lane waits, and the expiry on each message decides what happens meanwhile. An OTP carries an `apns-expiration` or FCM `ttl` of about five minutes, so a push accepted after a long outage is dropped rather than delivered to a user who gave up; a marketing push carries a day. APNs stores at most one notification per app per device while the device is offline (newer usually replaces older) and may hold it for up to 30 days depending on that expiry; FCM's default lifespan is four weeks.
+
+**Email failover has a twist:** sender reputation. A cold second provider cannot absorb full volume at once without being throttled or marked as spam (Amazon SES starts new accounts at 200 messages a day and raises quotas gradually), so the standby carries a steady 10% of traffic to stay warm. **SMS queues at the provider** are finite too: Twilio queues messages that exceed a sender's throughput and fails them with a queue-overflow error after about ten hours, so the pacer must enforce the rate on our side.
+
+**Tracking closes the loop.** Twilio posts status changes (`queued`, `sent`, `delivered`, `undelivered`, `failed`) to a callback URL; SendGrid's event webhook reports processed, delivered, deferred, dropped and bounced along with opens and clicks, each with an event id for deduplication. Callbacks can be late or out of order, so the status machine is monotonic, and a reconciler polls the provider for any delivery still `sent` after 12 hours. Dead-letter retention is set longer than the source queue's, because SQS keeps a message's original enqueue timestamp when it moves to the DLQ. Retries happen in exactly one layer, the worker, because retries that multiply across layers turn a provider outage into a self-inflicted flood.

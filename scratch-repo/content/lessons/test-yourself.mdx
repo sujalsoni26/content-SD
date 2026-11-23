@@ -1,0 +1,28 @@
+Answer each question from memory, out loud or on paper, then flip the card. Mark it "Got it" or "Again"; the deck brings back what you missed. Each answer links to its lesson if you want to revisit it.
+
+<Interactive name="recall-cards" variant="test" />
+
+## Estimation drill
+
+A chat app sends **100 billion messages a day**, 100 B each, reads:writes = 1:1, replication factor 3. Find the write QPS and its peak, total QPS, 30-day storage, ingress and egress, and the system shape. How does its QPS compare with Google Search?
+
+Work it on paper first, then use the estimator to check (it opens on the chat preset).
+
+<Interactive name="estimator" variant="chat" />
+
+<DeepDive title="Show the drill answers">
+
+- **Writes:** 10¹¹ ÷ 10⁵ = 1M QPS (peak \~3M).
+- **Total with reads:** 2M QPS (peak \~6M).
+- **Storage:** 10 TB/day × 30 × 3 ≈ 900 TB.
+- **Ingress = egress** ≈ 100 MB/s.
+- **Shape:** a write-heavy stream (see [Three system shapes](/learn/system-shapes)).
+- **Compared with Google Search:** about 20× its \~100k QPS.
+
+</DeepDive>
+
+<Callout type="idea" title="Where to go next">
+
+Any card you marked "Again" twice is your next lesson to reread. Then work through the [case studies](/learn#hld) with [the interview playbook](/learn/playbook): a pastebin, a chat app, a news feed and a ticket-booking site all reuse the same blocks.
+
+</Callout>

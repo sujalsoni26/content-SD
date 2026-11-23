@@ -1,0 +1,229 @@
+Suggest the ten most likely completions of what a person has typed so far, and do it within the time it takes them to type the next character. **Autocomplete** is a read path with almost no tolerance for latency and a write path that never touches it: every keystroke is a lookup in an index built offline from millions of past searches and swapped in whole. This study assumes [Caching](/learn/caching), [CDN](/learn/cdn) and [Stream processing](/learn/stream-processing), and follows the order of [How to work a case study](/learn/case-study-method).
+
+## Requirements
+
+- **Functional:** for a prefix of 1 to 50 characters, return up to ten suggestions ranked by likelihood; per language and region; based on what people actually search, with recent popularity weighted more; surface **trending** queries within minutes; tolerate a typo; never suggest offensive, hateful or private terms; optionally merge the user's own recent searches.
+- **Out of scope:** the search results themselves, spelling correction of the submitted query, advertising inside suggestions, voice input.
+- **Non-functional:**
+  - **Under 100 ms per keystroke** at the 99th percentile, end to end, because about a tenth of a second is the limit at which a response still feels instantaneous.
+  - **Degrade, never block**: if suggestions fail, the search box still works, because suggestions are a convenience and search is the product.
+  - **Fresh in two speeds**: head terms and news within minutes, the long tail hourly, because yesterday's ranking is nearly right for almost everything.
+  - **Cheap per request**, because there are ten of them for every search.
+
+## Estimation
+
+Assume 10M daily search users making 10 searches a day, 10 suggestion requests per search after client-side debouncing, 500 B per response, and peaks of three times the average. Assume the index keeps the 50M distinct queries searched at least five times in the last 90 days, averaging 20 characters; a precomputed top-10 for every prefix up to 20 characters, where sharing means each query adds about six new prefixes; 80 B per prefix entry (ten pairs of a 4-byte query id and a 4-byte score); 100 B per logged search; and, as rules of thumb to measure before trusting, one serving node answering 20k lookups a second from RAM, a mobile round trip of about 40 ms to the nearest edge at the 99th percentile, and 30 ms from the edge to the origin.
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Searches a day | 10⁷ × 10 | 10⁸ |
+| Suggestion requests a day | 10⁸ × 10 keystrokes | 10⁹ |
+| Requests/s | 10⁹ ÷ 10⁵ s | \~10k/s, \~30k/s at peak |
+| Egress | 30k × 500 B | 15 MB/s, trivial |
+| Prefix entries | 5 × 10⁷ queries × \~6 new prefixes each | \~300M |
+| Index in RAM | 3 × 10⁸ × 80 B + 5 × 10⁷ × 30 B of query text | 24 GB + 1.5 GB ≈ 26 GB, one node |
+| Serving nodes | 30k ÷ 20k per node | 2 for throughput; run 3 per region for redundancy |
+| Short prefixes | 1 to 3 characters over 36 symbols: 36 + 36² + 36³ | \~48k distinct prefixes, a tiny set carrying a large share of traffic |
+| Query log | 10⁸ × 100 B, ÷ 10⁵ s | 10 GB a day, \~1,000 events/s |
+| Rebuild work | 5 × 10⁷ queries × 20 prefixes | 10⁹ heap inserts, minutes on a batch cluster, so hourly is affordable |
+| Budget on a CDN miss | 100 ms − 40 ms to the edge − 30 ms edge to origin | \~30 ms at the origin, of which the lookup may take 10 |
+
+→ <mark>Thirty thousand lookups a second against a 26 GB index that changes hourly, with about ten milliseconds each.</mark> In the terms of [Three system shapes](/learn/system-shapes) this is read-heavy with tiny objects, the URL shortener's shape, with a build pipeline behind it. Nothing on the hot path may touch a disk or a database.
+
+## API
+
+| Endpoint | Request | Success | Errors |
+| --- | --- | --- | --- |
+| `GET /v1/suggest?q=vir&lang=en&region=IN&n=10` | – | 200 + `{ "q": "vir", "suggestions": [ { "text", "score" }, … ], "index_version" }`, `Cache-Control: public, max-age=60` | 400 `q` over 50 characters · 429 rate limited |
+| `GET /v1/suggest?q=vir&personal=1` | `Authorization` header | 200 + the same, plus `"recent": [ … ]`, `Cache-Control: private` | 401 |
+| topic `search.queries` (internal) | `{ "query", "lang", "region", "user_bucket", "ts" }` | consumed by the pipeline | – |
+| `POST /v1/blocklist` (admin) | `{ "term", "reason" }` | 201, applied on every node within seconds | 403 |
+
+A `GET` with every ranking input in the query string, so that the CDN's cache key (URL plus the headers it is told to respect) distinguishes `vir` in English for India from `vir` in Hindi, and nothing else. The personal variant is private because anything per user cannot be cached at the edge.
+
+## Data model
+
+```text
+-- serving index: in memory, built offline, swapped as a whole
+prefix (lowercased, trimmed, up to 20 chars) -> [ (query_id, score) x 10 ]   sorted by score, descending
+query_id -> text, lang, flags (blocked, adult)
+sorted_queries -> every kept query text in lexicographic order           for prefixes longer than 20 chars
+
+-- pipeline
+search_event   (query, lang, region, user_bucket, ts)                     Kafka topic, 7-day retention
+query_count_1m (window_start, query, lang, region, distinct_users)        stream output, 1-minute tumbling windows
+query_score    (query, lang, region, score)                               decayed sum over 90 days, rebuilt hourly
+trending_delta (prefix, query, boost, until)                              pushed to serving nodes every minute
+blocklist      (term, pattern, reason, added_at)
+```
+
+The score is a decayed sum, each day's distinct-user count halved per week of age, so a term searched a lot last month does not outrank one searched a lot yesterday. Counting **distinct users** rather than events is the first defence against one person, or one bot, making a term popular. The 20-character cap is a memory decision: longer prefixes match few queries, so a binary search into `sorted_queries` and a short scan is cheap, while short prefixes match millions and must be precomputed (see *Trade-offs*).
+
+## High-level design
+
+<Mermaid caption="Two paths that never meet on the hot path. Keystrokes go browser, edge, service, memory. Searches go to a log, a stream job, an hourly build and a snapshot that the serving nodes load whole, with a small trending delta pushed every minute." chart={`flowchart LR
+    U["Browser or app: debounce, cancel stale requests"] --> CDN["CDN edge: cache by prefix, language, region"]
+    CDN --> GW["API gateway: rate limits"]
+    GW --> S["Suggest service: in-memory index, blocklist, trending boost"]
+    U -. "search submitted" .-> K["Kafka: search.queries"]
+    K --> SP["Stream job: 1-minute distinct-user counts, trending detection"]
+    SP --> AGG["Aggregates store: counts and decayed scores"]
+    AGG --> B["Hourly builder: top-10 per prefix"]
+    B --> OS["Object storage: versioned index snapshot"]
+    OS --> S
+    SP -. "trending delta, every minute" .-> S
+    BL["Blocklist admin"] --> S
+    BL -. "purge touched prefixes" .-> CDN
+`} />
+
+- **Client:** debounces keystrokes by about 50 ms and cancels the request for `vi` when `vir` is typed, so that fast typists cost one request per pause, not per letter, and stale answers never overwrite fresh ones.
+- **CDN edge:** caches `GET /v1/suggest` by URL for 60 seconds (longer for one- and two-character prefixes), so that the 48k short prefixes, which carry most of the traffic, rarely reach the origin.
+- **API gateway:** rate-limits per device and IP, because an unauthenticated endpoint that costs us a lookup per call is an invitation to scrape (see [Rate limiting](/learn/rate-limiting)).
+- **Suggest service:** stateless apart from the index it holds in RAM; looks up the prefix, applies the blocklist, merges the trending boost and the user's recents, so that one process answers in a few milliseconds with no network call.
+- **Kafka and the stream job:** count distinct users per query per minute and detect trending terms, because counting over a week of raw logs every minute would be absurd (see [Kafka architecture](/learn/kafka-architecture)).
+- **Hourly builder:** recomputes decayed scores and the top-10 for every prefix, writes one versioned snapshot to object storage, so that the index is immutable once published and every node serves the same version.
+- **Blocklist admin:** pushes removals to every node and purges the affected prefixes at the CDN, because a removal is the one change that cannot wait for the next build.
+
+<Mermaid caption="One keystroke on a CDN miss. The service never leaves its own memory, and the edge keeps the answer for the next sixty seconds of people typing the same three letters." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant U as Browser
+    participant E as CDN edge
+    participant S as Suggest service
+    participant I as Index in RAM
+    Note over U: types v, i, r in 300 ms, debounce fires once
+    U->>E: GET suggest for vir, en, IN
+    alt hit at the edge
+        E-->>U: 200, age 12 s
+    else miss
+        E->>S: GET suggest for vir, en, IN
+        S->>I: lookup prefix vir
+        I-->>S: ten query ids with scores
+        Note over S: drop blocked ids, apply trending boost, render text
+        S-->>E: 200, max-age 60
+        E-->>U: 200
+    end
+    Note over U: shows ten suggestions, the next keystroke cancels this request if still in flight
+`} />
+
+## Storage and caching
+
+| Data | Where | Why |
+| --- | --- | --- |
+| Serving index | RAM on every suggest node, loaded from the latest snapshot | 26 GB fits; a disk read would spend the whole 10 ms budget |
+| Index snapshots | Object storage, one object per version | Immutable, replicated, loadable by any node in any region (see [Object storage](/learn/object-storage)) |
+| Hot prefixes | CDN edge, key = URL, `max-age=60`, 300 s for one- and two-character prefixes | The tiny short-prefix set is most of the traffic; the TTL is the freshness trade (see *Trade-offs*) |
+| Query log | Kafka, 7 days, then a data lake | Replayable if the stream job needs rebuilding |
+| Counts and scores | A columnar or wide-column store partitioned by day | Appended by the stream job, scanned by the builder |
+| Personal recents | On the device, or a small per-user key-value store | Personal data must never enter the shared cache |
+| Blocklist | A small table, pushed to every node, applied at build and at serve | Serve-time filtering is immediate; build-time filtering keeps the index clean |
+
+A stampede is built in: when a hot prefix expires at the edge, thousands of people are typing it in the same second, so request coalescing at the edge and in the service is mandatory. Nothing else is cached inside the service, because the index *is* the cache: a precomputed answer for every question anyone is likely to ask.
+
+## Scaling
+
+Replicate the index; do not shard it until it no longer fits one machine. Every node holds all 26 GB, so any node answers any prefix, there is no routing, and adding a node adds 20k lookups a second. When the index outgrows a box, shard by a hash of the first two characters rather than by the first letter, because `s` and `a` begin far more queries than `x` and `q` (see [Sharding](/learn/sharding)). The builder scales with the batch cluster; the stream job is partitioned by query hash, so one key's counts land on one task. Regions pull the same snapshot from object storage, so a build runs once and serves everywhere.
+
+## Consistency and availability
+
+| Data | Guarantee | Why |
+| --- | --- | --- |
+| Suggestions | Eventual: hourly rebuild, minute-level trending | A stale suggestion is not an error |
+| Index version across nodes | The same version within a minute of a swap | Two nodes disagreeing on `vir` is confusing, not harmful |
+| Blocklist | Applied on every node within seconds; the CDN purged for touched prefixes | The exception: a removal is urgent |
+| Personal recents | Read your own writes, on the device | Never shared, never at the edge |
+
+In [CAP](/learn/cap) terms this is AP throughout, and the one strong rule is about the availability of *search*: the client treats a suggest call unanswered after 150 ms as "no suggestions" and lets the person keep typing, a circuit breaker in miniature (see [Circuit breaker](/learn/circuit-breaker)). When the origin is down the edge serves stale answers for hot prefixes and nothing for the rest, and nobody is prevented from searching.
+
+<Callout type="analogy" title="The librarian's card">
+
+A good librarian does not search the shelves when you say "books about Vir…"; they already have a card for every opening they have heard this month, with the ten most asked-for titles on it. The cards are rewritten each night from the day's requests, and a sticker goes on for whatever everyone suddenly asked about this morning. Where the analogy breaks: the librarian knows who you are and the card index deliberately does not, which is why your own recent requests stay in your pocket, not on the cards.
+
+</Callout>
+
+## Failure and recovery
+
+| Failure | What users see | How it heals |
+| --- | --- | --- |
+| A suggest node restarts | Nothing | It loads the 26 GB snapshot from object storage, about a minute at 500 MB/s, and joins rotation only when loaded |
+| The hourly build fails | Suggestions age | The previous snapshot keeps serving; alert when the index is older than three hours |
+| A build produces a bad index | Would be empty or odd suggestions | A gate refuses to publish a snapshot with 10% fewer entries than the last or with sampled hot prefixes returning nothing |
+| The stream job falls behind | Trending lags | Consumer lag alert; the hourly build catches up; late events are handled as the stream-processing lesson describes |
+| A hot prefix expires at the edge | A burst of identical misses | Coalescing at the edge and the service |
+| Bots pump a query to make it trend | Spam in suggestions | Distinct-user counting, a cap per user per window, rate limits per device |
+| An offensive term appears | People see it until removed | A blocklist entry reaches every node within seconds, its prefixes are purged at the CDN, the next build drops it |
+| The origin region is down | Hot prefixes keep working from the edge; others return nothing | Stale-if-error at the edge; the client degrades to no suggestions |
+
+<mark>The index is immutable and versioned, so the worst build failure is staleness, never corruption.</mark>
+
+## Security
+
+- **Abuse this design invites:** scraping the index one prefix at a time, and poisoning it. Rate limits per device and IP answer the first; distinct-user counting, per-user caps and a minimum audience answer the second (see [API security](/learn/api-security)).
+- **Privacy:** the query log is personal data. Store a bucketed user id, keep 90 days, and never suggest a query seen from fewer than a threshold of distinct users (assume 20), so one person's search for their own name or diagnosis cannot surface for anyone else. Personal recents are returned only with authentication and marked private.
+- **Content:** a blocklist for exact terms and patterns, a classifier for the categories the blocklist cannot enumerate, and a serve-time filter so that a removal is immediate. Google states that its autocomplete removes predictions that are sexually explicit, hateful, violent or dangerous, and that it removes closely related predictions when one is reported.
+- **Output:** suggestions are rendered as text, never as markup, because the index is built from what strangers typed (see [Security fundamentals](/learn/security-fundamentals)).
+
+## Observability
+
+Six numbers prove the system is healthy (see [Metrics and monitoring](/learn/metrics-monitoring)): **p99 latency** at the edge and at the origin separately; **CDN hit ratio**, which decides how much the origin sees; **empty-result rate**, a quality and a coverage signal; **suggestion click-through**, the measure of ranking quality; **index age**, the freshness indicator that pages when a build is late; and **stream consumer lag**, which says whether trending is trending. The trace to keep (see [Distributed tracing](/learn/tracing)) is one keystroke on a CDN miss, with spans for the edge, the gateway and the lookup, so that a slow p99 says which of the three ate the budget.
+
+## Trade-offs and bottlenecks
+
+<Comparison>
+
+<ComparisonItem title="Precomputed top-10 per prefix (this design)">
+
+A hash lookup per keystroke, a few microseconds, no ranking at serve time. The cost is memory, 80 B for every prefix anyone has typed, and a rebuild to change any ranking; a trie with a top-10 at every node is the same idea with pointers instead of a hash map, sharing prefix storage at the price of cache misses.
+
+</ComparisonItem>
+
+<ComparisonItem title="Rank at query time from a sorted index">
+
+Keep every query sorted and, on each keystroke, binary-search to the first match and scan the range, picking the ten best as you go. No precomputation, far less memory, fresh the instant a score changes. The cost is that `a` matches millions of queries and the scan blows the budget; it only works where the range is small.
+
+</ComparisonItem>
+
+</Comparison>
+
+The condition that decides: <mark>how many queries share the prefix.</mark> Short prefixes have huge ranges and must be precomputed; long prefixes have tiny ranges and can be scanned, hence the cut at 20 characters. Next to break, in order: **memory**, as distinct queries grow with the user base; **freshness against the edge TTL**, since a 60-second cache delays every ranking change by up to a minute; **personalisation**, since anything per user is uncacheable at the edge; and **typo tolerance**, whose candidates cost a dozen lookups per keystroke (deep dive 2). Not taken: a database on the hot path, because the budget is ten milliseconds; a Redis sorted set per prefix, the same precomputation with a network hop added; and a search engine's suggester as the only tier, although a system like this could run the index inside Elasticsearch's completion suggester, which is likewise built in advance and kept entirely in heap, trading control for a ready-made fuzzy option.
+
+<Callout type="interview" title="Separate the keystroke from the computation">
+
+"Thirty thousand requests a second with ten milliseconds each, so the hot path is a hash lookup in RAM against a precomputed top-ten per prefix, behind a CDN that serves the short prefixes. Everything clever happens offline: a stream job counts distinct users per minute and spots trends, an hourly build recomputes decayed scores and the top-tens, and the index is published as an immutable snapshot that nodes swap whole. Personal recents merge on the client, and the blocklist is the one thing applied at serve time, because removals cannot wait." Then say what you refuse: any database call on the keystroke path.
+
+</Callout>
+
+## How it evolves
+
+At **10×** (100M users, 300k requests a second) the index is sharded by a hash of the first two characters, built per language rather than as one global job, and loaded in each region from a regional copy of the snapshot. Trending becomes its own small index merged at serve time, and the edge TTL drops for prefixes the trending delta touches.
+
+At **100×** the ranking stops being a static score: a model reranks the ten candidates at serve time with time of day, region and the user's recent context, inside the same budget, because candidate generation stays a lookup. The long tail moves from RAM to fast local storage built for prefix scans, the hot set stays in memory, and the pipeline becomes a search-quality platform with the hourly build as one job among many.
+
+## Deep dive 1: building the top-10 and keeping it fresh
+
+The build is a batch job. Sort the 50M kept queries by decayed score, descending; for each query, offer it to the top-10 list of each of its prefixes up to 20 characters, and because queries arrive best-first a full list rejects the offer in constant time. That is 10⁹ operations, minutes on a modest cluster, so hourly costs little. The result is one versioned snapshot file; nodes load the next version beside the current one and switch a pointer, so a swap is atomic and a rollback is the previous file.
+
+<Steps>
+
+1. **Count.** The stream job windows `search.queries` into 1-minute tumbling windows per query, language and region, counting distinct users rather than events. When counting every query per minute holds too much state, a Space-Saving summary per prefix keeps the approximate top-k instead.
+2. **Decay.** The builder sums counts over 90 days with a half-life of one week, so the score tracks what is popular now without forgetting what is always popular.
+3. **Detect trends.** Every minute the stream job compares the last ten minutes of distinct users for a query with the same ten minutes a week earlier; a ratio above five with at least 500 distinct users marks it trending.
+4. **Push a bounded delta.** Trending queries are pushed to every node as a delta that can occupy at most two of a prefix's ten slots and expires after 30 minutes unless renewed. Two slots, because a breaking story should appear, not take over.
+5. **Purge where it matters.** For each prefix a delta touches, the CDN entry is purged, so that the minute-level change is visible at the edge too. Everything else waits for its 60-second TTL.
+
+</Steps>
+
+Watermarks decide when a window is final, and a batch of events from a phone that was offline is late data; for counting popularity, dropping it is fine, a luxury most stream jobs lack. The distinct-user rule and the two-slot cap are the answer to manipulation: it takes hundreds of real people, not one script, to make a term trend, and even then it shares the list with what people actually search for.
+
+## Deep dive 2: typos and the terms you must never show
+
+**Typo tolerance** is expensive because a misspelt prefix matches nothing, so the service must generate candidates and look each one up. Two rules keep it affordable. Fuzzy-match only when the exact prefix returns fewer than ten results, and only once it has at least three characters, because one or two characters have too many neighbours to mean anything; Elasticsearch's completion suggester defaults the same way, a minimum input length of three with the first character never fuzzed. Then allow one edit for prefixes of three to five characters and two beyond, generated by deleting, swapping and substituting characters, and look each candidate up in the same hash map; a dozen lookups at a few microseconds each fits the budget. Candidates sharing a longer exact prefix with what was typed rank first, because the typo is more likely near the end.
+
+**Filtering** happens twice. At build time the blocklist and a classifier remove terms, so the published index is clean. At serve time the blocklist is applied again, because a term reported at 10:00 cannot wait for the 11:00 build, and because the trending delta bypasses the build. Google's account of its autocomplete says predictions come from real searches and are removed when they violate its policies on sexually explicit, hateful, violent and dangerous content, with closely related predictions removed alongside a reported one; that last point is why a blocklist entry here is a *pattern* over a prefix family, not one string.
+
+The quietest filter is the minimum audience. A query only a few people have ever typed is probably one person's name, address or medical worry, and the index must not repeat it to the next person who types its first three letters. <mark>Suggest only what many people have asked for</mark>: the rule that defeats bots also protects privacy, enforced where it is cheapest, at build time, before the term exists anywhere a lookup can find it.

@@ -1,0 +1,106 @@
+**Kubernetes** (K8s) runs [containers](/learn/containers) across a fleet of machines and keeps them matching a description you wrote down: you submit the *desired state* as objects in its API ("three replicas of this image, reachable on port 80") and **controllers** work continuously to make the actual state match, restarting, rescheduling and rerouting as processes and machines fail.
+
+The problem appears the moment you have more containers than you can place by hand: a food-delivery backend at lunchtime might run hundreds of containers across forty machines, and something has to decide which machine has room, notice when a process dies, give each service a stable address while its instances churn, and roll out a new version without dropping orders.
+
+## The objects, from the outside in
+
+<Mermaid caption="Traffic enters through an Ingress or Gateway, reaches a Service, and is routed to Pods that a Deployment created through a ReplicaSet. ConfigMaps and Secrets feed the Pods their settings." chart={`flowchart TB
+    U["Internet"] --> IG["Ingress or Gateway: HTTP routes"]
+    IG --> S["Service: stable virtual IP and DNS name"]
+    S --> P1["Pod"]
+    S --> P2["Pod"]
+    S --> P3["Pod"]
+    DEP["Deployment"] --> RS["ReplicaSet"]
+    RS --> P1
+    RS --> P2
+    RS --> P3
+    CM["ConfigMap and Secret"] -.-> P1
+    CM -.-> P2
+    CM -.-> P3
+`} />
+
+| Object | What it is | What it solves |
+| --- | --- | --- |
+| Pod | One or more containers sharing an IP address, port space and volumes, scheduled together | The unit of placement; a sidecar talks to the app over `localhost` |
+| ReplicaSet | Keeps a fixed number of identical Pods running | A Pod dies, a replacement appears |
+| Deployment | Manages ReplicaSets and provides declarative updates | Rolling a new image out, and back |
+| Service | A stable virtual IP and DNS name for the Pods matching a label selector | Pod IPs change constantly; callers need one address |
+| Ingress | HTTP and HTTPS routing by host and path, TLS termination | One public entry point for many services |
+| ConfigMap | Non-confidential settings, injected as environment variables or files | Same image, different settings per environment |
+| Secret | The same for credentials and keys | Keeps secrets out of the image |
+
+A Pod is disposable and nothing recreates it when it dies, so you rarely create one directly: a **Deployment** creates a **ReplicaSet**, which creates the Pods, and the Deployment keeps its last ten ReplicaSets so that a rollback is just scaling an old one back up.
+
+The **Service** is where this connects to [load balancing](/learn/load-balancing). Its `ClusterIP` (the default) is reachable only inside the cluster; `NodePort` opens a port from the 30000 to 32767 range on every node; `LoadBalancer` asks the cloud for an external balancer that forwards to those ports; `ExternalName` is a DNS alias. On every node, `kube-proxy` programs forwarding rules so that traffic to the virtual IP reaches one of the ready Pods: layer-4 balancing. **Ingress** is the layer-7 half and does nothing until an *Ingress controller* (NGINX, a cloud load balancer) is installed to act on it. The Ingress API is frozen; its successor, the **Gateway API**, splits `GatewayClass`, `Gateway` and `HTTPRoute` between platform and application teams and supports header matching and traffic splitting without vendor annotations.
+
+**ConfigMaps** and **Secrets** are each limited to 1 MiB. A Secret's values are base64-encoded, which is encoding, not encryption, and by default Secrets sit unencrypted in etcd, so turn on encryption at rest and restrict who may read them. Mounted ConfigMap files refresh eventually after an update; environment variables need a Pod restart.
+
+## Scheduling with requests and limits
+
+```yaml
+resources:
+  requests:
+    cpu: "250m"        # a quarter of a core; used to place the Pod
+    memory: "256Mi"
+  limits:
+    cpu: "500m"        # throttled above this
+    memory: "512Mi"    # may be OOM-killed above this
+```
+
+The scheduler places a Pod on a node whose capacity covers the sum of its **requests**, comparing requests with capacity rather than actual usage, so under-requesting packs nodes until they thrash. **Limits** are enforced by the kernel through cgroups: a container over its CPU limit is throttled, and one over its memory limit may be OOM-killed and restarted. `1` CPU is one core and `250m` a quarter of one; a limit without a request makes the request equal the limit.
+
+## Probes: three questions, three different consequences
+
+| Probe | Question | When it fails |
+| --- | --- | --- |
+| Liveness | Is the process stuck beyond repair? | The kubelet restarts the container |
+| Readiness | Can this Pod take traffic right now? | The Pod's IP is removed from the Service's EndpointSlices until it passes again |
+| Startup | Has the app finished starting? | Liveness and readiness are held off until it succeeds; if it never does, the container is killed and restarted |
+
+A container with no probe counts as passing. By default a probe runs every 10 seconds, times out after 1 second and needs 3 consecutive failures, so a hung process is restarted about half a minute later. A Java service that takes two minutes to start would be killed by that liveness probe before it ever answered; the startup probe exists for it: `failureThreshold: 30` with `periodSeconds: 10` allows 300 seconds, after which the normal liveness probe takes over.
+
+<Callout type="warning" title="A liveness probe that checks the database restarts everything">
+
+Liveness should ask only whether this process is healthy, because a failing check restarts the container. If it also pings the database, a database blip restarts every Pod at once, the restarts cause a cold-cache stampede, and the outage grows. Put dependency checks in the readiness probe, which merely withholds traffic until the dependency returns.
+
+</Callout>
+
+## Rolling updates
+
+Change the image in a Deployment and the default `RollingUpdate` strategy replaces Pods gradually, governed by `maxSurge`, how many Pods may exist above the desired count (default 25%, rounded up), and `maxUnavailable`, how many may be missing (default 25%, rounded down); they cannot both be zero. With ten replicas, at most thirteen Pods exist and at least eight stay available.
+
+<Steps>
+
+1. A new ReplicaSet is created for the new image.
+2. It scales up, but never beyond desired plus `maxSurge`.
+3. New Pods must pass their readiness probe before they count as available.
+4. The old ReplicaSet scales down, never dropping below desired minus `maxUnavailable`.
+5. Repeat until the old ReplicaSet reaches zero; it is kept so `kubectl rollout undo` can scale it back up.
+
+</Steps>
+
+Readiness makes this safe: a new version that starts but cannot serve never receives traffic, and the rollout stalls instead of taking the service down.
+
+## The control plane in one paragraph
+
+The **kube-apiserver** is the only front door: every `kubectl` command and every controller goes through it, and it stores everything in **etcd**, a key-value store kept consistent by Raft (see [Consensus](/learn/consensus)). The **kube-scheduler** assigns Pods to nodes; the **kube-controller-manager** runs the controllers (ReplicaSet, Deployment and dozens more) that reconcile desired and actual state; a cloud-controller-manager talks to the cloud provider for load balancers and similar resources. On each node the **kubelet** keeps its assigned Pods running, `kube-proxy` maintains the Service rules, and a CRI runtime such as `containerd` or CRI-O runs the containers (the Docker shim was removed in 1.24). Changing the replica count from metrics is the **Horizontal Pod Autoscaler** (HPA), covered in [Autoscaling](/learn/autoscaling).
+
+<Callout type="analogy" title="A thermostat, not a remote control">
+
+You do not tell Kubernetes to start a container; you set the temperature. Each controller compares the reading with the setting and nudges: too few Pods, create one; a node vanished, reschedule its Pods. Where the analogy breaks: there are dozens of thermostats acting independently, so a Deployment will happily keep recreating Pods that a bad liveness probe keeps killing.
+
+</Callout>
+
+<Callout type="interview" title="Match each object to the problem it solves">
+
+"Deployment for rollout and rollback, Service for a stable address in front of changing Pods, Ingress or Gateway for host and path routing and TLS, readiness probes so a rollout only proceeds when new Pods actually serve, requests and limits so the scheduler can pack nodes safely." Naming the object and the failure it prevents is worth more than listing YAML fields.
+
+</Callout>
+
+<mark>Declare the state, let the controllers chase it, and make readiness the gate on every change.</mark>
+
+<DeepDive title="Go deeper: how a Service routes a packet">
+
+`kube-proxy` on each node watches Service and EndpointSlice objects and installs rules (with `iptables` by default today, `nftables` planned as the future default, or IPVS) that capture packets to the virtual IP and port and rewrite them to one Pod's IP, chosen randomly unless session affinity is on. The EndpointSlice controller keeps the list of ready Pod IPs, at most 100 per slice by default, and removes a Pod the moment its readiness probe fails; the older Endpoints API that held every address in one object is deprecated since version 1.33. A *headless* Service (`clusterIP: None`) gets no virtual IP: its DNS name returns the Pod IPs themselves, for clients that want to choose, which is the client-side pattern in [Service discovery](/learn/service-discovery).
+
+</DeepDive>

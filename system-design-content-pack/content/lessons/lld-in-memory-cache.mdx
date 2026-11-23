@@ -1,0 +1,350 @@
+An in-memory cache looks like a map with a size limit, and the first design most people draw is exactly that: a `HashMap` plus a rule for which entry to throw out. The rule is where it gets interesting, because "least recently used" needs an order, a map has none, and keeping one naively costs a scan on every eviction. The decision that carries this case study is to **keep the storage and the eviction order apart**: a hash map answers "where is this key" in O(1), a doubly linked list the policy owns answers "who goes next" in O(1), and the policy sits behind an `EvictionPolicy` interface so least-recently-used and least-frequently-used swap without touching `get` or `put`. Expiry, statistics, a loader that stops stampedes and the choice of lock are layered on that core.
+
+## Requirements and assumptions
+
+**Functional requirements**
+
+- `get(key)`, `put(key, value)`, `remove(key)` and `size()`, generic in key and value types.
+- A capacity in entries; when it is reached, `put` evicts one entry chosen by a policy. Least recently used is the default; least frequently used must be possible.
+- An optional time to live per entry: an expired entry is never returned, and its memory is reclaimed without waiting for a read.
+- Statistics: hits, misses, evictions.
+- A read-through variant that loads a missing value from a slower source once per key, however many threads ask at the same time.
+
+**Assumptions**, stated so they can be challenged: one process; capacity between ten thousand and a million entries; reads outnumber writes about ten to one; values are immutable once cached; keys have a good `hashCode`. Capacity counts entries rather than bytes, which is wrong for mixed sizes; weighing is an extension.
+
+**Out of scope**: persistence, replication, anything that spans machines. What to cache, cache-aside versus write-through and what a distributed cache changes are in [Caching](/learn/caching) and are not re-taught here.
+
+**Non-functional**: no operation on the hot path may take time proportional to the number of entries; correctness under concurrent access; throughput that does not collapse to one thread's worth when many threads read.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility | Knows |
+| --- | --- | --- |
+| Cache | The interface callers see: get, put, remove, size | nothing: it is a contract |
+| BasicCache | Owns the map and the capacity; expires lazily on read; asks the policy for a victim | map, policy, capacity, clock |
+| Entry | One cached item plus the links the policy threads through it | key, value, deadline, prev, next, frequency |
+| EvictionPolicy | Keeps the order and names the victim; told about every insert, access and removal | its list or lists |
+| LruPolicy, LfuPolicy | The two orders: by recency and by frequency | sentinels, frequency buckets |
+| TtlSweeper | A periodic task that removes expired entries nobody has read | the cache, a schedule |
+| StatsCache | A Decorator that counts hits, misses and evictions around any Cache | counters, the inner cache |
+| LoadingCache | Read-through: on a miss, loads once per key and shares the result | cache, loader, in-flight loads |
+| Clock | Injected source of time so expiry is testable | the current time |
+
+The entry carries its own list links. That is the trick behind O(1): when `get` finds an entry through the map, the policy already holds a pointer into the middle of its list and can relink it without searching. The small smell is that one `Entry` type carries a `frequency` field the LRU policy ignores.
+
+## Class design
+
+<Mermaid caption="Storage on the left, order on the right. BasicCache depends on EvictionPolicy, never on LruPolicy. StatsCache and LoadingCache wrap the Cache interface and know nothing about how it is stored." chart={`classDiagram
+    class Cache {
+        <<interface>>
+        +get(K key) Optional
+        +put(K key, V value, Duration ttl)
+        +remove(K key)
+        +size() int
+    }
+    class BasicCache {
+        -Map map
+        -int capacity
+        -Clock clock
+        +get(K key) Optional
+        +put(K key, V value, Duration ttl)
+        +sweepExpired()
+    }
+    class Entry {
+        +K key
+        +V value
+        +long expiresAt
+        +Entry prev
+        +Entry next
+        +int frequency
+    }
+    class EvictionPolicy {
+        <<interface>>
+        +onInsert(Entry entry)
+        +onAccess(Entry entry)
+        +onRemove(Entry entry)
+        +victim() Entry
+    }
+    class LruPolicy {
+        -Entry head
+        -Entry tail
+    }
+    class LfuPolicy {
+        -int minFrequency
+    }
+    class StatsCache {
+        -LongAdder hits
+        -LongAdder misses
+    }
+    class LoadingCache {
+        -Map inFlight
+        +get(K key) V
+    }
+    class CacheLoader {
+        <<interface>>
+        +load(K key) V
+    }
+    class TtlSweeper
+    class Clock {
+        <<interface>>
+        +millis() long
+    }
+    BasicCache ..|> Cache
+    StatsCache ..|> Cache
+    StatsCache o-- Cache : wraps
+    LoadingCache o-- Cache : reads through
+    LoadingCache --> CacheLoader
+    BasicCache *-- Entry
+    BasicCache --> EvictionPolicy
+    BasicCache --> Clock
+    LruPolicy ..|> EvictionPolicy
+    LfuPolicy ..|> EvictionPolicy
+    TtlSweeper --> BasicCache : sweepExpired
+`} />
+
+## Key interfaces and methods
+
+The caller's interface returns `Optional` so absence is unambiguous; the policy's interface speaks in entries, not keys, so it never needs a second hash lookup.
+
+```java
+interface Cache<K, V> {
+    Optional<V> get(K key);
+    void put(K key, V value, Duration ttl);     // Duration.ZERO means never expire
+    void remove(K key);
+    int size();
+}
+interface EvictionPolicy<K, V> {
+    void onInsert(Entry<K, V> e);
+    void onAccess(Entry<K, V> e);
+    void onRemove(Entry<K, V> e);
+    Entry<K, V> victim();                       // the entry to evict when the cache is full
+}
+final class Entry<K, V> {
+    final K key; V value; long expiresAt;       // 0 means no deadline
+    Entry<K, V> prev, next;                     // owned by the policy
+    int frequency;                              // used by LFU, ignored by LRU
+}
+```
+
+The core delegates the two decisions it does not own: the clock says whether an entry is stale, the policy says who leaves.
+
+```java
+final class BasicCache<K, V> implements Cache<K, V> {
+    private final Map<K, Entry<K, V>> map = new HashMap<>();
+    private final EvictionPolicy<K, V> policy;
+    private final int capacity;
+    private final Clock clock;
+
+    public synchronized Optional<V> get(K key) {
+        Entry<K, V> e = map.get(key);
+        if (e == null) return Optional.empty();
+        if (e.expiresAt != 0 && clock.millis() >= e.expiresAt) { removeEntry(e); return Optional.empty(); }  // lazy expiry
+        policy.onAccess(e);
+        return Optional.of(e.value);
+    }
+    public synchronized void put(K key, V value, Duration ttl) {
+        long deadline = ttl.isZero() ? 0 : clock.millis() + ttl.toMillis();
+        Entry<K, V> e = map.get(key);
+        if (e != null) { e.value = value; e.expiresAt = deadline; policy.onAccess(e); return; }   // update, no growth
+        if (map.size() >= capacity) removeEntry(policy.victim());                                  // make room first
+        e = new Entry<>(key, value, deadline);
+        map.put(key, e);
+        policy.onInsert(e);
+    }
+    private void removeEntry(Entry<K, V> e) { map.remove(e.key); policy.onRemove(e); }
+}
+```
+
+The LRU policy is a doubly linked list with two sentinel nodes, so unlinking never checks for a null neighbour. Most recent goes before the tail; the victim is whatever follows the head.
+
+```java
+final class LruPolicy<K, V> implements EvictionPolicy<K, V> {
+    private final Entry<K, V> head = new Entry<>(), tail = new Entry<>();   // sentinels, never evicted
+    LruPolicy() { head.next = tail; tail.prev = head; }
+    public void onInsert(Entry<K, V> e) { linkBeforeTail(e); }
+    public void onAccess(Entry<K, V> e) { unlink(e); linkBeforeTail(e); }   // O(1): no search, four pointer writes
+    public void onRemove(Entry<K, V> e) { unlink(e); }
+    public Entry<K, V> victim() { return head.next; }                        // least recently used
+}
+```
+
+Java ships this structure. `LinkedHashMap` with `accessOrder` true reorders on `get` as well as `put`, and `removeEldestEntry` is called after every insertion with the oldest entry:
+
+```java
+Map<K, V> lru = new LinkedHashMap<>(16, 0.75f, true) {                  // true: access order, not insertion order
+    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) { return size() > capacity; }
+};
+```
+
+It is the right answer when you need an LRU map and nothing else, and the wrong one the moment you need TTL, statistics or a different policy, because none of those hook in. Say that in the interview and then write the explicit version.
+
+Expiry has two halves. Reads check the deadline, a comparison that catches the common case; a sweeper catches entries nobody reads again:
+
+```java
+ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+scheduler.scheduleWithFixedDelay(cache::sweepExpired, 1, 1, TimeUnit.SECONDS);   // fixed delay: never overlaps itself
+```
+
+`sweepExpired` takes the lock, walks a bounded number of entries, removes the stale ones and returns. Bounding the work per tick matters more than the period: a sweep that holds the lock for a million entries is a pause every caller feels. Guava's cache has no background thread at all: it does small amounts of maintenance inside callers' writes and occasional reads, so that no extra thread competes for the lock, and offers `cleanUp()` for anyone who wants a schedule.
+
+Statistics are a Decorator in the sense of [Design patterns II](/learn/design-patterns-structural): same interface, one added concern, stackable, absent in tests.
+
+```java
+final class StatsCache<K, V> implements Cache<K, V> {
+    private final Cache<K, V> inner;
+    private final LongAdder hits = new LongAdder(), misses = new LongAdder();
+    public Optional<V> get(K key) {
+        Optional<V> v = inner.get(key);
+        (v.isPresent() ? hits : misses).increment();
+        return v;
+    }
+    double hitRatio() { long h = hits.sum(), m = misses.sum(); return h + m == 0 ? 0 : (double) h / (h + m); }
+}
+```
+
+The loader turns a cache into protection for the database behind it. Without it, when a popular key expires, every thread that misses in the same millisecond runs the same slow load. With it, the first thread registers a future under the key and loads; the rest find the future and wait on it.
+
+```java
+final class LoadingCache<K, V> {
+    private final Cache<K, V> cache;
+    private final CacheLoader<K, V> loader;
+    private final ConcurrentHashMap<K, CompletableFuture<V>> inFlight = new ConcurrentHashMap<>();
+
+    V get(K key) {
+        Optional<V> hit = cache.get(key);
+        if (hit.isPresent()) return hit.get();
+        CompletableFuture<V> mine = new CompletableFuture<>();
+        CompletableFuture<V> theirs = inFlight.putIfAbsent(key, mine);        // exactly one loader per key
+        if (theirs != null) return theirs.join();                              // someone else is loading: wait, share
+        try {
+            V value = loader.load(key);
+            cache.put(key, value, loader.ttlFor(key));
+            mine.complete(value);
+            return value;
+        } catch (RuntimeException ex) { mine.completeExceptionally(ex); throw ex; }
+        finally { inFlight.remove(key); }                                      // the next miss loads afresh
+    }
+}
+```
+
+The load runs outside any cache lock, which is the point: a slow database call must never hold up unrelated `get` calls. The same single-flight idea is a named package in Go's extended library and is how Guava's and Caffeine's loading caches behave: a second caller for a key being loaded waits for the first and receives its value.
+
+## Interactions
+
+<Mermaid caption="Three calls on a full LRU cache with capacity 3. A hit relinks the entry to the recent end, a stale read removes rather than returns, and a put on a full cache evicts the head of the list before inserting." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant A as Caller
+    participant C as BasicCache
+    participant M as HashMap
+    participant P as LruPolicy
+    participant K as Clock
+    A->>C: get(user42)
+    C->>M: get(user42)
+    M-->>C: entry
+    C->>K: millis()
+    K-->>C: before deadline
+    C->>P: onAccess(entry)
+    Note over P: unlink, link before tail
+    C-->>A: Optional of profile
+    A->>C: get(session9)
+    C->>M: get(session9)
+    M-->>C: entry
+    C->>K: millis()
+    K-->>C: past deadline
+    C->>M: remove(session9)
+    C->>P: onRemove(entry)
+    C-->>A: Optional.empty
+    A->>C: put(user77, profile, 10 min)
+    C->>P: victim()
+    P-->>C: head.next, least recently used
+    C->>M: remove(victim key)
+    C->>P: onRemove(victim)
+    C->>M: put(user77, entry)
+    C->>P: onInsert(entry)
+    C-->>A: done
+`} />
+
+An entry has exactly four exits, which is a useful checklist for tests.
+
+<Mermaid caption="Lifecycle of one entry. Expired entries linger in the map until a read or the sweeper notices them, which is why size can briefly include entries no caller can get." chart={`stateDiagram-v2
+    state "Live, with deadline" as Live
+    state "Expired, still in map" as Expired
+    [*] --> Live: put inserts
+    Live --> Live: get moves it to the recent end
+    Live --> Live: put on the same key replaces the value
+    Live --> Expired: deadline passes
+    Expired --> [*]: get finds it stale and removes it
+    Expired --> [*]: sweeper removes it
+    Live --> [*]: policy picks it as victim on a full put
+    Live --> [*]: remove(key)
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Strategy | EvictionPolicy with LruPolicy and LfuPolicy | The order changes between teams and workloads; each policy is tested alone | You will only ever want LRU: use LinkedHashMap |
+| Decorator | StatsCache around any Cache | Counting is a separate concern, stackable with a metrics wrapper, absent in tests | Statistics are two fields nobody reads |
+| Read-through wrapper | LoadingCache | Turns a miss into one shared load; the single-flight map is the part to remember | Callers already coordinate their loads |
+
+Two things are deliberately not here. The cache is not a Singleton: one instance built at start-up and injected is all "one" means. And there is no Observer for evictions, although a removal listener is the first extension users ask for.
+
+## Edge cases and error handling
+
+- **Put on an existing key.** Updates the value and deadline and counts as an access; size does not grow and no victim is chosen. Forgetting this makes a cache evict on every update.
+- **Capacity zero or negative, null keys or values.** Rejected at the boundary. A cache that silently stores nothing shows up as a slow database, and `Optional` already makes absence unambiguous.
+- **The clock moves.** `Clock.millis` is wall-clock time, and a time correction can jump either way; entries then expire late or early. If that matters, compute deadlines from a monotonic nanosecond source, behind an interface so it stays testable.
+- **The loader fails.** `LoadingCache` completes the future exceptionally and removes it, so every waiter sees the failure and the next caller retries. Caching the failure for a few seconds is a deliberate option when the source is down.
+- **The loader is slow and the key is hot.** Waiters pile up on `join()`; that is the design working, one load instead of hundreds. A timeout on the join turns a stuck database into a fast failure.
+
+<Callout type="analogy" title="Papers on a desk">
+
+A stack of papers on a desk is an LRU cache: whatever you touch goes on top, and when the desk is full the bottom sheet goes to the archive. The hash map is the index card that says where each paper is, so you never rummage. Where the analogy fails: pulling a sheet from the middle of a real stack takes effort proportional to the pile above it. The doubly linked list makes it a single pull, because each sheet knows its two neighbours and they close the gap.
+
+</Callout>
+
+## Concurrency
+
+Name the shared mutable state, as [Concurrency and thread safety](/learn/concurrency-basics) asks: the map, the list links inside every entry, the value and deadline fields, the statistics. Then notice the fact that decides the section: **in an LRU cache a read is a write**. Every `get` relinks an entry, so there is no read-only path to optimise.
+
+| Design | How | What it buys | What it costs |
+| --- | --- | --- | --- |
+| One lock | `synchronized` on get and put, as above | Simple, obviously correct, size is exact | Every caller takes turns: one thread's throughput |
+| Lock striping | N independent segments chosen by key hash, each with its own lock and share of the capacity | Callers on different segments never wait | Eviction is approximate across segments; a hot key still serialises on its segment |
+| ConcurrentHashMap plus a list lock | Lookups do not block; only the relink takes a lock | Misses and expiry checks run lock-free | Hits still queue for the list lock, so the gain is smaller than it looks |
+
+`ReentrantReadWriteLock` is the tempting fourth row and it does not help here. Its documentation is explicit that it pays off when readers outnumber writers and operations outweigh the lock's own overhead; an LRU `get` is a writer. A `StampedLock` with `tryOptimisticRead` and `validate` does help for a TTL-only cache with no recency order, where a read truly reads: take a stamp, read the entry, validate, fall back to the read lock if a writer intervened. Production caches go further by not relinking on every hit: they record accesses in a small buffer and apply them to the list in batches under the lock, accepting a recency order that lags by a few operations.
+
+The rest is mechanical. The `LoadingCache` map is a `ConcurrentHashMap` and `putIfAbsent` is atomic, so two threads cannot both believe they are the loader, and the load itself happens outside every lock. Statistics use `LongAdder` rather than `AtomicLong`, which the Java documentation recommends for sums kept as statistics rather than for coordination; its `sum()` is not an atomic snapshot, which a hit ratio can live with. The sweeper uses `scheduleWithFixedDelay`, so a slow sweep delays the next rather than overlapping it, and takes the callers' lock in short, bounded bites.
+
+## Extensibility and trade-offs
+
+- **Least frequently used.** One more `EvictionPolicy`. The naive version keeps a heap and pays a logarithmic cost per access; the O(1) version in the deep dive costs a counter per entry and brings the pollution problem: last week's hot item outranks today's until its count is aged down.
+- **Removal listener.** A callback on eviction and expiry, invoked after the lock is released so a slow listener cannot stall the cache: the Observer left out of the core.
+- **Weighing.** Capacity in bytes rather than entries: a weigher function and a running total replace `map.size()`, and the victim loop evicts until the total fits.
+- **Write-through, write-behind, and across machines.** `put` also writes to the source, synchronously or through a queue; a shared cache needs a network, a serialisation format and a consistency story. Both are the system-level track's business, in [Caching](/learn/caching), not a bigger `HashMap`.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| Links inside Entry | O(1) relink with one hash lookup | Entry is mutable and shared with the policy |
+| Policy speaks in entries | No second map inside the policy | Policy and cache are coupled through Entry |
+| Lazy expiry plus a sweeper | Reads stay cheap; memory is still reclaimed | Size briefly counts stale entries |
+| One lock by default | Correct, exact, easy to reason about | One thread's throughput under contention |
+
+<Callout type="interview" title="The two-minute version">
+
+"A hash map for lookup and a doubly linked list for order, with the links stored in the entry so a hit relinks in O(1). The order lives behind an EvictionPolicy Strategy, LRU by default, LFU as another class. TTL is checked lazily on read and swept periodically. Statistics are a Decorator; a loading wrapper keeps one in-flight future per key so a hot miss loads once. One lock to start, because in LRU every read is a write, so a read-write lock buys nothing; striping when profiling says so." Then mention `LinkedHashMap` with access order as the twenty-line version, and why it stops being enough.
+
+</Callout>
+
+<DeepDive title="Go deeper: LFU in constant time, and why LRU is still the default">
+
+The O(1) LFU structure, described by Matani, Shah and Mitra, is two levels of doubly linked list: a list of frequency nodes in increasing order, each owning a list of the entries with that frequency, plus the hash map from key to entry. An access unlinks the entry from its frequency node and moves it to the next node, creating it if absent and removing the old one if it emptied. Insert goes into the frequency-one node; eviction takes any entry from the first node. Every step is a handful of pointer writes. Why not make it the default? Because frequency is history and recency is now: a key read a thousand times yesterday keeps its place until a thousand new reads displace it, so LFU is worst exactly when the workload shifts. Production caches add ageing, periodically halving every count, or combine both signals in a windowed admission filter. For an interview, LRU with a swappable policy is the answer; naming the LFU cost and the pollution problem shows you have thought about it.
+
+</DeepDive>

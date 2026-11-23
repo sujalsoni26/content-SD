@@ -1,0 +1,171 @@
+{
+  "slug": "stream-processing",
+  "title": "Stream processing",
+  "moduleId": "streaming",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "A per-minute metric computed as events arrive shows zeros while phones are offline and a spike when they reconnect, and a crash loses every running count.",
+  "summary": "Stream processors compute continuously over unbounded data. Event time and watermarks decide when a window is complete, windows shape the metric, checkpoints make operator state survive failures, and stream-table joins enrich events with the right version of a row.",
+  "catTip": "I count mice per hour by when I caught them, not when I finally bring them in. A watermark is me deciding the hour is over; the mouse that turns up afterwards is late data, and I note it rather than pretend it never happened.",
+  "recall": {
+    "q": "A dashboard counts rides started per minute from phone events that can arrive minutes late. What do event time, a watermark and allowed lateness each contribute?",
+    "a": "Event time puts each ride in the minute it actually started rather than the minute it arrived. The watermark is the processor's estimate that no older events remain, which lets it close a window. Allowed lateness keeps a closed window updatable for a while so late events correct the count instead of being dropped."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Windowing by arrival time misplaces delayed events, closing windows too early drops stragglers, and a crash without checkpoints loses every count, session and join buffer the job had built up.",
+    "tradeoffs": "Waiting longer for late data gives more complete results at higher latency, checkpointing costs snapshot time and barrier alignment, and exactly-once sinks need transactions or idempotent writes that slow the pipeline.",
+    "explainSimply": "A stream processor is a clerk counting letters by postmark, not by the day they land in the letterbox. At some point the clerk says the Tuesday pile is closed, which is a guess, and keeps a saved copy of the tallies so a dropped ledger does not mean starting from zero.",
+    "hint": "Separate when it happened from when you saw it, then ask how the job decides a minute is finished and what it saves in case it crashes."
+  },
+  "meow": "Mice per hour by catch time, not carry-in time. Hour closed at the watermark; late mouse still gets counted, purr-haps corrected.",
+  "quiz": [
+    {
+      "prompt": "A Flink job uses one-minute tumbling windows on event time with a watermark 5 seconds behind the latest event and the default allowed lateness. An event timestamped 10:03:50 arrives when the watermark is already at 10:04:20. What happens to it?",
+      "options": [
+        "It is added to the 10:03 window, which re-emits an updated count",
+        "It is dropped, because the 10:03 window closed when the watermark passed 10:04:00 and allowed lateness is 0",
+        "It is placed in the 10:04 window, since that is the window currently open",
+        "It stalls the job until the window is reopened"
+      ],
+      "answer": 1,
+      "explanation": "With allowed lateness at its default of 0, a window is final once the watermark passes its end, and later elements are discarded unless routed to a side output. Only a configured allowed lateness would let the 10:03 window re-emit."
+    },
+    {
+      "prompt": "Which window type fits 'alert if there were more than 100 failed logins in the last 5 minutes, checked every minute'?",
+      "options": [
+        "A 5-minute tumbling window",
+        "A 5-minute sliding window with a 1-minute slide",
+        "A session window with a 5-minute gap",
+        "A global window with a count trigger of 100"
+      ],
+      "answer": 1,
+      "explanation": "The metric looks back over a fixed 5-minute span but must be evaluated every minute, so consecutive windows overlap: that is a sliding window. A tumbling window would only answer once per 5 minutes and could split a burst across two windows."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A Flink job restores from its last checkpoint after a TaskManager crash. What exactly is restored, and why does replaying input not double-count?",
+      "a": "Every operator's state as of the checkpoint barrier plus the source offsets recorded with it. Sources rewind to those offsets, so records after the checkpoint are replayed into state that has never seen them; state is exactly-once even though the input is re-read. Sinks still need idempotent writes or a two-phase commit to avoid duplicate output."
+    },
+    {
+      "q": "You enrich a stream of orders with product prices from a price-change stream. A price update for product P arrives after an order for P that it should have applied to. What distinguishes the join types here?",
+      "a": "An event-time temporal join uses a versioned table and picks the price as of the order's timestamp, so the late update is matched correctly once it arrives (within lateness). A processing-time temporal or lookup join uses whatever price is latest when the order is processed, which is cheaper but gives the wrong historical price."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    {
+      "title": "Apache Flink documentation (stable, 2.3), Concepts: Timely Stream Processing",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/time/",
+      "accessed": "2026-11-22",
+      "supports": "definitions of processing time and event time; the watermark definition (event time has reached t, no more elements with timestamp at or below t); an operator's event time is the minimum of its inputs; late elements arrive after the watermark",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Flink documentation (stable), DataStream operators: Windows",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/operators/windows/",
+      "accessed": "2026-11-22",
+      "supports": "tumbling, sliding, session and global window assigners; allowed lateness defaults to 0 and late elements are dropped; side output for late data; session windows merge when closer than the gap",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Flink documentation (stable), Concepts: Stateful Stream Processing",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/stateful-stream-processing/",
+      "accessed": "2026-11-22",
+      "supports": "fault tolerance by stream replay plus checkpointing; barriers injected at the sources; barrier alignment and unaligned checkpoints; a snapshot holds source offsets and operator state; recovery restores the latest checkpoint and rewinds sources; in-memory and RocksDB state backends; inspiration from Chandy-Lamport",
+      "status": "verified"
+    },
+    {
+      "title": "Carbone, Fora, Ewen, Haridi, Tzoumas, Lightweight Asynchronous Snapshots for Distributed Dataflows (2015), arXiv:1506.08603",
+      "url": "https://arxiv.org/abs/1506.08603",
+      "accessed": "2026-11-22",
+      "supports": "asynchronous barrier snapshotting as the algorithm behind Flink checkpoints (title and authors checked; paper not re-read)",
+      "status": "reference"
+    },
+    {
+      "title": "K. M. Chandy and L. Lamport, Distributed Snapshots: Determining Global States of Distributed Systems, ACM TOCS 3(1), 1985",
+      "url": "https://dl.acm.org/doi/10.1145/214451.214456",
+      "accessed": "2026-11-22",
+      "supports": "the distributed snapshot algorithm the Flink documentation cites as inspiration",
+      "status": "reference"
+    },
+    {
+      "title": "Piotr Nowojski and Mike Winters, An Overview of End-to-End Exactly-Once Processing in Apache Flink (28 February 2018)",
+      "url": "https://flink.apache.org/2018/02/28/an-overview-of-end-to-end-exactly-once-processing-in-apache-flink-with-apache-kafka-too/",
+      "accessed": "2026-11-22",
+      "supports": "exactly-once within Flink versus end to end; two-phase commit sinks pre-commit at the checkpoint and commit on completion; external systems must support transactions or idempotent commits",
+      "status": "verified"
+    },
+    {
+      "title": "Nico Kruber, A Deep-Dive into Flink's Network Stack (5 June 2019)",
+      "url": "https://flink.apache.org/2019/06/05/a-deep-dive-into-flinks-network-stack/",
+      "accessed": "2026-11-22",
+      "supports": "before Flink 1.5 backpressure relied on TCP flow control and blocked every channel sharing a connection; credit-based flow control since Flink 1.5 with receivers announcing available buffers",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Flink documentation (stable), Monitoring Back Pressure",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/monitoring/back_pressure/",
+      "accessed": "2026-11-22",
+      "supports": "a task with no available output buffers is considered back pressured; the UI shows busy, back pressured and idle percentages",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Flink documentation (stable), Concepts: Flink Architecture",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/flink-architecture/",
+      "accessed": "2026-11-22",
+      "supports": "JobManager coordinates execution, checkpoints and recovery; TaskManagers execute tasks; deployment on YARN, Kubernetes or standalone",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Flink documentation (stable), DataStream Connectors overview",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/datastream/overview/",
+      "accessed": "2026-11-22",
+      "supports": "the connector list (Kafka, Kinesis, Pulsar, FileSystem, JDBC, MongoDB, Cassandra, Google Cloud PubSub and others)",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Flink documentation (release 2.3), SQL: Joins",
+      "url": "https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/joins/",
+      "accessed": "2026-11-22",
+      "supports": "regular joins with unbounded state; event-time temporal joins against a versioned table; processing-time temporal joins return the latest value; lookup joins enrich from an external system",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Kafka 4.4 documentation, Kafka Streams: Core Concepts",
+      "url": "https://kafka.apache.org/44/streams/core-concepts/",
+      "accessed": "2026-11-22",
+      "supports": "Kafka Streams is a client library with no dependency beyond Kafka; event, processing and ingestion time; stream-table duality; grace periods for out-of-order records; processing.guarantee default at_least_once and exactly_once_v2; stream-table joins do not handle table-side out-of-order data by default and versioned state stores address it",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Kafka 4.4 documentation, Kafka Streams: Architecture",
+      "url": "https://kafka.apache.org/44/streams/architecture/",
+      "accessed": "2026-11-22",
+      "supports": "parallelism is bounded by the number of input partitions; each state store has a compacted changelog topic replayed to restore state; standby replicas via num.standby.replicas",
+      "status": "verified"
+    },
+    {
+      "title": "Apache Kafka 4.4 documentation, Kafka Streams developer guide: Processor API (state stores)",
+      "url": "https://kafka.apache.org/44/streams/developer-guide/processor-api/",
+      "accessed": "2026-11-22",
+      "supports": "the persistent key-value store uses RocksDB and is fault tolerant by default via a compacted changelog topic",
+      "status": "verified"
+    },
+    {
+      "title": "Jay Kreps, Questioning the Lambda Architecture, O'Reilly Radar (2 July 2014)",
+      "url": "https://www.oreilly.com/radar/questioning-the-lambda-architecture/",
+      "accessed": "2026-11-22",
+      "supports": "the lambda architecture attributed to Nathan Marz; its cost of maintaining logic in two systems; the kappa alternative of reprocessing from the retained log and switching to the new output table",
+      "status": "verified"
+    },
+    {
+      "title": "Akidau et al., The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost in Massive-Scale, Unbounded, Out-of-Order Data Processing, PVLDB 8 (2015)",
+      "url": "https://research.google/pubs/the-dataflow-model-a-practical-approach-to-balancing-correctness-latency-and-cost-in-massive-scale-unbounded-out-of-order-data-processing/",
+      "accessed": "2026-11-22",
+      "supports": "the event-time windowing and watermark model that Flink's design follows (title and authors checked; paper not re-read)",
+      "status": "reference"
+    }
+  ]
+}

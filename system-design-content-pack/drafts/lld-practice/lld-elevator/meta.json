@@ -1,0 +1,64 @@
+{
+  "slug": "lld-elevator",
+  "title": "LLD: Elevator system",
+  "moduleId": "lld-practice",
+  "level": "intermediate",
+  "minutes": 13,
+  "problem": "Twenty floors, four cars and a hundred button presses a minute; pick the nearest car every time and the passenger on the top floor waits forever.",
+  "summary": "Separate three decisions: a Dispatcher strategy picks the car for a hall call, a SchedulingPolicy (SCAN or LOOK) picks the car's next stop from two sorted stop sets, and a safety mode decides whether the car may move at all.",
+  "catTip": "I run LOOK on the stairs: keep climbing while there is a sunny spot above me, turn round at the last one, and never sprint back to the ground floor just because someone opened a tin there.",
+  "recall": {
+    "q": "What is the key design decision in the elevator case study, and what does it let you swap?",
+    "a": "Keep three decisions in three objects: a Dispatcher (Strategy) chooses which car takes a hall call, a SchedulingPolicy (SCAN or LOOK over two sorted stop sets) chooses a car's next stop, and a CarMode guard decides whether the car may move at all. Swapping SCAN for LOOK or adding a maintenance mode then changes one class."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A controller that serves the nearest request first starves far floors under steady traffic, and one that mixes dispatch, stop ordering and safety checks in a single loop cannot change any of them without risking the others.",
+    "tradeoffs": "Two strategy interfaces, a mode guard and a lock per car add indirection, LOOK saves travel but makes waits less predictable than SCAN, and a discrete tick model hides acceleration and door timing.",
+    "explainSimply": "A lift that always went to whoever is closest would leave the person on the top floor waiting while people on the middle floors kept pressing buttons. So a lift keeps going in one direction, stopping for everyone on the way, and turns round only when nobody further along is waiting. Deciding which lift answers a button, where that lift stops next, and whether it is safe to move are three separate jobs.",
+    "hint": "Three decisions, three objects: who answers the call, where the car stops next, and whether it may move at all."
+  },
+  "meow": "Up, up, up while there are stops above. Turn round at the last one. Nearest-first is for taxis; I am purr-fectly a lift.",
+  "quiz": [
+    {
+      "prompt": "A car is at floor 12 heading up with no more up stops; the only pending calls are down calls at floors 9 and 5. What do SCAN and LOOK do next?",
+      "options": [
+        "Both reverse immediately and head for floor 9",
+        "SCAN continues to the top floor before reversing; LOOK reverses now and heads for floor 9",
+        "LOOK continues to the top floor; SCAN reverses now",
+        "Both serve the nearest call first, so both go to 9, then 5, then whatever is closest"
+      ],
+      "answer": 1,
+      "explanation": "SCAN sweeps to the terminal floor before reversing; LOOK turns at the last pending stop. The last option describes nearest-request-first, which happens to match here but is a different policy that starves far floors under steady traffic."
+    },
+    {
+      "prompt": "Button-handler threads call addStop on a car while the ticker thread calls step on it, and the pending stops are TreeSets. Which fix is correct and minimal?",
+      "options": [
+        "Nothing is needed, because TreeSet is thread-safe",
+        "One ReentrantLock per car, acquired in both addStop and step and released in finally",
+        "One lock on the controller around every call to every car",
+        "Declare the TreeSet fields volatile"
+      ],
+      "answer": 1,
+      "explanation": "TreeSet is not synchronised, so the car's own lock guards both paths while cars stay independent of each other. A single controller lock also removes the race but makes four cars take turns on one lock, and volatile only makes the field reference visible, not the set's contents safe."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In the elevator design, why are 'which car takes the call' and 'which floor the car stops at next' two different strategies?",
+      "a": "They change for different reasons at different moments. Dispatch runs once per hall call across all cars and trades waiting time against bunching; the scheduling policy runs every tick inside one car and trades travel (LOOK) against predictability (SCAN). Keeping them apart lets you swap either without touching the other or the car's safety guard."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Arpaci-Dusseau and Arpaci-Dusseau, Operating Systems: Three Easy Pieces, ch. 37 Hard Disk Drives, section 37.5 Disk Scheduling", "url": "https://pages.cs.wisc.edu/~remzi/OSTEP/file-disks.pdf", "accessed": "2026-11-22", "supports": "shortest-seek-time-first can starve far requests; SCAN moves back and forth across the disk servicing requests in order across the tracks, queuing a request for an already-serviced track until the next sweep; the F-SCAN and C-SCAN variants; the name elevator algorithm", "status": "verified" },
+    { "title": "Wikipedia: Elevator algorithm", "url": "https://en.wikipedia.org/wiki/Elevator_algorithm", "accessed": "2026-11-22", "supports": "SCAN continues in its direction to the edge of the disk before reversing; the LOOK variant goes only as far as the final request in that direction, then reverses; C-SCAN", "status": "secondary" },
+    { "title": "Wikipedia: LOOK algorithm", "url": "https://en.wikipedia.org/wiki/LOOK_algorithm", "accessed": "2026-11-22", "supports": "LOOK reverses at the last pending request rather than running to the end; the C-LOOK variant", "status": "secondary" },
+    { "title": "Java SE 21 API: java.util.NavigableSet", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/NavigableSet.html", "accessed": "2026-11-22", "supports": "ceiling returns the least element greater than or equal to the argument, floor the greatest element less than or equal, or null; TreeSet implements it", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.TreeSet", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/TreeSet.html", "accessed": "2026-11-22", "supports": "guaranteed log(n) add, remove and contains; the implementation is not synchronized and must be synchronized externally when a thread modifies it concurrently", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.locks.ReentrantLock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/locks/ReentrantLock.html", "accessed": "2026-11-22", "supports": "the lock() then try/finally unlock() idiom used in addStop and step", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ScheduledExecutorService", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html", "accessed": "2026-11-22", "supports": "scheduleAtFixedRate executions never run concurrently (a long execution delays the next); if an execution throws, subsequent executions are suppressed", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.BlockingQueue", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/BlockingQueue.html", "accessed": "2026-11-22", "supports": "put waits for space and take waits for an element; implementations are thread-safe; actions before put happen-before actions after the element is taken in another thread", "status": "verified" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, State, Observer, Command and Singleton as used and as deliberately not used", "status": "reference" }
+  ]
+}

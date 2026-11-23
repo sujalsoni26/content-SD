@@ -1,0 +1,84 @@
+A **virtual private cloud (VPC)** is a private network you define inside a cloud region: you choose its address range, divide it into subnets that each live in one availability zone, and decide, subnet by subnet, what may reach the internet and what may not. Everything in [Load balancing](/learn/load-balancing) and [Proxies](/learn/proxy) sits inside one. The vocabulary below is AWS's, because its documentation is the most precise about limits and prices; the last section maps it onto Google Cloud and Azure.
+
+## Address space and subnets
+
+A VPC gets an IPv4 **CIDR** block between /16 (65,536 addresses) and /28, and each subnet takes a slice of it, also /16 to /28, inside exactly one zone. AWS reserves the first four and the last address of every subnet (network, router, DNS, a spare and broadcast), so a /24 gives 251 usable hosts, and ranges must not overlap with any VPC or office network you will ever connect to, because peering refuses overlaps. The usual layout gives every zone one public subnet and two private ones.
+
+## Public, private and two kinds of gateway
+
+Every subnet is associated with one **route table** (the main table unless you say otherwise), which matches a packet's destination by longest prefix and always contains a *local* route for the VPC's own range. A subnet is **public** if its table sends 0.0.0.0/0 to an **internet gateway**, a horizontally scaled, redundant component with no bandwidth constraint and no charge, which performs one-to-one NAT between an instance's public and private addresses. A subnet without that route is **private**: its servers have no public address and cannot be reached from outside, which is where application servers and databases belong.
+
+Private servers still need to call out, for package updates, third-party APIs and AWS services, and that is the **NAT gateway**: a managed translator in a public subnet that gives many private addresses one outbound public one. Two properties shape designs. It is **zonal**: created in one zone and redundant within it, and if that zone fails, every other zone routing through it loses internet access, so the guidance is one NAT gateway per zone with each zone's private subnets routing to their own. And it is **metered**: about $0.045 per hour and $0.045 per gigabyte processed in US East, on top of normal data transfer, so a service that pushes 10 TB a month to S3 through NAT pays about $450 for the privilege of leaving the network to come back in. Capacity is rarely the problem: 5 Gbps scaling to 100 Gbps, and 55,000 simultaneous connections per destination per address.
+
+<Mermaid caption="Two zones, three tiers. The load balancer and a NAT gateway per zone live in public subnets; app servers and databases in private ones. S3 traffic takes the free gateway endpoint instead of the metered NAT." chart={`flowchart TB
+    NET["Internet"] --> IGW["Internet gateway"]
+    IGW --> ALB["Application load balancer, public subnets in both zones"]
+    subgraph VPC["VPC 10.0.0.0/16"]
+        subgraph AZA["Zone a"]
+            PUBA["Public subnet 10.0.0.0/24: NAT gateway a"]
+            APPA["Private subnet 10.0.10.0/24: app servers"]
+            DBA["Private subnet 10.0.20.0/24: database primary"]
+        end
+        subgraph AZB["Zone b"]
+            PUBB["Public subnet 10.0.1.0/24: NAT gateway b"]
+            APPB["Private subnet 10.0.11.0/24: app servers"]
+            DBB["Private subnet 10.0.21.0/24: database replica"]
+        end
+        EP["Gateway endpoint to S3, no NAT, no charge"]
+    end
+    ALB --> APPA
+    ALB --> APPB
+    APPA --> DBA
+    APPB --> DBB
+    APPA -.->|"outbound only"| PUBA
+    APPB -.->|"outbound only"| PUBB
+    APPA --> EP
+    PUBA -.-> IGW
+    PUBB -.-> IGW
+`} />
+
+## Security groups versus network ACLs
+
+| | Security group | Network ACL |
+| --- | --- | --- |
+| Attached to | An instance's network interface | A subnet |
+| State | Stateful: the reply to allowed traffic is allowed | Stateless: replies need their own rules, including ephemeral ports 1024 to 65535 |
+| Rules | Allow only | Allow and deny |
+| Evaluation | All rules considered together | In number order, first match wins |
+| Default | A new group allows all outbound and no inbound | The default ACL allows everything, a custom one denies everything |
+
+Security groups do the real work: an app group that allows port 8080 only *from the load balancer's group*, a database group that allows 5432 only from the app group, by reference rather than by address, so that autoscaling never breaks a rule. Network ACLs are the coarse layer: a numbered deny for an abusive range, or a rule that no database subnet talks to the internet at all. Because they are stateless, a forgotten ephemeral-port rule is the classic way to block every reply while the requests get through.
+
+## Layer 4 or layer 7, inside the VPC
+
+AWS's **Application Load Balancer** is the layer-7 proxy from the load-balancing lesson: it terminates HTTP, HTTPS and gRPC and routes by host, path, header, method, query string or source address to target groups in private subnets. The **Network Load Balancer** is layer 4: TCP, UDP and TLS (see [IP, TCP and UDP](/learn/tcp-udp)), one static address per zone, millions of requests per second, and the client's source address preserved for instance targets, so it suits non-HTTP protocols, fixed-address allow-lists and the front of a PrivateLink service. A Gateway Load Balancer at layer 3 exists for inserting firewalls and inspection appliances. The rule: HTTP semantics or TLS termination, ALB; anything else, or a static IP, NLB. Either lives in the public subnets of two or more zones and talks to targets in the private ones.
+
+## Private connectivity
+
+Three constructs join networks without touching the internet. **VPC peering** connects two VPCs over the AWS backbone with no single point of failure, but it is not transitive, so twenty VPCs need a mesh; a **Transit Gateway** is the hub that replaces the mesh. **VPC endpoints** bring AWS services inside: *gateway endpoints* for S3 and DynamoDB are free and are the fix for the NAT bill above; *interface endpoints*, built on **PrivateLink**, put a network interface with a private address in your subnet and are billed per hour per zone plus about a cent per gigabyte. PrivateLink also runs the other way: put your own service behind a Network Load Balancer, publish it as an **endpoint service**, and another account's VPC reaches it through an interface endpoint in their own address space, with no peering and no overlap problem.
+
+## DNS inside the VPC
+
+The Amazon-provided resolver answers at the VPC's base address plus two (10.0.0.2 for 10.0.0.0/16) and at 169.254.169.253; `enableDnsSupport` is on by default and `enableDnsHostnames` is off unless it is the default VPC. A **private hosted zone** in Route 53 gives internal names such as `db.internal` that resolve only inside the VPCs you attach, which is how services find each other without the public [DNS](/learn/dns) knowing they exist.
+
+## The same shapes elsewhere
+
+Google Cloud's VPC is global with regional subnets and firewall rules; Azure's Virtual Network spans a region's zones, with Network Security Groups (allow and deny, by priority) and its own NAT Gateway and Private Link. The names change; the decisions, public or private, stateful or stateless, per-gigabyte or free, do not.
+
+<Callout type="analogy" title="An office building">
+
+The building is the VPC and each floor a subnet. Reception (the internet gateway) lets visitors onto the lobby floors only. The mail room (the NAT gateway) sends parcels out from the private floors but accepts none in, and charges per parcel. Each office door's lock remembers who it let in and lets them back out: the security group. The doorman on each floor checks a numbered list in both directions and remembers nothing: the network ACL. Where it breaks: a building has one mail room, while a well-built VPC has one per zone, so a flooded basement does not stop every floor's post.
+
+</Callout>
+
+<Callout type="interview" title="Draw three tiers and name two prices">
+
+"Public subnets in two zones hold the load balancer and a NAT gateway each; app servers and the database sit in private subnets with security groups that reference each other. Traffic to S3 goes through a gateway endpoint, not NAT, because NAT charges per gigabyte and is zonal. Partners reach us over PrivateLink rather than peering." Saying why NAT is per zone is what separates a diagram from a design.
+
+</Callout>
+
+<DeepDive title="Go deeper: the NAT bill, worked">
+
+Take the two-zone layout above and 10 TB a month of outbound traffic. Through NAT gateways that is about 10,000 GB at $0.045, roughly $450 of data processing, plus two gateways at $0.045 an hour for 730 hours, about $66, before the ordinary data-transfer charges that apply either way. If most of those bytes are going to S3 or DynamoDB, a gateway endpoint carries them for nothing. If they are going to another AWS service, an interface endpoint costs about $0.01 an hour per zone and $0.01 per gigabyte, under a quarter of the NAT rate. The pattern to remember: NAT costs grow with bytes, endpoints cost little or nothing, so route by destination before you size the NAT.
+
+</DeepDive>

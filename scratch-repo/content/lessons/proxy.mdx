@@ -1,0 +1,24 @@
+A **proxy** forwards traffic on someone's behalf. Which side it serves makes all the difference.
+
+- A **forward proxy** sits in front of *clients* and speaks for them: company web filtering, hiding identity, caching for an office.
+- A **reverse proxy** sits in front of *servers*. <mark>Clients never see the real backends.</mark>
+
+<Diagram name="forward-reverse-proxy" caption="Same idea, opposite sides. The forward proxy hides clients; the reverse proxy hides servers." />
+
+## What a reverse proxy does
+
+- **Routing**: `/api/*` → app servers, `/static/*` → file servers.
+- **TLS termination**: decrypts HTTPS once at the edge so backends don't have to.
+- **Caching** and **compression** of responses.
+- **Connection handling**: holds thousands of slow client connections so backends see a few fast ones.
+- **Filtering** bad traffic and **hiding backend IPs**.
+- **Load balancing** across servers (the [next lesson](/learn/load-balancing)).
+- In a microservice system the reverse proxy grows into an [API gateway](/learn/api-gateway); inside the cluster, sidecar proxies form a [service mesh](/learn/service-mesh).
+
+Examples: **Nginx, HAProxy, Envoy, Cloudflare**.
+
+<Callout type="analogy" title="The hotel reception">
+
+Guests talk to reception, never to housekeeping or the kitchen directly. Reception routes requests, checks who you are and keeps the staff's private numbers private. That's a reverse proxy.
+
+</Callout>

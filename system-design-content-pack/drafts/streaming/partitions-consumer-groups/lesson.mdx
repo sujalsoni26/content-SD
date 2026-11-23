@@ -1,0 +1,90 @@
+A **partition** is Kafka's unit of both parallelism and ordering, and you cannot have one without the other. Within a partition every consumer sees records in exactly the order they were written; across partitions there is no order at all, and that is precisely what lets many consumers share a topic. How records are spread over partitions, and how consumers divide the partitions up, decides what your system can promise. The vocabulary here is from [Kafka: a distributed log](/learn/kafka-architecture).
+
+## Which partition does a record go to?
+
+The producer decides, before the record leaves the client.
+
+<Steps>
+
+1. **An explicit partition number** is used as it is.
+2. **A key** is hashed and the result taken modulo the partition count, so equal keys always meet in the same partition, for as long as the partition count never changes.
+3. **No key** goes to the **sticky partitioner**: the producer fills one partition until `batch.size` bytes (16 KB by default) are queued for it, then moves on; since Kafka 3.3 (KIP-794) it also favours partitions whose brokers answer fastest. Keyless records spread evenly, in no particular order.
+
+</Steps>
+
+
+## Ordering lives inside a partition
+
+Pick the key by asking which events must never overtake each other. In a food-delivery app the status updates of one order (placed, accepted, picked up, delivered) must stay in sequence, so the key is the order id; two different orders may interleave freely. Key by customer id instead and every order of a customer is serialised through one partition for no benefit. Key by nothing and "delivered" can be processed before "picked up". <mark>The key is a statement about ordering, not about routing.</mark>
+
+One producer-side caveat: a retried batch can land behind a later one when several requests are in flight. The idempotent producer (on by default since Kafka 3.0) preserves order for up to five in flight; without it you need one.
+
+## Consumer groups
+
+Consumers that share a `group.id` form a **consumer group**, and the group coordinator (a broker) assigns every partition of the subscribed topics to exactly one consumer in the group. A consumer may own several partitions; a partition never has two owners within a group. So a group's useful parallelism is capped by the partition count: a topic with four partitions feeds at most four active consumers, and a fifth sits idle. Different groups are independent and each gets every record, which is how one topic serves billing, analytics and search at once: the fan-out from [Pub/sub](/learn/pubsub).
+
+<Mermaid caption="Four partitions, two groups. Within billing each partition has exactly one owner, so a fourth consumer would get one partition each and a fifth would idle; analytics reads every record on its own." chart={`flowchart LR
+    subgraph T["Topic orders"]
+        P0["partition 0"]
+        P1["partition 1"]
+        P2["partition 2"]
+        P3["partition 3"]
+    end
+    subgraph G1["Group billing"]
+        B1["billing-1"]
+        B2["billing-2"]
+        B3["billing-3"]
+    end
+    subgraph G2["Group analytics"]
+        A1["analytics-1"]
+    end
+    P0 --> B1
+    P1 --> B1
+    P2 --> B2
+    P3 --> B3
+    P0 --> A1
+    P1 --> A1
+    P2 --> A1
+    P3 --> A1
+`} />
+
+## Rebalancing
+
+When a consumer joins, leaves or crashes, or the partition count changes, the group **rebalances**. A consumer is declared dead when it misses heartbeats for `session.timeout.ms` (45 s by default) or does not call `poll()` within `max.poll.interval.ms` (5 min by default), which is how a consumer stuck in slow processing loses its partitions. Two ways to redistribute:
+
+| | Eager (stop the world) | Cooperative incremental (KIP-429) |
+| --- | --- | --- |
+| On a rebalance | Every consumer gives up every partition, then all are reassigned | Only partitions that must move are revoked, in two quick rounds |
+| Meanwhile | Nobody in the group consumes | Unaffected partitions keep flowing |
+| Assignors | RangeAssignor, RoundRobinAssignor, StickyAssignor | CooperativeStickyAssignor |
+| Default? | Yes: the default list starts with RangeAssignor, so a plain consumer rebalances eagerly | Opt in by configuring CooperativeStickyAssignor alone |
+
+Kafka 4.0 made a third option generally available (KIP-848): the group coordinator computes the assignment itself and reconciles each member incrementally, with no group-wide barrier. Brokers enable it by default; a client opts in with `group.protocol=consumer` (the client default is still `classic` in Kafka 4.4).
+
+## Consumer lag, the health metric
+
+For each partition, **lag** is the distance between the end of the log and the group's committed offset (`kafka-consumer-groups.sh --describe` prints it as LOG-END-OFFSET minus CURRENT-OFFSET). A steady lag is a buffer doing its job; a lag that grows for minutes means the group cannot keep up. The options, in order: make each consumer faster, add consumers up to the partition count, then add partitions. Lag growing on one partition while the others sit near zero is not a throughput problem: it is a hot key. The log gives you this signal for free, where an in-memory queue would be heading for an out-of-memory crash (see [Backpressure and load shedding](/learn/backpressure)).
+
+## Hot partitions and key choice
+
+Hashing spreads *keys* evenly, not *traffic*. If one key produces most of the records (a celebrity account on Instagram, one product in a Flipkart flash sale), its partition becomes a **hot partition**: one consumer saturates while the rest idle, and extra consumers cannot help because the partition still has one owner. Remedies: a finer key; a compound key (user and device) when order is needed only at the finer grain; a random suffix when you need no order for that key; or a dedicated topic for the few known hot keys.
+
+Adding partitions is not a free fix. Kafka does not move existing data, and new records with an old key now hash to a different partition, so per-key ordering breaks across the change. Partitions can be added but never removed. The rule of thumb is to size the count for the throughput you expect in a year or two: it is a decision, not a dial.
+
+<Callout type="analogy" title="Checkout lanes">
+
+Each partition is a checkout lane with exactly one cashier, the consumer. One shopper's items (one key) stay on one belt and are scanned in order; shoppers in different lanes finish in any order. More cashiers than lanes means cashiers standing about, and a trolley of three hundred items is a hot partition: opening another lane does nothing for the people behind it. Where it breaks: shoppers choose their lane, records do not; the hash chooses, so a hot key cannot be steered away without changing the key.
+
+</Callout>
+
+<Callout type="interview" title="Order, parallelism, then the failure">
+
+Say it in one sentence: "ordering only within a partition, so I key by the entity that needs order; parallelism is bounded by partitions, so I choose the count up front." Then name the failure you expect, a hot key, and your remedy. Naming consumer lag as the alert you would set shows you have run one of these.
+
+</Callout>
+
+<DeepDive title="Go deeper: static membership">
+
+A consumer restart normally costs two rebalances: one when it leaves, one when it rejoins. **Static membership** gives each consumer a fixed `group.instance.id`; a member back within `session.timeout.ms` keeps its partitions without a rebalance, which makes rolling deployments of large groups far calmer. The trade-off is slower failure detection: a static member that is really dead keeps its partitions until the session timeout expires.
+
+</DeepDive>

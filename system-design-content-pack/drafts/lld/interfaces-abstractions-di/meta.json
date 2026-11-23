@@ -1,0 +1,68 @@
+{
+  "slug": "interfaces-abstractions-di",
+  "title": "Interfaces, abstractions and dependency injection",
+  "moduleId": "lld",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "OrderService builds its own MySQL repository and mail sender inside its constructor, so nobody can test it without both, and swapping either means editing business logic.",
+  "summary": "Program to interfaces the consumer owns, receive implementations through the constructor, and assemble the object graph in one composition root. Containers such as Spring and Guice automate the wiring at the cost of a hidden graph and runtime failures; testability is the payoff.",
+  "catTip": "I do not construct my own human; one is injected at startup and I depend only on the Feeder interface. Swap the human, keep the cat. The test double is a tin opener.",
+  "recall": {
+    "q": "`OrderService` needs to save orders and know the time. Where does the `OrderRepository` interface live, how does the service get its implementation, and where is the real `JdbcOrderRepository` constructed?",
+    "a": "The interface lives in the ordering module, owned by the consumer, per dependency inversion. The service receives an `OrderRepository` and a `Clock` through its constructor (dependency injection). The concrete `JdbcOrderRepository` is constructed only in the composition root next to `main`, or by a DI container doing that job."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A class that constructs its own collaborators cannot be tested without them, hides what it depends on, and has to be edited whenever the database, the mailer or the clock changes.",
+    "tradeoffs": "Someone must now build and wire the object graph, either by hand in a composition root or with a container that hides the graph and moves wiring errors to runtime.",
+    "explainSimply": "A good chef does not build the oven; the kitchen is fitted out before service and the chef just cooks. Dependency injection fits a class out with what it needs before it does any work, from one place near the front door. Swap the oven and the recipe does not change.",
+    "hint": "Three places: where the contract is declared, how it arrives, and the single spot that knows the real class."
+  },
+  "meow": "Meow depends on Feeder, not on Human. Human injected at boot, via constructor. Composition root: the kitchen.",
+  "quiz": [
+    {
+      "prompt": "By the dependency inversion principle, where should the `OrderRepository` interface be declared?",
+      "options": [
+        "Next to `JdbcOrderRepository` in the persistence package, so the implementation and its contract stay together",
+        "In the ordering module that calls it, written in the consumer's vocabulary",
+        "In a shared `common` package together with every other interface in the system",
+        "Anywhere, as long as it is an interface rather than a class"
+      ],
+      "answer": 1,
+      "explanation": "The consumer owns the abstraction, so the arrow points from the detail to the policy and the interface stays as narrow as that consumer's needs. Keeping it beside the JDBC class feels tidy but leaves the ordering module importing persistence, which is the dependency the principle exists to remove."
+    },
+    {
+      "prompt": "What is the main cost of a DI container compared with a hand-written composition root?",
+      "options": [
+        "Reflection makes every method call on an injected object slower",
+        "The object graph is no longer readable in code, and wiring mistakes surface at startup or at runtime instead of at compile time",
+        "Containers cannot inject interfaces, only concrete classes",
+        "Every object becomes a singleton"
+      ],
+      "answer": 1,
+      "explanation": "A container resolves the graph by reflection once, at startup, so per-call speed is not the issue, which makes the first option believable but wrong. The real price is visibility: a missing binding or an ambiguous candidate is discovered when the application starts, not when it compiles."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Give two reasons to prefer constructor injection over field injection (`@Autowired` on a private field).",
+      "a": "The dependency list is explicit and required, so the object is valid once constructed, with `final` fields and no half-wired state. And the class works without the container: a test or a script can build it with plain `new`, which is why the Spring team itself recommends constructors for mandatory dependencies."
+    },
+    {
+      "q": "What is a composition root, and why should an application have exactly one?",
+      "a": "The single place, as close to `main` as possible, where the object graph is assembled from concrete classes; everything else depends on abstractions. One root keeps knowledge of concrete types in one file, makes the graph readable and compile-checked, and keeps `new` out of business logic."
+    }
+  ],
+  "glossary": [
+    { "term": "DI", "full": "Dependency Injection", "note": "A class receives its collaborators from outside, ideally through its constructor, instead of constructing them." },
+    { "term": "IoC", "full": "Inversion of Control", "note": "Control over which objects are built, and when, moves out of the class that uses them to a framework or a composition root." }
+  ],
+  "sources": [
+    { "title": "Martin Fowler, \"Inversion of Control Containers and the Dependency Injection pattern\" (23 January 2004)", "url": "https://martinfowler.com/articles/injection.html", "accessed": "2026-11-22", "supports": "the coining of 'dependency injection' because 'inversion of control' was too generic; constructor, setter and interface injection, and his preference for starting with constructor injection", "status": "verified" },
+    { "title": "Mark Seemann, \"Composition Root\" (ploeh blog, 28 July 2011)", "url": "https://blog.ploeh.dk/2011/07/28/CompositionRoot/", "accessed": "2026-11-22", "supports": "the definition of a composition root as a preferably unique location where modules are composed, placed close to the entry point", "status": "verified" },
+    { "title": "Spring Framework reference, Core Technologies, \"Dependency Injection\" (section \"Constructor-based or setter-based DI?\")", "url": "https://docs.spring.io/spring-framework/reference/core/beans/dependencies/factory-collaborators.html", "accessed": "2026-11-22", "supports": "the Spring team's advocacy of constructor injection for mandatory dependencies and setters for optional ones", "status": "verified" },
+    { "title": "Java SE 21 API, java.time.Clock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/Clock.html", "accessed": "2026-11-22", "supports": "the documented best practice of passing a Clock in (for example by dependency injection) so that a fixed or offset clock can be used in tests; Clock.fixed and Clock.systemUTC", "status": "verified" },
+    { "title": "Google Guice wiki, \"Motivation\"", "url": "https://github.com/google/guice/wiki/Motivation", "accessed": "2026-11-22", "supports": "Guice as a DI container that builds the object graph from @Inject constructors", "status": "reference" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns (Addison-Wesley, 1994), ch. 1, \"Program to an interface, not an implementation\"", "url": "https://www.informit.com/store/design-patterns-elements-of-reusable-object-oriented-9780201633610", "accessed": "2026-11-22", "supports": "programming to an interface as the principle behind swappable implementations", "status": "reference" }
+  ]
+}

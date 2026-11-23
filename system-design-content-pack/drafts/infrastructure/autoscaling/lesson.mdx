@@ -1,0 +1,75 @@
+**Autoscaling** adds and removes capacity automatically in response to a signal. The mechanics are simple; the whole subject is the **lag** between the signal changing and new capacity actually serving requests, and the mistakes made trying to hide that lag.
+
+[Scaling](/learn/scaling) covered why you scale out and that machines take time to boot; [Capacity planning](/learn/capacity-planning) gives you a forecast. Autoscaling handles the gap between the forecast and the day: an IPL final where traffic doubles in the ten minutes before the toss, a Flipkart sale opening at midnight, a quiet Sunday when half the fleet is idle.
+
+## Reactive, scheduled and predictive
+
+**Reactive** scaling watches a metric and acts when it crosses a target: the HPA in Kubernetes, target tracking in EC2 Auto Scaling. **Scheduled** scaling sets capacity at known times, such as raising the minimum on Wednesday morning and lowering it on Friday evening. **Predictive** scaling, in AWS's version, finds daily and weekly patterns in historical load and launches capacity ahead of the forecast, which suits cyclical traffic and slow-starting applications. Combine them: schedule or predict the peaks you know about, react to the ones you do not.
+
+## Signals and their lag
+
+| Signal | What it measures | The catch |
+| --- | --- | --- |
+| CPU utilisation | How busy the machines are | Cheap and universal, but I/O-bound services saturate before CPU does; EC2 publishes CPU every 5 minutes unless 1-minute detailed monitoring is enabled |
+| Requests per instance | Demand, directly | Needs a known per-instance capacity; the raw total of requests does not fall when you add instances, so divide per target |
+| Queue depth | Backlog waiting for workers | The best signal for consumers, as messages per worker; a bare queue length is not proportional to the fleet |
+| Latency | What users feel | A lagging, non-proportional symptom: AWS's target-tracking guidance rules it out, because latency does not halve when you double the instances |
+
+Whichever signal you choose, the chain from signal to capacity is long.
+
+<Mermaid caption="Each box adds seconds or minutes. The autoscaler can only start the chain; it cannot shorten it." chart={`flowchart LR
+    L["Load rises"] --> M["Metric published: every 15 s to 5 min"]
+    M --> E["Controller evaluates: HPA every 15 s"]
+    E --> R["New instance requested"]
+    R --> B["Boots and warms up: Pod seconds, VM minutes"]
+    B --> H["Passes readiness or health check"]
+    H --> T["Takes traffic"]
+`} />
+
+Below, raise the traffic and add a server: the new box must boot and pass a health check before it serves anything, and a killed box keeps receiving requests until the check notices.
+
+<Interactive name="scaling-compare" />
+
+Headroom is the only cure for lag. If a new instance needs three minutes and traffic can double in three minutes, the fleet must run far enough below capacity to survive the gap; when a spike outruns the autoscaler anyway, shed load rather than fall over ([Backpressure and load shedding](/learn/backpressure)).
+
+## Stabilisation, cooldowns and flapping
+
+A metric hovering around its target makes a naive controller add two instances, remove two, add two again. Autoscalers call this **flapping** and defend against it in three ways.
+
+- **Tolerance.** The HPA ignores any ratio within 10% of the target by default.
+- **Stabilisation windows.** Before scaling down, the HPA takes the *highest* desired count it computed over the last 300 seconds (configurable; scale-up has no window). Google Cloud's instance-group autoscaler decides scale-in from the peak load over a 10-minute stabilisation period.
+- **Cooldowns and warm-up.** EC2 Auto Scaling pauses simple scaling policies for 300 seconds after an action by default; target tracking instead gives each new instance a warm-up period during which it is not counted and no scale-in may run.
+
+The asymmetry is deliberate: <mark>scale out quickly, scale in slowly.</mark> Capacity you did not need costs a few minutes of money; capacity removed too soon costs errors.
+
+The HPA's rule is one line: desired replicas = ceil(current replicas × current metric ÷ target metric). Ten Pods at 80% CPU with a 50% target become ceil(10 × 1.6) = 16.
+
+## Horizontal, vertical and cluster
+
+**Horizontal** autoscaling changes the instance count (HPA replicas, an Auto Scaling group's desired capacity) and needs stateless instances behind a balancer. **Vertical** autoscaling changes the size: the Vertical Pod Autoscaler derives requests from usage history and applies them by evicting Pods so they restart with new values, or in place where supported. **Cluster** autoscaling adds machines when Pods cannot be scheduled: the Cluster Autoscaler checks every 10 seconds for unschedulable Pods and removes a node that has sat below 50% utilisation for 10 minutes; Karpenter provisions nodes straight from the pending Pods' requirements. In Kubernetes these lags stack: pending Pods wait for a node to boot before they can start.
+
+## Scale to zero
+
+If nobody is calling, why run anything? **KEDA** checks an event source (a queue, a Kafka topic, a Prometheus query, a cron schedule) every 30 seconds, scales a Deployment from zero to one itself, hands one-to-many scaling to an HPA it creates, and waits a 300-second cooldown after the last activity before returning to zero. **Knative** does the same for HTTP services: a 60-second stable window, a panic mode when traffic reaches double what the current Pods can handle, and a 30-second grace period before the last Pod goes. The bill for zero is the **cold start**: the first request waits for a container or function to start. AWS Lambda documents cold starts of under 100 ms to over a second on typically under 1% of invocations, and sells provisioned concurrency to pre-warm environments. Scale to zero suits bursty, latency-tolerant work such as nightly imports and webhooks; it punishes a checkout page.
+
+## Bounds and quotas
+
+Every policy carries a minimum and a maximum (KEDA defaults its maximum to 100 replicas). The minimum buys headroom for the first minutes of a spike; the maximum protects your bill and the systems behind you. Forty extra Pods each opening twenty database connections is eight hundred new connections, and a database that slows under them raises latency, which to a latency-based policy looks like a reason to add more. Derive the maximum from what the slowest dependency can take, and check cloud quotas (vCPUs per region) before the day you need them: an autoscaler that hits a quota fails quietly at the worst moment.
+
+<Callout type="analogy" title="A thermostat with a slow boiler">
+
+Target tracking is a thermostat: set 50% CPU and it adds heat when the room cools. The difference is the boiler. A real heater responds in seconds; a VM takes minutes to warm, so the thermostat must be patient about switching off (stabilisation) and you may want it on before the family wakes (scheduled and predictive scaling).
+
+</Callout>
+
+<Callout type="interview" title="State the signal, the lag and the bounds">
+
+"We scale on requests per Pod with a 70% target. The HPA evaluates every 15 seconds and a Pod is ready in about 20 seconds, so we keep 30% headroom; scale-down is stabilised over five minutes to stop flapping; minimum 3, maximum 40, and the connection pool and database are sized for 40." Three numbers and a dependency check beat a vague "it autoscales".
+
+</Callout>
+
+<DeepDive title="Go deeper: the HPA's default behaviour in numbers">
+
+The controller runs every 15 seconds and works from the ratio of current to target metric, skipping changes within a 10% tolerance. Scaling up has no stabilisation window and may add the larger of 4 Pods or 100% of the current count every 15 seconds; scaling down looks back 300 seconds, takes the highest recommendation, and may then remove up to 100% of the current count per 15 seconds. All of this lives in the `behavior` field of the HorizontalPodAutoscaler and can be tuned per workload, for example a `scaleDown` policy of 10% per minute for a service with slow caches.
+
+</DeepDive>

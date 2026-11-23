@@ -1,0 +1,147 @@
+{
+  "slug": "design-netflix",
+  "title": "Design Netflix",
+  "moduleId": "hld",
+  "level": "advanced",
+  "minutes": 17,
+  "problem": "375 Tbps of prime-time video cannot cross transit links, and a play button that waits on a failed cloud region is a dead product.",
+  "summary": "A control plane of services in three active-active regions authorises, personalises, steers and licenses, while an owned data plane of appliances inside ISPs, pre-filled overnight by predicted popularity, serves the video; per-title bitrate ladders, circuit breakers and a playback-event stream close the loop.",
+  "catTip": "I nap on the appliance in your ISP: the films arrived last night while you slept, so at nine o'clock no lorry is on the motorway. The cloud only says where I am and whether you may watch. Lose a region and I purr.",
+  "recall": {
+    "q": "Why can a system like Netflix copy tonight's video to appliances inside ISPs the night before, while a user-upload site cannot, and what does that split leave for the cloud control plane to do?",
+    "a": "The catalogue is small (about 1 PB) and known a day ahead, so predicted popularity decides what each 120 TB appliance holds and the fill runs in the ISP's off-peak window; user uploads exist seconds before they are watched, so they must be pulled on a miss. The control plane only authorises the play, steers the device to a ranked list of appliances and issues the DRM licence, so it is an ordinary read-heavy web system that can run active-active in three regions."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Serving a country's prime-time peak from cloud egress or a pull-through CDN pays transit prices for hundreds of terabits a second and makes the first viewer at every edge wait on the origin, while a single-region control plane turns one cloud outage into a dead play button.",
+    "tradeoffs": "Owning appliances inside a thousand ISPs costs capital, hardware refreshes and a nightly placement forecast whose every error is transit bought at prime time, and three active-active regions each sized for half the peak leave a third of the control plane idle.",
+    "explainSimply": "Think of a cinema chain that drives tonight's film reels to every cinema the night before, so that at showtime no lorry is on the motorway. The head office only checks your membership card and tells you which screen to go to. If the head office in one city burns down, the one in the next city already has your card on file.",
+    "hint": "Ask which half of the system knows tomorrow's demand today, and what that lets you do with the bytes before anyone asks for them."
+  },
+  "meow": "Reels in the ISP by dawn, meow. Head office only says which screen. Region gone? The other two purr on at half peak.",
+  "quiz": [
+    {
+      "prompt": "A streaming service encodes every title with the same ten-rung bitrate ladder. The fleet of ISP appliances is near its 375 Tbps peak and the next step is 400 more appliances. Playback telemetry shows animated titles look no worse than live-action ones at the same rung. What should the encoding team do first?",
+      "options": [
+        "Add a higher rung so that complex action titles look better, since the ladder sets the quality ceiling",
+        "Build a bitrate ladder per title by encoding at many resolution and bitrate points and keeping the convex hull of quality against bitrate, because simple titles are spending bits they do not need and the saving is egress across the whole fleet",
+        "Lower every rung by 20%, which saves the same egress with no extra encoding compute",
+        "Cache the most popular rungs in the cloud so that appliances serve fewer bytes"
+      ],
+      "answer": 1,
+      "explanation": "Per-title ladders cut the average bitrate at equal perceived quality, and bitrate drives the peak, so the saving lands on every appliance and ISP link without new hardware. Lowering every rung uniformly is the strongest distractor because it also cuts egress, but it degrades the complex titles that were already at the edge of acceptable quality, which is the opposite of what the telemetry says is wasted."
+    },
+    {
+      "prompt": "A video service runs its control plane active-active in three cloud regions, and one region fails at prime time. Which earlier decision decides whether viewers notice?",
+      "options": [
+        "A DNS TTL short enough that resolvers forget the dead region within a minute",
+        "Each surviving region was provisioned for half of global peak rather than a third, and per-profile data was already replicated to every region, so traffic can be shifted without scaling or promoting anything",
+        "A warm standby in a fourth region that is promoted to primary when the health check fails",
+        "Autoscaling rules in the surviving regions that double capacity when the request rate rises"
+      ],
+      "answer": 1,
+      "explanation": "Active-active failover only works if the survivors already hold the data and the headroom, which is a provisioning decision made months earlier. Autoscaling is the strongest distractor because it sounds like it supplies that headroom, but it takes minutes and needs spare cloud capacity that may not exist at prime time, and failed plays accumulate while it waits; a short DNS TTL only speeds the steering and creates no capacity."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: 375 Tbps of prime-time video from a 1 PB catalogue, with 120 TB appliances inside more than a thousand ISPs. Decision and why?",
+      "a": "Pre-fill, do not cache: forecast tomorrow's plays per region from the playback-event stream and the release calendar, plan which titles and rungs fill each appliance's 120 TB, pull about 10 TB a night at 2.2 Gbps during the ISP's off-peak window from same-site peers and the exchange-point tier, and steer each play to a ranked list of appliances that hold the title. The bytes are known a day ahead, so a miss becomes a planning error instead of a prime-time origin fetch."
+    },
+    {
+      "q": "Problem: the home page fans out to 30 services and one of them, personalisation, is timing out for 2% of calls at peak. Decision and why?",
+      "a": "Give the call a tail-based timeout and its own bulkhead pool, open a circuit breaker on the failure window and serve a real fallback (the last cached rows, then unpersonalised popular rows) instead of retrying, because retries double the load on the weakest service and turn a 2% degradation into an outage. Keep the play path (authorise, steer, licence) free of such optional dependencies, since it has no fallback, and trip the breakers on purpose in production so the fallbacks are known to work."
+    }
+  ],
+  "glossary": [
+    { "term": "QoE", "full": "Quality of Experience", "note": "What the viewer perceives: time to first frame, rebuffering and picture quality." },
+    { "term": "BGP", "full": "Border Gateway Protocol", "note": "The routing protocol networks use to announce which address prefixes they own." },
+    { "term": "EB", "full": "Exabyte", "note": "10¹⁸ bytes, a thousand petabytes." }
+  ],
+  "sources": [
+    {
+      "title": "Netflix Open Connect, partner site home page",
+      "url": "https://openconnect.netflix.com/en/",
+      "accessed": "2026-11-22",
+      "supports": "embedded Open Connect Appliances sit inside partner ISP networks; over a thousand ISPs in the programme and 60+ data centres and exchange fabrics; nightly content fills and updates; appliances are pre-filled before shipping with content suited to the partner's region; ISPs configure BGP sessions with the appliances to steer traffic; failover to another embedded site or to Netflix exchange-point appliances when an appliance goes down",
+      "status": "verified"
+    },
+    {
+      "title": "Netflix Open Connect, \"Open Connect Appliances\"",
+      "url": "https://openconnect.netflix.com/en/appliances/",
+      "accessed": "2026-11-22",
+      "supports": "storage appliances with up to 120 TB raw storage and about 200 Gbps operational throughput; global appliances with up to 60 TB and about 80 Gbps; appliances run FreeBSD and NGINX; storage appliances hold the Netflix catalogue at exchange locations",
+      "status": "verified"
+    },
+    {
+      "title": "Netflix, \"Completing the Netflix Cloud Migration\" (January 2016)",
+      "url": "https://about.netflix.com/en/news/completing-the-netflix-cloud-migration",
+      "accessed": "2026-11-22",
+      "supports": "the cloud migration completed in early January 2016 on AWS; \"Video is delivered through Netflix Open Connect, our content delivery network that is distributed globally\"; the 2008 database corruption that motivated the move; the control plane versus data plane split",
+      "status": "verified"
+    },
+    {
+      "title": "Netflix/zuul wiki, home page",
+      "url": "https://github.com/Netflix/zuul/wiki",
+      "accessed": "2026-11-22",
+      "supports": "Zuul is \"the front door for all requests from devices and web sites to the backend of the Netflix streaming application\"; filters for authentication and security, insights and monitoring, dynamic routing, stress testing, load shedding, static response handling and multiregion resiliency",
+      "status": "verified"
+    },
+    {
+      "title": "Netflix/Hystrix README",
+      "url": "https://github.com/Netflix/Hystrix",
+      "accessed": "2026-11-22",
+      "supports": "Hystrix isolates points of access to remote systems to stop cascading failures, with thread and semaphore isolation, circuit breakers, fallbacks and graceful degradation; it is in maintenance mode and Netflix recommends resilience4j for new projects",
+      "status": "verified"
+    },
+    {
+      "title": "Netflix Chaos Monkey documentation",
+      "url": "https://netflix.github.io/chaosmonkey/",
+      "accessed": "2026-11-22",
+      "supports": "Chaos Monkey is responsible for randomly terminating instances in production so that engineers implement services resilient to instance failures; configured through Spinnaker",
+      "status": "verified"
+    },
+    {
+      "title": "Netflix/EVCache README",
+      "url": "https://github.com/Netflix/EVCache",
+      "accessed": "2026-11-22",
+      "supports": "EVCache is a memcached and spymemcached based caching solution used on AWS EC2 for frequently used data; the name stands for Ephemeral Volatile Cache, with data living for its TTL and liable to eviction",
+      "status": "verified"
+    },
+    {
+      "title": "Netflix Technology Blog, \"Netflix and Fill\" (2016)",
+      "url": "https://netflixtechblog.com/netflix-and-fill-c43a32b490c0",
+      "accessed": "2026-11-22",
+      "supports": "named as further reading on the fill process (off-peak fill windows, proactive placement by predicted popularity, peer and tier fill); the post could not be re-read on the access date, so the lesson presents fill scheduling and forecasting as design choices a system like Netflix would make rather than as Netflix facts",
+      "status": "reference"
+    },
+    {
+      "title": "Netflix Technology Blog, \"Per-Title Encode Optimization\" (2015)",
+      "url": "https://netflixtechblog.com/per-title-encode-optimization-7e99442b62a2",
+      "accessed": "2026-11-22",
+      "supports": "named as further reading on building a bitrate ladder per title from the convex hull of quality against bitrate; could not be re-read on the access date, so deep dive 2 is written as a design a system like Netflix would use",
+      "status": "reference"
+    },
+    {
+      "title": "Netflix Technology Blog, \"Active-Active for Multi-Regional Resiliency\" (2013)",
+      "url": "https://netflixtechblog.com/active-active-for-multi-regional-resiliency-c47719f6685b",
+      "accessed": "2026-11-22",
+      "supports": "named as further reading on running the control plane active-active across regions and evacuating a region; could not be re-read on the access date, so the lesson's region sizing and evacuation rehearsal are presented as design choices",
+      "status": "reference"
+    },
+    {
+      "title": "Netflix Technology Blog, \"Keystone Real-time Stream Processing Platform\" (2018)",
+      "url": "https://netflixtechblog.com/keystone-real-time-stream-processing-platform-a3ee651812a",
+      "accessed": "2026-11-22",
+      "supports": "named as further reading on a Kafka and Flink based pipeline for playback and operational events; could not be re-read on the access date, so the lesson's event pipeline is sized from its own assumptions",
+      "status": "reference"
+    },
+    {
+      "title": "Netflix Technology Blog, \"It's All A/Bout Testing: The Netflix Experimentation Platform\" (2016)",
+      "url": "https://netflixtechblog.com/its-all-a-bout-testing-the-netflix-experimentation-platform-4e1ca458c15",
+      "accessed": "2026-11-22",
+      "supports": "named as further reading on allocating members to experiment cells and computing per-cell metrics; could not be re-read on the access date, so the lesson describes the allocation service generically",
+      "status": "reference"
+    }
+  ]
+}

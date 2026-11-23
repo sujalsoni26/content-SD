@@ -1,0 +1,66 @@
+Every broker is one of two shapes underneath. A **log** keeps every record for a retention period and lets each reader keep its own position, which is why [Kafka](/learn/kafka-architecture) can replay and fan out for free. A **queue** hands each message to one consumer, deletes it on acknowledgement, and can route, delay, expire and retry every message individually, the shape [Message queues](/learn/message-queues) described. Most choices between brokers are really a choice between those two shapes; the rest is about who runs it.
+
+## Kafka: the partitioned log
+
+The Kafka lesson covered the mechanics, so one paragraph. Records live in partitions for `retention.ms` (7 days by default) whether read or not; consumers pull and commit offsets; every partition goes to exactly one consumer in a group, and a new team reads the same bytes with a new group id. Per-key order holds within a partition. Nothing is addressed to a particular consumer, and there is no per-message acknowledgement, delay or priority, only the offset.
+
+## RabbitMQ: exchanges, queues and acknowledgements
+
+RabbitMQ implements AMQP 0-9-1. A publisher sends to an **exchange**, never to a queue; **bindings** with routing keys tell the exchange which queues get a copy. Four exchange types cover most routing: *direct* (exact key), *fanout* (every bound queue), *topic* (wildcards such as `order.*.refund`) and *headers*. A queue is an ordered, FIFO collection; the broker **pushes** deliveries to consumers, and a **prefetch** limit caps how many unacknowledged messages a consumer holds, which is RabbitMQ's [backpressure](/learn/backpressure). Consumers `ack`, `nack` or `reject`; anything unacknowledged when a connection drops is requeued with a *redelivered* flag. Since release 2.7.0 a queue keeps publication order even through requeueing, but with several consumers on one queue each sees only its share, so a redelivery can reach a consumer after a newer message. **Quorum queues**, replicated with Raft, are the recommended durable type, and the older mirrored classic queues were removed in RabbitMQ 4.0. A **dead-letter exchange** receives messages rejected without requeue, expired by per-message TTL, dropped from a full queue or redelivered past a quorum queue's delivery limit. RabbitMQ 3.9 added **streams**, an append-only log with offsets and non-destructive reads, so one broker can offer both shapes.
+
+## SQS and SNS: the managed pair
+
+Amazon **SQS** is a queue you never operate. A consumer polls (long polling waits up to 20 seconds for a message), receives a message, and it becomes invisible for the **visibility timeout**, 30 seconds by default and up to 12 hours; delete it in time or it reappears for another consumer, which is at-least-once delivery made concrete. Messages are kept for 4 days by default (1 minute to 14 days) and may be up to 1 MiB since August 2025. A **redrive policy** moves a message to a dead-letter queue after `maxReceiveCount` receives. Standard queues take a nearly unlimited number of API calls per second with best-effort ordering. **FIFO queues** preserve order within a *message group* and deduplicate by id for five minutes, at a price: 300 transactions per second per partition per API action, 3,000 with batches of ten, and a high-throughput mode that reaches 70,000 unbatched messages per second in the largest US regions and 9,000 in Mumbai.
+
+Amazon **SNS** is the fan-out: a topic pushes each message to every subscription, which can be an SQS queue, a Lambda function, an HTTP endpoint, email, SMS or mobile push, with a **filter policy** per subscription. Topic-to-many-queues is the standard way to give each consumer its own queue, and SNS FIFO topics deliver to SQS queues in order, but only to queues. SNS keeps nothing: a subscriber that was not there yesterday cannot replay yesterday.
+
+## Redis Streams and Pulsar
+
+**Redis Streams** is the log shape inside Redis: `XADD` appends entries with ids made of a millisecond time and a sequence number, consumer groups read with `XREADGROUP`, each group keeps a pending entries list of delivered-but-unacknowledged entries, `XACK` clears them and `XAUTOCLAIM` reassigns a dead consumer's entries after an idle time; `MAXLEN` or `MINID` trims the stream, and durability is whatever your AOF fsync policy gives. It is the right answer when Redis is already there and the stream is small. **Apache Pulsar** separates stateless brokers from storage in Apache BookKeeper, offloads older segments to tiered storage such as S3, and gives each topic four **subscription types** (exclusive, shared, failover and key-shared), so one topic can serve a competing-consumer queue and a replayable log at once; tenants and namespaces are built in, as is geo-replication.
+
+## Side by side
+
+| | Ordering | Replay | Delivery | Fan-out | Throughput shape | You operate |
+| --- | --- | --- | --- | --- | --- | --- |
+| Kafka | Per partition | Yes, by offset, within retention | At least once; exactly-once with transactions | Consumer groups read the same bytes | Scales with partitions and brokers | A cluster plus controllers, or a hosted service |
+| RabbitMQ | Per queue, loosened by redelivery | Queues no, streams yes | At least once with manual acks | Exchanges copy to bound queues | Per queue; quorum queues replicate each message | A cluster to run and upgrade |
+| SQS standard | Best effort | No | At least once | One queue per consumer, fed by SNS | Nearly unlimited API calls | Nothing |
+| SQS FIFO | Per message group | No | Exactly-once processing within five minutes | SNS FIFO, to queues only | 300 TPS per partition, more in high-throughput mode | Nothing |
+| SNS | Best effort, or FIFO into SQS | No | At least once | Push to every subscription | Managed | Nothing |
+| Redis Streams | Per stream | Yes, by id, until trimmed | At least once with XACK | Consumer groups | One Redis node's memory and CPU | Your Redis |
+| Pulsar | Per key with key-shared, per partition | Yes, from BookKeeper or tiered storage | At least once | Subscription types | Brokers and bookies scale separately | Brokers, bookies and a metadata store |
+
+## Push or pull
+
+Kafka and SQS consumers **pull**, so a slow consumer lags rather than drowns and parallelism is the consumer's decision. RabbitMQ and SNS **push**: lower latency, and the broker decides who gets what, with prefetch (RabbitMQ) or the subscriber's own throttling (SNS) as the only brake. Push suits spreading work over many small workers; pull suits consumers that batch, process in order or want to control their own pace.
+
+## The condition that decides
+
+<Mermaid caption="Two questions settle most broker choices. Replay or several readers of the same events means a log. Per-message routing, acknowledgement and retry means a queue. Only then ask who will run it." chart={`flowchart TB
+    Q1["Do several independent consumers need the same events, or will anyone replay history?"] -->|"yes"| LOG["Log: Kafka or Pulsar, Redis Streams at small scale"]
+    Q1 -->|"no"| Q2["Is each message routed by its content, or acked, retried and expired on its own?"]
+    Q2 -->|"yes"| QUEUE["Queue: RabbitMQ, or SQS fed by SNS"]
+    Q2 -->|"no"| Q3["Do you want nobody on call for the broker?"]
+    Q3 -->|"yes"| MANAGED["Managed: SQS and SNS, or a hosted Kafka"]
+    Q3 -->|"no"| EITHER["Either shape works: pick what the team already runs"]
+`} />
+
+Replay and many independent consumers mean a log: order events that billing, analytics, notifications and a fraud model all read, and that a new model will read again from last month. Per-message routing and competing consumers mean a queue: a rider-dispatch job that exactly one worker should take, retry after a delay and dead-letter after five failures. A food-delivery platform typically runs both, and the mistake is using one for the other: a Kafka topic as a work queue gives head-of-line blocking per partition and no per-message retry, and a queue as an event bus means copying every event into every consumer's queue and never replaying any of them.
+
+<Callout type="analogy" title="Newspaper archive or post office">
+
+A library's newspaper archive keeps every issue; any reader starts from any date, and nobody's reading removes a page. That is the log. A post office sorts each letter by address, hands it to one carrier, and it is gone once signed for. That is the queue. Where it breaks: a post office can send one letter to many addresses only by photocopying it, which is exactly what SNS does, and the archive has no way to say "this issue is for you alone".
+
+</Callout>
+
+<Callout type="interview" title="Ask the two questions out loud">
+
+"First: does more than one consumer need the same events, or will anyone replay them? If so, a log, Kafka with a consumer group per team. If not: is each message routed, acknowledged and retried on its own? If so, a queue, RabbitMQ or SQS, with SNS for fan-out. Then who runs it, and what order do I need per key." Naming the visibility timeout or the prefetch shows you have operated one.
+
+</Callout>
+
+<DeepDive title="Go deeper: why ordering caps throughput">
+
+Strict order within a message group means SQS must serialise that group's messages through one partition, so the ceiling is per partition: 300 transactions per second per API action. High-throughput mode spreads message groups over more partitions, which is why its ceiling depends on the region and why a FIFO queue whose messages all share one group id cannot use it. Kafka has the same arithmetic: order per partition, and the partition count caps how many consumers can read in parallel. [Partitions and consumer groups](/learn/partitions-consumer-groups) works it through.
+
+</DeepDive>

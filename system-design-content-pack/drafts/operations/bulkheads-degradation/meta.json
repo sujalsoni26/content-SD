@@ -1,0 +1,65 @@
+{
+  "slug": "bulkheads-degradation",
+  "title": "Bulkheads and graceful degradation",
+  "moduleId": "operations",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "One slow dependency eats every thread, one poisonous customer takes down everyone on their shard, and under load the site dies whole instead of dropping what does not matter.",
+  "summary": "Bulkheads give each dependency, tenant or feature its own bounded pool: thread pools inside a process, cells and shuffle shards across a service. Kill switches and degraded modes decide in advance what fails first.",
+  "catTip": "Eight food bowls, two per cat, dealt at random. The greedy cat empties his two, but every other cat still has a bowl he never touched. That is shuffle sharding, and I approve of it on principle.",
+  "recall": {
+    "q": "What does a bulkhead isolate, and how do cells and shuffle sharding extend the idea?",
+    "a": "A bulkhead caps the resources any one dependency, tenant or feature can consume, such as a per-dependency thread pool. Cells apply it to a whole service by giving each group of customers an independent copy; shuffle sharding deals each customer its own random subset of workers, so a poison customer fully affects only the few who share the identical subset."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A hung ads service fills the shared thread pool so checkout and search fail with it, a poison request takes down every customer on a shared shard, and under load everything degrades at once, including payments.",
+    "tradeoffs": "Separate pools waste idle capacity, cells make cross-customer queries and tenant moves hard, kill switches and fallbacks are code paths that rot unless exercised, and every flag carries a maintenance cost.",
+    "explainSimply": "A ship is divided into watertight compartments so one leak does not sink it. Software does the same: each outside service gets its own small pool of workers, each group of customers gets its own copy of the system, and features come with an off switch so the important ones keep working when the rest are turned off.",
+    "hint": "Think about what one misbehaving caller or dependency is allowed to use up, and what gets switched off first."
+  },
+  "meow": "Own bowl, own corner, own off switch. Greedy cat empties one bowl, not the kitchen.",
+  "quiz": [
+    {
+      "prompt": "A feed service calls ranking, ads and search from one shared pool of 200 threads. The ads service starts taking ten seconds per call. What happens, and what fixes it?",
+      "options": [
+        "Only ads requests slow down; ranking and search are unaffected because they are different services",
+        "Threads pile up waiting on ads until none are left, so ranking and search calls fail too; give each dependency its own bounded pool",
+        "The circuit breaker on ads prevents any impact, so no change is needed",
+        "Autoscaling adds feed servers until there are enough threads for everyone"
+      ],
+      "answer": 1,
+      "explanation": "A shared pool is one compartment: slow ads calls hold threads for ten seconds each until the pool is empty, and the healthy dependencies starve. The breaker is the strongest distractor, but it opens only after enough failures have been counted, and until then the slow calls are consuming the pool."
+    },
+    {
+      "prompt": "Eight workers serve many customers. In design A, customers are mapped to one of four fixed shards of two workers. In design B, each customer is dealt its own random pair of workers. One customer's requests poison whichever workers serve them. Who else is fully affected?",
+      "options": [
+        "In both designs, every customer on those two workers, about a quarter of all customers",
+        "In A about a quarter of customers; in B only customers dealt exactly the same pair, roughly 1 in 28, provided clients retry on their other worker",
+        "In A nobody, because the shard isolates the poison; in B about a quarter",
+        "In both designs nobody else, because the poison customer only affects their own requests"
+      ],
+      "answer": 1,
+      "explanation": "Shuffle sharding turns a fixed shard into one of 28 possible pairs from eight workers, so only a customer with the identical pair loses both workers; others share at most one and survive if their client fails over to the other. Plain sharding gives every customer on the shard the same fate."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Resilience4j's semaphore bulkhead rejects a call immediately when it is full (maxWaitDuration is 0 by default). Why is 'reject now' usually a better default than 'wait for a slot'?",
+      "a": "Waiting callers hold threads and memory of their own, so a queue in front of a saturated dependency converts a fast failure into a slow one and spreads the overload upstream. Rejecting immediately gives the caller a cheap answer to degrade on."
+    },
+    {
+      "q": "Why do Amazon's engineers warn against fallback code paths, and what do they prefer instead?",
+      "a": "A fallback runs rarely, so it is rarely tested and often broken when needed, and it can add load at the moment of least capacity; it usually only improves the odds. They prefer making the primary path more reliable, turning the fallback into always-on behaviour (such as always serving from a refreshed cache), and exercising any essential fallback continuously in production."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Resilience4j documentation, \"Bulkhead\"", "url": "https://resilience4j.readme.io/docs/bulkhead", "accessed": "2026-11-22", "supports": "SemaphoreBulkhead and FixedThreadPoolBulkhead; defaults maxConcurrentCalls 25 and maxWaitDuration 0; thread-pool bulkhead sized to the available processors with a queue capacity of 100", "status": "verified" },
+    { "title": "Amazon Builders' Library, \"Workload isolation using shuffle-sharding\" (Colm MacCárthaigh)", "url": "https://builder.aws.com/content/3F06NpJ8YeoIGP8VHTw4n81pFn8/workload-isolation-using-shuffle-sharding", "accessed": "2026-11-22", "supports": "8 workers in 4 shards of 2 gives a 25% impact; 28 unique pairs from 8 workers and a 1/28 scope of impact; the need for fault-tolerant clients that retry; Route 53's 2,048 virtual name servers, shards of four and about 730 billion possible shuffle shards", "status": "verified" },
+    { "title": "AWS Well-Architected guidance, \"Reducing the Scope of Impact with Cell-Based Architecture: What is a cell-based architecture?\"", "url": "https://docs.aws.amazon.com/wellarchitected/latest/reducing-scope-of-impact-with-cell-based-architecture/what-is-a-cell-based-architecture.html", "accessed": "2026-11-22", "supports": "cell, cell router (the thinnest possible layer) and control plane; cells share no state; ten cells leave 90% of requests unaffected by one failure; containment of bad deployments and poison-pill requests", "status": "verified" },
+    { "title": "Pete Hodgson, \"Feature Toggles (aka Feature Flags)\", martinfowler.com", "url": "https://martinfowler.com/articles/feature-toggles.html", "accessed": "2026-11-22", "supports": "release, experiment, ops and permissioning toggles; long-lived kill switches among ops toggles to degrade non-vital functionality under load; toggles as inventory with a carrying cost", "status": "verified" },
+    { "title": "Amazon Builders' Library, \"Avoiding fallback in distributed systems\" (Jacob Gabrielson)", "url": "https://builder.aws.com/content/3EuS9Sakq7L3VLQIF3qzfMfke1Y/avoiding-fallback-in-distributed-systems", "accessed": "2026-11-22", "supports": "fallback paths rarely trigger and are hard to test, can add unpredictable load, and usually improve only the odds of success; preferred alternatives including always-on behaviour and exercising essential fallback in production", "status": "verified" },
+    { "title": "Michael T. Nygard, Release It! Design and Deploy Production-Ready Software (Pragmatic Bookshelf, 1st ed. 2007; 2nd ed. 2018), Bulkheads stability pattern", "url": "https://www.oreilly.com/library/view/release-it/9781680500264/", "accessed": "2026-11-22", "supports": "the Bulkhead stability pattern as the origin of the term in software; edition dates taken from publisher and retailer listings", "status": "reference" }
+  ]
+}

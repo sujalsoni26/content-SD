@@ -1,0 +1,65 @@
+{
+  "slug": "lld-rate-limiter",
+  "title": "LLD: Rate limiter",
+  "moduleId": "lld-practice",
+  "level": "intermediate",
+  "minutes": 11,
+  "problem": "Every request needs a yes or no in microseconds for its own client; a timer per bucket, one global lock or a wall clock each fails at the first burst.",
+  "summary": "Three algorithms, token bucket, sliding window log and fixed window counter, behind one LimiterState Strategy; per-key state in a ConcurrentHashMap, created lazily and swept when idle; lazy refill from an injected monotonic clock; each bucket atomic via its own lock or a CAS loop.",
+  "catTip": "I have a treat budget: ten saved up, one more every minute. Nobody tops up my bowl on a timer; when I come to eat, I count how long I have been away and add the treats I earned. Then I nap, lazily refilled.",
+  "recall": {
+    "q": "What is the key design decision in the rate limiter case study, and how does it keep a hundred thousand keys cheap and testable?",
+    "a": "One RateLimiter interface for callers and one LimiterState interface for algorithms, with token bucket, sliding window log and fixed window counter as Strategies behind it. State is per key in a ConcurrentHashMap created by computeIfAbsent and evicted when idle, and every state refills lazily from an injected monotonic Clock at call time, so no timer runs between requests and tests step time by hand."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A limiter that tops up buckets with a scheduled task pays per key rather than per request, one that reads and writes its counter in two steps double-spends under concurrent threads, and one that uses wall-clock time grants a free refill after every clock correction.",
+    "tradeoffs": "Two interfaces where a naive design has one class, elapsed-time arithmetic on every call, a per-bucket lock that serialises a single hot key's callers, and a monotonic clock that is not comparable across processes, which is fine until the limiter must be shared.",
+    "explainSimply": "Think of a travel card that earns one ride a minute up to ten saved rides. The card does not tick in your pocket: when you tap in, the reader works out how many rides accrued since your last tap and adds them before deciding. Each client has its own card, and cards nobody has tapped for a while are thrown away.",
+    "hint": "Ask when the refill arithmetic runs, where each client's state lives, and what makes refill-and-spend a single step."
+  },
+  "meow": "Tap in: elapsed time times refill rate, add treats, cap at ten. Enough? Eat one, 200. Not enough? 429, Retry-After, purr patiently.",
+  "quiz": [
+    {
+      "prompt": "A limiter tracks a hundred thousand clients. Which refill design keeps the cost proportional to requests rather than to clients?",
+      "options": [
+        "A ScheduledExecutorService that adds tokens to every bucket once a second",
+        "Compute the tokens accrued from the elapsed time inside tryAcquire, using an injected clock",
+        "A background thread per bucket that sleeps for the refill interval",
+        "Refill a bucket only when it becomes empty"
+      ],
+      "answer": 1,
+      "explanation": "Lazy refill does the arithmetic only when a request arrives, so idle keys cost nothing and tests can step a fake clock instead of sleeping. The scheduled task is the tempting alternative, but it touches every bucket every tick regardless of traffic and contends with every caller for each bucket's lock."
+    },
+    {
+      "prompt": "Two threads for the same client both read one remaining token, both allow, and the bucket goes negative. Which change removes the double spend without serialising unrelated clients?",
+      "options": [
+        "Mark the tokens field volatile so each thread sees the latest value",
+        "Make TokenBucket.tryAcquire synchronized so refill and spend are one critical section on that bucket",
+        "Take one lock in KeyedRateLimiter.tryAcquire around every call",
+        "Store the states in a ConcurrentHashMap instead of a HashMap"
+      ],
+      "answer": 1,
+      "explanation": "The race is a compound read-modify-write of tokens and last-refill time, so it needs one critical section per bucket, which is also a lock per key. volatile is the strongest distractor: it fixes visibility of a single field but leaves the gap between reading the count and writing it back, and the global lock removes the race only by making every client wait on every other."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In the rate limiter, why does the algorithm interface LimiterState know nothing about keys, threads or HTTP, and what does that buy when the limiter must be shared across servers?",
+      "a": "KeyedRateLimiter is the only class that maps keys to state and the only one with a map; each LimiterState receives permits and a timestamp and returns a Decision. Moving to a shared store changes where state lives, where the atomic refill-and-spend runs and whose clock is used, while the algorithms themselves stay unchanged."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Figma engineering: An alternative approach to rate limiting", "url": "https://www.figma.com/blog/an-alternative-approach-to-rate-limiting/", "accessed": "2026-11-22", "supports": "token bucket as two values per user refilled from elapsed time at request time; fixed window counters let roughly twice the limit through across a boundary; the sliding log stores a timestamp per request with memory that grows with traffic and counts rejected requests, which extends bans; Figma's sliding window counters are sixty sub-window counters summed per hour", "status": "verified" },
+    { "title": "Cloudflare blog: How we built rate limiting capable of scaling to millions of domains", "url": "https://blog.cloudflare.com/counting-things-a-lot-of-different-things/", "accessed": "2026-11-22", "supports": "the sliding window counter formula weighting the previous window by the fraction still overlapping; the worked example 42 times 0.75 plus 18 equals 49.5; two numbers per counter; 400 million requests from 270,000 sources with 0.003 percent wrongly allowed or limited and no source blocked below its threshold", "status": "verified" },
+    { "title": "Wikipedia: Token bucket", "url": "https://en.wikipedia.org/wiki/Token_bucket", "accessed": "2026-11-22", "supports": "tokens are added at a fixed rate up to a capacity b; a conforming request removes tokens and a non-conforming one removes none; burst size is set by the bucket depth; the token bucket and the leaky bucket as a meter are equivalent", "status": "secondary" },
+    { "title": "Guava API: com.google.common.util.concurrent.RateLimiter", "url": "https://guava.dev/releases/snapshot/api/docs/com/google/common/util/concurrent/RateLimiter.html", "accessed": "2026-11-22", "supports": "acquire blocks until a permit is available while tryAcquire does not; an unused limiter allows a burst of up to permitsPerSecond; a warm-up variant ramps the rate up and cools when idle; the class is safe for concurrent use", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ConcurrentHashMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html", "accessed": "2026-11-22", "supports": "computeIfAbsent is performed atomically and the mapping function is invoked at most once per call, must be short and simple, and must not modify the map; retrievals do not block", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.AtomicLong", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicLong.html", "accessed": "2026-11-22", "supports": "compareAndSet atomically sets the value only if the current value equals the expected one; update functions such as updateAndGet should be side-effect-free because they may be re-applied when attempted updates fail under contention, the same discipline the CAS loop needs", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.AtomicReference", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicReference.html", "accessed": "2026-11-22", "supports": "compareAndSet on an object reference, used to swap the immutable tokens-and-timestamp record atomically", "status": "reference" },
+    { "title": "Java SE 21 API: java.time.Clock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/Clock.html", "accessed": "2026-11-22", "supports": "best practice is to inject a clock so tests can use a fixed or offset clock instead of system time; the same advice is applied to the monotonic nanosecond clock here", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ScheduledExecutorService", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html", "accessed": "2026-11-22", "supports": "the periodic idle-key sweep as a scheduled task that does not overlap itself", "status": "verified" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, Factory Method, Chain of Responsibility, Decorator and Singleton as used and as deliberately not used here; Null Object is not a GoF pattern and is named as a common idiom", "status": "reference" }
+  ]
+}

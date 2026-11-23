@@ -1,0 +1,66 @@
+{
+  "slug": "oop-pillars",
+  "title": "OOP: encapsulation, abstraction, inheritance, polymorphism",
+  "moduleId": "lld",
+  "level": "basic",
+  "minutes": 8,
+  "problem": "Any class can reach into any other class's fields, so the overdraft check is copied into three places, and every new vehicle type means hunting down every switch on type.",
+  "summary": "The four OOP pillars: encapsulation keeps invariants behind methods, abstraction hides how behind an interface, inheritance models is-a at a cost, and polymorphism replaces conditionals on type with calls that dispatch on the object's class.",
+  "catTip": "I am an instance of Cat. My hunger is a private field, reachable only through feed(), which validates nothing and accepts every call. Perfectly encapsulated; the invariant is simply 'more'.",
+  "recall": {
+    "q": "A `Cart` exposes its item list as a public field and three services add to it directly. Which pillar is broken, what is the concrete risk, and what is the fix?",
+    "a": "Encapsulation: nothing enforces the cart's invariants (quantity above zero, total matching the lines), so any caller can corrupt it. Make the list private and expose `addItem` and `removeItem`, which validate and keep the total consistent."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without encapsulation and abstraction every rule is enforced at the call site, so a negative balance or a vendor-specific exception leaks into the whole codebase and each new type adds another branch to every switch.",
+    "tradeoffs": "Hiding state and dispatching through interfaces adds indirection: an operation spread across many classes is harder to read than one switch, and an interface for a single implementation is ceremony.",
+    "explainSimply": "Think of a vending machine. You press a button and a drink appears; you cannot reach into the coin box, and you do not know whether a spiral or a belt moved the can. Objects work the same way: they hide their insides and promise only what their buttons do.",
+    "hint": "Which pillar is about who may change an object's state, and what single sentence should the fix guarantee?"
+  },
+  "meow": "Private fur, public purr. You may call pet(); you may not set mood directly. Meow-thods only.",
+  "quiz": [
+    {
+      "prompt": "A `Cart` class exposes `public List<Item> items`, and other classes add to it directly. Which pillar is broken, and what is the concrete harm?",
+      "options": [
+        "Abstraction, because callers can see that the field is a List rather than a Set",
+        "Encapsulation, because nothing enforces the cart's invariants, such as a positive quantity or a total that matches the items",
+        "Polymorphism, because List is an interface and callers should depend on ArrayList",
+        "Inheritance, because Cart should extend ArrayList to expose items safely"
+      ],
+      "answer": 1,
+      "explanation": "Encapsulation means the class's methods are the only path to its state, so each one can keep the invariants true. Seeing the collection type is at most a minor abstraction leak; the real harm is that any caller can corrupt the cart."
+    },
+    {
+      "prompt": "You replace `switch (vehicle.type())` in a fee calculator with a polymorphic `vehicle.hourlyFee()` call. What is the main benefit?",
+      "options": [
+        "Virtual dispatch is significantly faster than a switch statement",
+        "Adding a new vehicle type no longer requires editing the calculator or any other caller",
+        "The code no longer needs an interface or an abstract class",
+        "It makes the set of vehicle types closed, so the compiler reports missing cases"
+      ],
+      "answer": 1,
+      "explanation": "Polymorphism moves each case into the class that knows the answer, so a new type is a new class and existing callers stay untouched. Dispatch speed is not the point and is often no better than a switch; a closed set with compiler checks is what a sealed type plus a switch gives you, which is the opposite trade-off."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Why is 'a getter and a setter for every field' not encapsulation?",
+      "a": "Because any caller can still put the object into an invalid state (`setBalance(-1)`). Encapsulation means the class's methods are the only path to its state and each method preserves the invariants, so the check lives in one place."
+    },
+    {
+      "q": "The same `switch (shape.type())` appears in three methods. What does polymorphism do to the three switches, and when would you keep the switch?",
+      "a": "Each case moves into the shape's class as a method, so a new shape touches no caller. Keep the switch when the set of types is closed and the operations change often: one operation stays in one place, and a `switch` over a `sealed` interface is checked for missing cases."
+    }
+  ],
+  "glossary": [
+    { "term": "OOP", "full": "Object-Oriented Programming", "note": "Organising code as objects that hide state behind methods; its four pillars are encapsulation, abstraction, inheritance and polymorphism." }
+  ],
+  "sources": [
+    { "title": "The Java Tutorials, \"Abstract Methods and Classes\" (section \"Abstract Classes Compared to Interfaces\")", "url": "https://docs.oracle.com/javase/tutorial/java/IandI/abstract.html", "accessed": "2026-11-22", "supports": "the interface versus abstract class table: fields, visibility, single versus multiple inheritance, and when to use each", "status": "verified" },
+    { "title": "JEP 395: Records (delivered in JDK 16)", "url": "https://openjdk.org/jeps/395", "accessed": "2026-11-22", "supports": "records as immutable carriers for values with nothing to protect", "status": "reference" },
+    { "title": "JEP 409: Sealed Classes (delivered in JDK 17)", "url": "https://openjdk.org/jeps/409", "accessed": "2026-11-22", "supports": "sealed interfaces as a way to close a set of types", "status": "reference" },
+    { "title": "JEP 441: Pattern Matching for switch (delivered in JDK 21)", "url": "https://openjdk.org/jeps/441", "accessed": "2026-11-22", "supports": "exhaustiveness checking of a switch over a sealed type", "status": "reference" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns (Addison-Wesley, 1994), ch. 1, \"Program to an interface, not an implementation\"", "url": "https://www.informit.com/store/design-patterns-elements-of-reusable-object-oriented-9780201633610", "accessed": "2026-11-22", "supports": "programming to an interface as the basis of abstraction and polymorphism", "status": "reference" }
+  ]
+}

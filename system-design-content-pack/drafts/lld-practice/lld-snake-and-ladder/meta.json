@@ -1,0 +1,59 @@
+{
+  "slug": "lld-snake-and-ladder",
+  "title": "LLD: Snake and Ladder",
+  "moduleId": "lld-practice",
+  "level": "basic",
+  "minutes": 10,
+  "problem": "A game loop that rolls its own random number cannot be tested, a snake head on the last cell makes the game unwinnable, and every house rule adds another if.",
+  "summary": "Model the board as cells with jumps, snakes and ladders as one polymorphic Jump, dice behind an interface so tests can script the rolls, and the turn as a queue of players; rule variants live in a small GameRules object instead of the loop.",
+  "catTip": "I rolled a six, climbed a ladder, and landed on a snake. Down I went. In tests I bring my own dice, and the snake never gets me twice.",
+  "recall": {
+    "q": "What is the key design decision in a Snake and Ladder design, and what does it buy you?",
+    "a": "Put the dice behind a Dice interface (RandomDice in play, FixedDice in tests) so the game loop is deterministic under test, and model snakes and ladders as one Jump abstraction keyed by start cell so the board answers destination(cell) without branching. Rule variants such as the overshoot rule and the extra turn on a six are configuration in GameRules, not conditionals scattered through the loop."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a dice abstraction and a validated board, the game cannot be tested deterministically, impossible boards make games unwinnable, and each rule variant adds a conditional to the loop.",
+    "tradeoffs": "Every abstraction is one more class in a small program; the interface for dice and the builder for the board pay off only because tests and configuration need them.",
+    "explainSimply": "The board is a numbered path, snakes and ladders are shortcuts down or up, and the dice decide how far you go. The trick is to let a tester hand the game a loaded die so every move can be checked, and to inspect the board before the game starts so nobody can be stuck forever.",
+    "hint": "Ask what in the game is random, and who should be able to replace it."
+  },
+  "meow": "Meow rolls a six, climbs the ladder, meets a snake, slides down. In tests, meow brings loaded dice.",
+  "quiz": [
+    {
+      "prompt": "Why does the design put the dice behind a Dice interface instead of calling new Random().nextInt(6) + 1 inside the game loop?",
+      "options": [
+        "Because java.util.Random is not thread-safe and must be hidden behind an interface",
+        "So tests can inject a scripted FixedDice and assert exact outcomes, such as a ladder followed by a snake, while production injects a RandomDice",
+        "Because calling methods through an interface is faster than calling a class directly",
+        "Because nextInt(6) can return 6 and move the token off the board"
+      ],
+      "answer": 1,
+      "explanation": "The interface is a seam: a fake with scripted rolls makes every test deterministic, and the composition root supplies the random one in play. Thread safety is the strongest distractor, but the Random documentation states that instances are thread-safe, and nextInt(6) returns 0 to 5, never 6."
+    },
+    {
+      "prompt": "A ladder from cell 40 ends on cell 99, and a snake's head is on 99. A player lands on 40. Which statement describes a sound design?",
+      "options": [
+        "The game must always follow both jumps, so the player ends at the snake's tail",
+        "The board must be rejected, because a ladder may never end on a snake's head",
+        "Either policy is acceptable as long as it is decided once: follow a jump once by default or reject such boards at build, with chained following made opt-in and protected by cycle detection",
+        "The player chooses whether to take the snake"
+      ],
+      "answer": 2,
+      "explanation": "The design point is one documented decision enforced in Board.destination or in the builder, not a rule of the game. Always following both jumps is the strongest distractor because it is a common house rule, but stating it as a must hides the cycle risk that chained jumps introduce."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A house rule says a player must land exactly on the last cell, otherwise bounce back by the excess. Where does this go in the design?",
+      "a": "In GameRules as an OvershootRule value (WIN, STAY or BOUNCE) with a resolve(from, roll, last) method that Game calls before Board.destination; no other class changes, and a test with FixedDice checks that needing a 3 and rolling a 5 lands two cells short."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Java SE 21 API: java.util.Random", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Random.html", "accessed": "2026-11-22", "supports": "two Random instances created with the same seed and given the same sequence of method calls generate identical sequences; nextInt(bound) returns 0 inclusive to bound exclusive; instances are thread-safe but contended, with ThreadLocalRandom suggested for multithreaded designs", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.Deque", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Deque.html", "accessed": "2026-11-22", "supports": "addFirst and addLast insert at either end; pollFirst retrieves and removes the first element; a deque serves as a FIFO queue", "status": "verified" },
+    { "title": "Wikipedia, \"Snakes and ladders\"", "url": "https://en.wikipedia.org/wiki/Snakes_and_ladders", "accessed": "2026-11-22", "supports": "the standard rules: a single die, snakes move a token down to the tail and ladders up to the top, the first to the final square wins; variants requiring an exact roll, staying put or bouncing back on an overshoot, and an extra roll on a six; the game's origin in India as Moksha Patam", "status": "secondary" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994), ch. 3 Creational Patterns and ch. 5 Behavioral Patterns", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "the definitions and intents of Builder, Strategy and Observer", "status": "reference" }
+  ]
+}

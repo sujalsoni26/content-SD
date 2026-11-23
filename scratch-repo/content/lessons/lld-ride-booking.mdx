@@ -1,0 +1,350 @@
+Ride booking at code level is a matching problem wrapped around a lifecycle. The decision that carries the design: **the trip is an explicit state machine, and a driver is a resource that a trip claims with one compare-and-set before the driver is even asked**. Every other question, which driver, what fare, who is told, is a Strategy or a listener hung off those two facts. The city-scale version, with its sharded location index and regional matching services, is [Design Uber](/learn/design-uber); this lesson is the code inside one matching process.
+
+## Requirements and assumptions
+
+**Functional requirements**
+
+- A rider requests a ride with a pickup, a drop and a vehicle category, and sees a fare estimate and an ETA.
+- The system finds nearby available drivers of that category, ranks them, and offers the trip to one at a time. A driver accepts or declines within 15 seconds; silence counts as a decline and the next candidate is offered.
+- A trip moves through requested, driver assigned, en route to pickup, started and completed. The rider or the driver may cancel before the trip starts; the fee depends on the state.
+- The fare is base plus distance plus time, multiplied by a surge factor when demand is high, estimated at request and settled at completion.
+- Rider and driver are notified of every change. Drivers report their location every few seconds.
+
+**Assumptions**: one city, 50,000 drivers online at peak, 1,000 requests a minute, a 3 km search radius that widens once to 6 km, ETAs from a routing service behind an interface (the stub uses straight-line distance at 20 km/h), money in paise, one matching process.
+
+**Out of scope**: shared rides, scheduled rides, maps and routing internals, payment integration beyond an interface, driver onboarding.
+
+**Non-functional**: a driver is never offered or assigned two trips at once; a match completes in well under a second; an offer nobody answers never leaves a trip stuck; location updates are cheap, because there are far more of them than requests.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility | Knows |
+| --- | --- | --- |
+| Rider | Identity and rating; the party that requests | id, rating, payment method |
+| Driver | Identity, vehicle, rating, and a status that is claimed atomically | id, vehicle, status, rating |
+| Vehicle | Plate and category | plate, category |
+| Location | A latitude and longitude value with a distance function | lat, lon |
+| Trip | The aggregate: rider, driver, pickup, drop, state, timestamps, fare | everything about one ride |
+| TripState | Which transitions are legal from each state | the transition table |
+| DriverLocationIndex | Nearby available drivers of a category, by grid cell | cell to drivers, last seen |
+| MatchingStrategy | Ranks candidate drivers for a request | nothing, it is stateless |
+| PricingStrategy | Fare from a trip | rates |
+| CancellationPolicy | Fee from the state, who cancelled and when | the fee rules |
+| TripEventListener | Reacts to a state transition | its channel |
+| TripService | Facade: request, accept, decline, arrive, start, complete, cancel | all of the above |
+
+The trip is the only object that lives through the whole flow, so every edge case is a question about its state. The driver's status is kept *outside* the trip because it is the thing two trips fight over.
+
+## Class design
+
+<Mermaid caption="Entities on the left, decisions on the right. TripService depends on three interfaces and a listener list; SurgePricing wraps whichever PricingStrategy is in force." chart={`classDiagram
+    class TripService {
+        +request(Rider rider, Location pickup, Location drop, VehicleCategory cat) Trip
+        +accept(String tripId, String driverId)
+        +cancel(String tripId, Party by) Money
+    }
+    class Trip {
+        -TripState state
+        -Instant requestedAt
+        +moveTo(TripState next, Instant at) TripEvent
+        +state() TripState
+    }
+    class Rider {
+        +String id
+        +double rating
+    }
+    class Driver {
+        -AtomicReference status
+        +tryOffer() boolean
+        +startTrip() boolean
+        +releaseOffer() boolean
+    }
+    class Vehicle {
+        +String plate
+        +VehicleCategory category
+    }
+    class Location {
+        +double lat
+        +double lon
+        +distanceKm(Location other) double
+    }
+    class DriverLocationIndex {
+        <<interface>>
+        +update(String driverId, Location at)
+        +nearby(Location at, double radiusKm, VehicleCategory cat) List
+    }
+    class MatchingStrategy {
+        <<interface>>
+        +rank(TripRequest request, List candidates) List
+    }
+    class NearestDriver
+    class PricingStrategy {
+        <<interface>>
+        +fare(Trip trip) Money
+    }
+    class SurgePricing {
+        -PricingStrategy inner
+    }
+    class TripEventListener {
+        <<interface>>
+        +onTransition(TripEvent event)
+    }
+    TripService --> Trip : creates and drives
+    TripService --> DriverLocationIndex : uses
+    TripService --> MatchingStrategy : uses
+    TripService --> PricingStrategy : uses
+    TripService o-- TripEventListener : notifies
+    Trip --> Rider
+    Trip --> Driver
+    Trip --> Location : pickup and drop
+    Driver *-- Vehicle
+    NearestDriver ..|> MatchingStrategy
+    SurgePricing ..|> PricingStrategy
+    SurgePricing --> PricingStrategy : wraps
+`} />
+
+`HighestRating` and `LowestEta` are two more `MatchingStrategy` classes; `StandardPricing` is the base `PricingStrategy` that surge wraps. They are omitted from the picture, not from the design.
+
+## Key interfaces and methods
+
+The trip's states and the transitions between them live in one enum. The [behavioural patterns lesson](/learn/design-patterns-behavioural) gave the condition for choosing this over State classes: when the behaviour per state is a transition check and one fee rule, a table is lighter and just as clear; when each state grows its own logic, promote the constants to classes.
+
+```java
+enum TripState {
+    REQUESTED, DRIVER_ASSIGNED, EN_ROUTE, STARTED, COMPLETED, CANCELLED;
+
+    boolean canMoveTo(TripState next) {
+        return switch (this) {
+            case REQUESTED       -> next == DRIVER_ASSIGNED || next == CANCELLED;
+            case DRIVER_ASSIGNED -> next == EN_ROUTE || next == CANCELLED;
+            case EN_ROUTE        -> next == STARTED || next == CANCELLED;
+            case STARTED         -> next == COMPLETED;
+            case COMPLETED, CANCELLED -> false;
+        };
+    }
+}
+```
+
+The trip owns its state and guards the transition with its own monitor. It returns the event rather than publishing it, so listeners run after the lock is released:
+
+```java
+final class Trip {
+    private TripState state = TripState.REQUESTED;                 // guarded by this
+    private final EnumMap<TripState, Instant> enteredAt = new EnumMap<>(TripState.class);
+
+    synchronized TripEvent moveTo(TripState next, Instant at) {
+        if (!state.canMoveTo(next)) throw new IllegalTransitionException(id, state, next);
+        TripState from = state;
+        state = next;
+        enteredAt.put(next, at);
+        return new TripEvent(this, from, next, at);                 // caller publishes after the lock is released
+    }
+}
+```
+
+The driver's status is the contested resource, so every change to it is a compare-and-set from an expected value. `releaseOffer` is conditional too, which is what makes a late timeout harmless:
+
+```java
+enum DriverStatus { OFFLINE, AVAILABLE, OFFERED, ON_TRIP }
+
+final class Driver {
+    private final AtomicReference<DriverStatus> status = new AtomicReference<>(DriverStatus.AVAILABLE);
+    boolean tryOffer()     { return status.compareAndSet(DriverStatus.AVAILABLE, DriverStatus.OFFERED); }  // one trip wins
+    boolean startTrip()    { return status.compareAndSet(DriverStatus.OFFERED, DriverStatus.ON_TRIP); }
+    boolean releaseOffer() { return status.compareAndSet(DriverStatus.OFFERED, DriverStatus.AVAILABLE); }
+}
+```
+
+Matching is a pure ranking over candidates the index returned. Each candidate carries where the driver was last seen and an ETA, so the three strategies differ only in their comparator:
+
+```java
+interface MatchingStrategy {
+    List<DriverCandidate> rank(TripRequest request, List<DriverCandidate> candidates);   // best first
+}
+record DriverCandidate(Driver driver, Location at, Duration eta) {}
+
+final class NearestDriver implements MatchingStrategy {
+    public List<DriverCandidate> rank(TripRequest r, List<DriverCandidate> cs) {
+        return cs.stream().sorted(Comparator.comparingDouble(c -> c.at().distanceKm(r.pickup()))).toList();
+    }
+}
+```
+
+The service claims the driver *before* sending the offer, and arms a timeout as a one-shot job on the [task scheduler](/learn/lld-task-scheduler) from the previous case study:
+
+```java
+private void offerNext(Trip trip, Deque<DriverCandidate> ranked) {
+    while (!ranked.isEmpty()) {
+        Driver d = ranked.poll().driver();
+        if (d.tryOffer()) {                                                        // claim first, ask second
+            trip.recordOffer(d, ranked);                                           // remembers who is next
+            scheduler.schedule(new OfferTimeout(trip, d), new OneShot(clock.instant().plusSeconds(15)));
+            driverNotifier.offer(d, trip);
+            return;
+        }
+    }
+    publish(trip.moveTo(TripState.CANCELLED, clock.instant()));                    // nobody available
+}
+
+void accept(String tripId, String driverId) {
+    Trip trip = trips.get(tripId);
+    synchronized (trip) {
+        Driver d = trip.offeredDriver().filter(x -> x.id().equals(driverId))
+                       .orElseThrow(() -> new StaleOfferException(tripId));        // offer withdrawn or timed out
+        if (!d.startTrip()) throw new StaleOfferException(tripId);
+        trip.assign(d);
+        publishLater(trip.moveTo(TripState.DRIVER_ASSIGNED, clock.instant()));
+    }
+}
+```
+
+Pricing is a Strategy, and surge is a Decorator around it, because surge must multiply whatever base rule is in force and may itself be wrapped by a promotion. The multiplier is captured on the trip at request time, so the rider pays what the rider saw:
+
+```java
+interface PricingStrategy { Money fare(Trip trip); }
+
+final class StandardPricing implements PricingStrategy {
+    public Money fare(Trip t) {
+        Money m = base.plus(perKm.times(t.distanceKm())).plus(perMinute.times(t.minutes()));
+        return Money.max(m, minimumFare);
+    }
+}
+final class SurgePricing implements PricingStrategy {                              // Decorator
+    private final PricingStrategy inner;
+    public Money fare(Trip t) { return inner.fare(t).times(t.surgeMultiplier()); }
+}
+```
+
+Surge as a *parameter* of `StandardPricing` is the other reasonable answer, and the condition that decides is whether more than one base rule exists. With one formula, a parameter is simpler; with airport flat rates and corporate tariffs, the decorator saves a copy of the surge logic in each.
+
+Listeners are the Observer. The service keeps them in a `CopyOnWriteArrayList`, because reads vastly outnumber registrations, and it isolates each one so a failing analytics hook cannot stop the rider's notification:
+
+```java
+interface TripEventListener { void onTransition(TripEvent event); }
+
+private void publish(TripEvent e) {
+    for (TripEventListener l : listeners) {
+        try { l.onTransition(e); } catch (RuntimeException ex) { log.warn("listener failed for trip " + e.tripId(), ex); }
+    }
+}
+```
+
+## Interactions
+
+<Mermaid caption="Request, claim, offer, accept. The driver is claimed with tryOffer before anyone is notified, and the timeout job later finds the offer gone." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant R as Rider app
+    participant S as TripService
+    participant I as Location index
+    participant M as Matching
+    participant D as Driver A
+    participant K as Scheduler
+    participant T as Trip T-501
+    participant N as Listeners
+    R->>S: request(pickup, drop, SEDAN)
+    S->>I: nearby(pickup, 3 km, SEDAN)
+    I-->>S: 7 candidates
+    S->>M: rank(request, candidates)
+    M-->>S: A, B, C
+    S->>D: tryOffer()
+    D-->>S: true (Available to Offered)
+    S->>K: schedule(OfferTimeout A, in 15 s)
+    S-->>R: Requested, estimate ₹182
+    D->>S: accept(T-501)
+    S->>D: startTrip()
+    D-->>S: true (Offered to On trip)
+    S->>T: moveTo(Driver assigned)
+    T-->>S: TripEvent
+    S->>N: onTransition(event)
+    N-->>R: driver A is 4 minutes away
+    Note over K: OfferTimeout fires at 15 s, finds the offer gone, does nothing
+`} />
+
+<Mermaid caption="Trip lifecycle. Cancellation is legal from three states and the fee differs in each, which is why CancellationPolicy takes the state as input." chart={`stateDiagram-v2
+    state "Driver assigned" as Assigned
+    state "En route" as EnRoute
+    [*] --> Requested: rider requests, estimate shown
+    Requested --> Assigned: offered driver accepts within 15 s
+    Requested --> Cancelled: rider cancels, no fee
+    Requested --> Cancelled: no candidate accepts
+    Assigned --> EnRoute: driver taps heading to pickup
+    Assigned --> Cancelled: rider cancels, fee after 2 min
+    EnRoute --> Started: driver confirms pickup
+    EnRoute --> Cancelled: rider or driver cancels, fee rules apply
+    Started --> Completed: driver ends trip, fare settled
+    Completed --> [*]
+    Cancelled --> [*]
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Strategy | MatchingStrategy | Nearest, highest rating and lowest ETA are swapped per city and per experiment | One rule, never tuned |
+| Strategy | PricingStrategy, CancellationPolicy | Tariffs and fee rules change without touching Trip | Pricing is one line |
+| Decorator | SurgePricing | Multiplies any base rule and stacks with a promotion | There is one base rule |
+| Observer | TripEventListener | Rider app, driver app, ledger and analytics react without the service knowing them | One listener that never changes |
+| State, as a table | TripState | Six states, five events, one fee rule per state | Behaviour per state grows: then classes |
+| Command | OfferTimeout | The timeout is a Task the scheduler queues and cancels | You block a thread for 15 seconds instead |
+| Facade | TripService | Apps see seven methods and no index, strategies or listeners | There is one caller |
+
+Absent on purpose: a Factory for vehicles (a category enum carries all the behaviour), and a Singleton anywhere.
+
+## Edge cases and error handling
+
+- **Driver accepts as the offer times out.** Both `accept` and `OfferTimeout` take the trip's monitor first, so one of them sees the offer and the other finds it gone. The driver CAS is the second line: the timeout's `releaseOffer()` moves Offered to Available and fails if `startTrip()` already moved it to On trip, so a driver who just accepted is never released by a late timer.
+- **The rider's app retries the request.** A request carries a client-generated key, and `trips.putIfAbsent(key, trip)` returns the existing trip to the retry instead of matching twice.
+- **Nobody nearby.** `nearby` returns nothing within 3 km; widen once to 6 km, then cancel with a "no drivers" reason. The widening rule is a matching concern and lives beside the strategy.
+- **Stale locations.** Each index entry carries its update time; `nearby` skips entries older than 30 seconds, so a driver whose phone died is not offered a trip.
+- **Driver goes offline while offered.** The app's "go offline" is `compareAndSet(AVAILABLE, OFFLINE)` and fails while Offered or On trip; the driver finishes or declines first.
+- **Illegal transition.** A double tap on "start trip" throws `IllegalTransitionException`, an unchecked exception for a caller bug; the API layer turns it into a conflict response and the app refreshes its state.
+- **Cancellation fees.** `CancellationPolicy.fee(trip, by, at)` reads the state and the time entered: free while Requested; free for two minutes after assignment, then a flat fee; a flat fee while En route; never once Started. A driver cancelling costs the rider nothing and the driver a strike.
+
+<Callout type="analogy" title="The taxi-rank whiteboard">
+
+A dispatcher at a taxi rank keeps a whiteboard with a magnet beside each driver's name: free, offered, on a job. Before radioing a driver, the dispatcher moves the magnet. If a second dispatcher reaches for the same magnet a moment later, it is already moved, so they pick the next name. The magnet is `tryOffer`; moving it before the radio call is "claim first, ask second". Where the analogy fails: anyone can slide a magnet back. Our `releaseOffer` only moves it from Offered, never from On a job, which is what protects a driver who has just accepted.
+
+</Callout>
+
+## Concurrency
+
+Shared mutable state, named first: each driver's status, each trip's state, the location index, the trips map and the listener list.
+
+Driver status is an `AtomicReference` and every change is a `compareAndSet` from an expected value. The race that matters is two requests ranking the same driver at the same instant; both call `tryOffer`, one gets `true`, the other moves on. Trip state is guarded by the trip's own monitor, one lock per trip, and no code path locks two trips, so there is no ordering to get wrong. Where a method touches both, it takes the trip's monitor and then does the driver CAS, which cannot block, so the lock is never held waiting for anything.
+
+The alternative is a `ReentrantLock` per driver, taken with `tryLock()`, which returns at once rather than waiting, so a matcher treats a locked driver as unavailable and moves on. The condition that decides: a single status field wants a CAS; a claim that must update several fields together (status, current trip id, a reservation expiry) wants the lock. Never `lock()` in the matching loop, because a blocked matcher is a slow match for every rider behind it.
+
+The index is a `ConcurrentHashMap` of grid cell to drivers, written tens of thousands of times a minute and read once per request. Readers see a cell that is a few hundred milliseconds stale, which is harmless, because the index is a hint and `tryOffer` is the truth. The trips map is a `ConcurrentHashMap` too, and `putIfAbsent` gives request idempotency for free. Listeners live in a `CopyOnWriteArrayList`, so publishing iterates a snapshot while a listener is being registered.
+
+## Extensibility and trade-offs
+
+- **A new matching rule.** One class with one comparator. "Prefer drivers finishing a trip near the pickup" is a strategy whose candidates include On trip drivers with a predicted free time, which also needs the index to expose them.
+- **Scheduled rides.** A one-shot job that calls `request` at the right time, and nothing else changes.
+- **Shared rides.** A trip with several riders and ordered stops breaks the one-rider aggregate; it is a different `Trip` type, not a flag.
+- **Several matching machines.** `tryOffer` becomes a conditional write in a shared store, the index is sharded by geographic cell, and the trip monitor becomes a version check on the trip row. That is the system-level design, and the condition for crossing into it is when one process can no longer hold the index.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| Claim the driver before offering | No double offer, no double assignment | A claimed driver is unavailable for 15 s even if they decline late |
+| Sequential offers | Never locks up several drivers for one trip | A slow match when the first drivers decline |
+| TripState as an enum table | Twelve lines, exhaustive switch | Per-state behaviour has nowhere to live yet |
+| Surge as a Decorator | Composes with any base rule and a promotion | One more class and an order-of-wrapping question |
+| One matching process | Simple, fast, testable with a fixed clock | A second machine moves the claim and the index to a store |
+
+<Callout type="interview" title="The two-minute version">
+
+"Entities are Rider, Driver, Vehicle, Location and Trip. The trip is a state machine, requested to assigned to en route to started to completed, with cancellation from the first three and a fee policy keyed on state. Matching ranks candidates from a location index behind a Strategy, and the service claims the driver with compareAndSet from Available to Offered before sending the offer, so two trips can never share a driver; a 15-second one-shot job on the scheduler releases an unanswered offer, conditionally, so a driver who just accepted is not released. Pricing is a Strategy with surge as a Decorator, and every transition is published to listeners after the trip's lock is released." Then ask whether they want the broadcast variant or the multi-machine version.
+
+</Callout>
+
+<DeepDive title="Go deeper: offering to several drivers at once">
+
+Sequential offers are slow when the first three drivers each take twelve seconds to decline. The alternative offers the trip to the top three at once and lets them race to accept. The claim then moves from the driver to the trip: the trip holds an `AtomicReference` to its driver, and `accept` does `assignedDriver.compareAndSet(null, driver)`, so exactly one acceptance wins and the others receive "already taken". Two further choices follow. Either all three drivers are moved to Offered, which removes three drivers from supply for one trip, or their status is left untouched and the winner is claimed with `compareAndSet(AVAILABLE, ON_TRIP)` at acceptance, which risks the winner having been taken by another trip a moment earlier, so the service must handle a failed claim by falling back to the next acceptance. The condition that decides: dense supply favours broadcast, because locking up three of a thousand drivers costs nothing and matches are faster; sparse supply favours sequential offers, because three claimed drivers may be every driver in range.
+
+</DeepDive>

@@ -1,0 +1,98 @@
+A system is **secure** when the people and programs that should be able to read, change and use its data can, and nobody else can, even while parts of the system are under attack. Every other lesson in this module makes that sentence true for one box or one arrow of your architecture.
+
+## Three properties: confidentiality, integrity, availability
+
+Security goals are usually stated as the **CIA triad**; the definitions below paraphrase NIST's.
+
+| Property | Means | Instagram-style example | Typical defences |
+| --- | --- | --- | --- |
+| Confidentiality | Only authorised parties can read the data | Direct messages visible only to the two participants | TLS, access control, encryption at rest |
+| Integrity | Data is not improperly modified or destroyed, and actions can be attributed | A like count the client cannot edit | Server-side validation, signatures, audit logs |
+| Availability | Timely, reliable access for legitimate users | The feed still loads during a bot flood | Redundancy, rate limiting, load shedding |
+
+<mark>Availability is a security property.</mark> A denial-of-service attack reads nothing and changes nothing, yet it breaks the contract, so the reliability module (see [Availability](/learn/availability)) and this one defend the same thing from different directions.
+
+## Who is asking, what may they do, what did they do
+
+Three words carry the module. **Authentication** establishes *who* is asking: a password, a session cookie, a certificate (see [Authentication](/learn/authentication)). **Authorisation** decides whether that identity *may* do this action to this object (see [Authorisation](/learn/authorization)). **Accounting**, or auditing, records *what they did*, so actions can be attributed and a breach reconstructed (see [Logging](/learn/logging)). The order is fixed: an unauthenticated request cannot be authorised, and an unlogged action cannot be investigated.
+
+## Trust boundaries and attack surface
+
+A **trust boundary** is a line in your architecture where the level of trust changes: data on one side was produced by code you control, data on the other side was not. Every arrow that crosses a boundary is a place where you authenticate the sender, validate the payload, authorise the action and log it.
+
+<Mermaid caption="Trust boundaries drawn as zones. Each arrow crossing a zone edge is where checks belong; the gateway and CDN are the attack surface." chart={`flowchart LR
+    subgraph internet["Public internet: untrusted"]
+        user["Mobile app"]
+        attacker["Anyone else"]
+    end
+    subgraph edge["Edge: your code, hostile input"]
+        cdn["CDN"]
+        gw["API gateway"]
+    end
+    subgraph private["Private network: trusted services"]
+        feed["Feed service"]
+        post["Post service"]
+    end
+    subgraph data["Data tier: most trusted"]
+        db[("Database")]
+        store[("Object storage")]
+    end
+    user -->|"HTTPS"| cdn
+    user -->|"HTTPS + token"| gw
+    attacker -->|"same ports"| gw
+    gw -->|"authenticated request"| feed
+    gw -->|"authenticated request"| post
+    feed -->|"least-privilege DB user"| db
+    post -->|"signed upload URL"| store
+`} />
+
+The **attack surface** is the set of points where an attacker can try to get in, cause an effect or pull data out: every public endpoint, open port, file upload, webhook receiver and employee login. You shrink it by exposing less: the database answers only the private network, the admin API sits behind single sign-on, and unused endpoints are removed.
+
+<Callout type="idea" title="The inside is not safe either">
+
+Calling the private network "trusted" is a simplification: a compromised service or a stolen laptop is already inside, which is why zero trust designs, covered in [Threat modelling](/learn/threat-modelling), authenticate internal calls too.
+
+</Callout>
+
+## Defence in depth
+
+**Defence in depth** is the use of several independent countermeasures in layers, so that one failure does not become a breach. Each layer is designed assuming the one before it has already failed.
+
+Suppose the post service's database password leaks through a log line. With one layer, that is the whole user table. With several:
+
+<Steps>
+
+1. The database accepts connections only from the private subnet, so the password is useless from outside.
+2. The credential belongs to a user that can read and write the posts tables but cannot read users or messages.
+3. Sensitive columns are encrypted with keys that database user cannot reach (see [Encryption](/learn/encryption)).
+4. An alert fires on a login from an unexpected source and the credential is rotated within minutes (see [Secrets management](/learn/secrets-management)).
+
+</Steps>
+
+<Callout type="analogy" title="A bank branch, not a wall">
+
+A branch does not rely on its front door: a lock, a guard, cameras, a time-locked vault, drawers holding a day's cash. A thief who passes one layer gains little and is recorded. Where the analogy stops: a burglar tries one door a night, a script tries millions of logins an hour, so your layers must be automatic.
+
+</Callout>
+
+## Least privilege
+
+Saltzer and Schroeder wrote in 1975 that every program and every user "should operate using the least set of privileges necessary to complete the job". In a distributed system:
+
+- **Services** each get their own database user and cloud role and reach only the services they call. The thumbnail worker writes to the thumbnails bucket and nothing else.
+- **Tokens** carry only the scopes the task needs (see [OAuth 2.0, OpenID Connect and JWT](/learn/oauth-jwt)).
+- **People** read by default and use a time-limited, logged break-glass path for production writes.
+
+The companion rule is **fail-safe defaults**: base decisions on permission rather than exclusion, so a missing rule denies. Least privilege is what makes defence in depth work; a layer that lets through everything except what you thought of is not a layer.
+
+<Callout type="interview" title="Walk the boundaries out loud">
+
+Point at each arrow that crosses a boundary and say what happens there: "the gateway terminates TLS, validates the token and rate-limits by user; the feed service checks the caller may see this account; its database user is read-only." A design with no such sentences is assumed to have no security.
+
+</Callout>
+
+<DeepDive title="Go deeper: the other Saltzer and Schroeder principles">
+
+The same paper lists more principles. **Complete mediation**: check every access to every object, so caching an authorisation decision is a conscious choice. **Economy of mechanism**: keep the security-critical path small enough to review. **Open design**: only the keys are secret, never the design. **Separation of privilege**: two keys beat one, hence a second approver for production deletions. **Least common mechanism**: share as little as possible between users. **Psychological acceptability**: a control people route around protects nobody.
+
+</DeepDive>

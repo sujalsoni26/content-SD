@@ -1,0 +1,48 @@
+| What | Formula |
+| --- | --- |
+| Average QPS | DAU × actions per user per day ÷ 10⁵ |
+| Peak QPS | average × 2–3 (5–10× for IPL matches, flash sales, ticket drops) |
+| Read QPS | write QPS × reads per write |
+| Storage | writes per day × object size × retention days × replication factor (3) |
+| Ingress bandwidth | write QPS × average upload size |
+| Egress bandwidth | read QPS × average response size |
+| Cache size | ≈ 20% of the daily read volume (80/20 rule: a fifth of the data gets most reads) |
+| Servers | peak QPS ÷ QPS per server, plus headroom |
+| Requests in flight (Little's Law) | QPS × average latency → threads and DB connections needed |
+
+- QPS (queries per second) is also called RPS or TPS.
+- Only MAU given? Assume DAU ≈ 25–50% of MAU.
+- **Design for peak, not average:** LeetCode sees its surge in a contest's first 5 minutes.
+- Write ratios as reads:writes (a URL shortener is 100:1), and say every assumption out loud before you compute.
+
+## Where the rules of thumb come from
+
+- **Peak = 2–3× average.** Traffic follows people's days: most of it lands in the waking hours of the busiest time zones, so the busiest hour carries two to three times the all-day average. Planned events (a match, a sale, a ticket drop) stack on top, which is where 5–10× comes from. Say which case you are sizing for.
+- **Cache ≈ 20% of daily reads.** The 80/20 rule is an observation, not a law: in most read-heavy systems a small share of keys gets most of the reads. Sizing the cache at a fifth of one day's read volume is a generous upper bound for that hot set. In production you measure the hit ratio and shrink or grow from there.
+- **Storage × 3.** Databases and object stores keep about three copies for durability and failover, so raw data × 3 is the honest storage number.
+- **Capacity per machine.** The per-server, per-database and per-Redis figures (see [Numbers to memorize](/learn/estimation-numbers)) are starting assumptions; a real service measures its own.
+
+## One example, start to finish
+
+A photo app: 50M DAU, each user views 20 photos and uploads one a day, photos average 200 KB.
+
+| Step | Working | Result |
+| --- | --- | --- |
+| Reads per day | 5 × 10⁷ × 20 | 10⁹ |
+| Read QPS | 10⁹ ÷ 10⁵ | 10k average, \~30k at peak |
+| App servers | 30k ÷ 1k per server, plus headroom | \~30–40 at peak |
+| Egress | 10k × 200 KB | 2 GB/s ≈ 16 Gbps → a CDN, not your servers |
+| Write QPS | 5 × 10⁷ ÷ 10⁵ | 500 (\~1.5k at peak): one SQL primary copes |
+| New data per day | 5 × 10⁷ × 200 KB | 10 TB |
+| Storage per year | 10 TB × 365 × 3 | \~11 PB → object storage |
+| Cache | 10⁹ reads × 200 KB × 20% | 40 TB: cache metadata in Redis, let the CDN cache the bytes |
+
+The egress and storage rows decide the design before any box is drawn: photos go to object storage behind a CDN, and the database only stores metadata.
+
+<Interactive name="estimator" />
+
+<Callout type="interview" title="Talk while you compute">
+
+"Assume 100M DAU, 5 posts read per user per day, so 5 × 10⁸ reads ÷ 10⁵ s ≈ 5k QPS average, maybe 15k at peak." The interviewer is grading the reasoning, not the decimal places, and can correct an assumption before it snowballs.
+
+</Callout>

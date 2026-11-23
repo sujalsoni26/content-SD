@@ -1,0 +1,83 @@
+**Distributed SQL** is a relational database that spreads every table over many machines, replicates each piece with a consensus protocol, and still answers ordinary SQL with transactions that span all of it. The application sees one database. Underneath there is no primary: there are thousands of small replicated groups, a transaction protocol that stitches them together, and a clock service that decides which commit came first. "NewSQL", the label an analyst attached to this class of system in 2011, covers Google Spanner, CockroachDB and TiDB, and this lesson is about what the three share and what they charge for it.
+
+## Sharded SQL or distributed SQL?
+
+[Partitioning and rebalancing](/learn/partitioning-internals) explained how data is split, moved and found. Sharding middleware applies that to a database that knows nothing about it: Vitess, created at YouTube in 2010, accepts MySQL-protocol connections at its VTGate proxy and routes each query to an independent MySQL shard with its own replication; Citus is a PostgreSQL extension in which a coordinator node sends each query to the worker holding that row's distribution column. Both scale reads and writes, and both keep a hard edge where the shards meet: a transaction that touches two shards, a unique constraint across shards or a join without the shard key is forbidden, slow or left to the application.
+
+Distributed SQL moves that edge inside the database. The unit of distribution is small and chosen by the system, every unit is replicated by consensus rather than by a primary and its replicas, and a transaction across units is the normal case rather than the exception.
+
+| | Sharded SQL (Vitess, Citus) | Distributed SQL (Spanner, CockroachDB, TiDB) |
+| --- | --- | --- |
+| Unit of distribution | A shard you define, by a key you choose | A key range the database splits and moves itself |
+| Replication | Each shard is a primary with replicas | Each range is its own consensus group |
+| Cross-shard transaction | Limited, or managed by the application | Ordinary: two-phase commit over consensus groups |
+| Losing a node | Promote a replica per shard, with a data-loss window | The range elects a new leader, no acknowledged write lost |
+| What the application sees | A router that hides most shards, with sharp edges | One SQL endpoint |
+
+## Ranges replicated by Raft
+
+The storage unit is a contiguous slice of the key space. CockroachDB calls it a **range** and splits one when it passes 512 MiB by default; TiKV, the storage layer beneath TiDB, calls it a **Region** and splits at 256 MiB (96 MiB before version 8.4); Spanner calls it a **split**. Each is copied to three nodes by default, placed in different zones, and each copy set runs its own instance of the protocol from [Consensus](/learn/consensus): Raft in CockroachDB and TiKV, Paxos in Spanner. One replica leads, and a write is acknowledged once a majority has appended it. A 10 TB database is therefore on the order of 20,000 independent consensus groups, and a dead node triggers 20,000 small elections rather than one anxious failover.
+
+<Mermaid caption="One SQL endpoint, many consensus groups. Any node parses the query, a coordinator runs the transaction across the ranges it touches, and each range is its own Raft group spread over three zones. The clock service orders the commits." chart={`flowchart TB
+    C["Clients speaking SQL"] --> G["SQL layer: stateless, any node answers"]
+    G --> TX["Transaction coordinator: two-phase commit across ranges"]
+    TX --> L1
+    TX --> L2
+    subgraph R1["Range 1, keys a to m, one Raft group"]
+        L1["Leader, zone A"] --> F1["Follower, zone B"]
+        L1 --> F1c["Follower, zone C"]
+    end
+    subgraph R2["Range 2, keys n to z, one Raft group"]
+        L2["Leader, zone B"] --> F2["Follower, zone A"]
+        L2 --> F2c["Follower, zone C"]
+    end
+    CL["Clock service: TrueTime, hybrid logical clocks or a timestamp oracle"] -.-> TX
+`} />
+
+## Transactions across ranges
+
+A transaction that writes rows in two ranges is two-phase commit with each range's consensus group as a participant, the layering [Distributed transactions](/learn/distributed-transactions) described for Spanner. CockroachDB writes each value first as a **write intent**, a provisional version that points at a **transaction record** holding the transaction's status; commit flips the record, and *parallel commits* writes the intents and the record in the same round, so a commit costs one round of consensus rather than two. TiDB follows Google's Percolator: two-phase commit over TiKV with one row's lock as the commit point, and pessimistic locking by default for clusters created since version 3.0.8. Serializable isolation is the default in Spanner and CockroachDB; TiDB implements snapshot isolation and reports it as REPEATABLE READ for MySQL compatibility.
+
+## Who says what time it is
+
+Serializable transactions across machines need an order of commits, and [Time and ordering](/learn/time-and-ordering) explained why wall clocks cannot supply one. Each system buys its order differently.
+
+| | Time source | What it buys | What it costs |
+| --- | --- | --- | --- |
+| Spanner | **TrueTime**: GPS and atomic clocks in each datacentre, returning an interval from earliest to latest rather than one instant | External consistency: a commit's timestamp is later than any commit that finished before it began, cluster-wide | **Commit wait**: the leader holds the acknowledgement until the interval has passed, a sawtooth of about 1 to 7 ms in the 2012 paper, 4 ms on average |
+| CockroachDB | Hybrid logical clocks on ordinary NTP-synced hardware, with a maximum offset of 500 ms by default | No special hardware | A node whose clock drifts past the bound crashes rather than lie, and a read that meets a write inside its uncertainty window is restarted |
+| TiDB | A central **timestamp oracle (TSO)** in the Placement Driver hands out increasing timestamps | Simple and strictly ordered | Every transaction start is a round trip to the Placement Driver, so its location sets a latency floor |
+
+## Follower reads
+
+A read that may be a few seconds stale need not visit the leader. Spanner serves bounded- or exact-staleness reads from the closest replica that has caught up, and its documentation suggests 15 seconds of staleness for the full benefit; CockroachDB's `AS OF SYSTEM TIME follower_read_timestamp()` reads about 4.2 seconds in the past from the nearest replica; TiDB's `tidb_replica_read` variable sends reads to followers. The price is the one from [Consistency](/learn/consistency): the data is stale, so this is for dashboards and feeds, not for the balance you are about to debit.
+
+## What it costs
+
+- **Write latency is at least one consensus round trip.** Replicas in three zones of one region add a millisecond or two to every write; replicas in three regions add the round trip to the nearest other region, tens to hundreds of milliseconds. CockroachDB's documentation says so plainly: surviving a region failure raises write latency by at least that round trip, and needs at least three regions.
+- **Hot ranges.** A sequential key (an auto-increment id, a timestamp) sends every insert to the last range, whose leader becomes the cluster's bottleneck. CockroachDB splits a range on load (2,500 queries per second by default), but a single hot key cannot be split, so the salting from the partitioning lesson still applies.
+- **Cross-region transactions** stack the costs: consensus per range, two-phase commit between ranges, and in Spanner a commit wait on top.
+- **Contention retries.** Serializable isolation refuses rather than quietly reorders, so two transactions fighting over one hot row produce retry errors the application must handle.
+- **Operations.** Dozens of nodes, rebalancing traffic that competes with users, clock monitoring, and a query planner that must reason about network distance.
+
+## When one PostgreSQL still wins
+
+The honest condition: if your data fits on one large machine with headroom, your write rate fits one primary, and you can live with a failover window of seconds to a minute, a single primary with [read replicas](/learn/replication) is faster per transaction, simpler to run and understood by every tool you own. Plenty of products with tens of millions of users never leave that shape. Distributed SQL earns its cost when one of three things is true: acknowledged writes must survive the loss of a zone or region, the dataset or write rate has outgrown one primary and hand-sharding would break the transactions the product depends on, or users on two continents need local reads with strong consistency.
+
+<Callout type="analogy" title="One ledger in a vault, or a notarised page in three towns">
+
+Sharded SQL is a chain of shops where each branch keeps its own ledger and head office adds up the totals: fast locally, but a sale that crosses two branches needs phone calls and trust. Distributed SQL copies every ledger page to three towns, declares a sale final only when two of the three clerks have initialled it, and stamps each entry with a town-hall clock so that "who sold the last seat" can be settled. Where it breaks: the analogy's clerks are never all slow at once, while real replicas are, and the protocol has to keep working when one of the three is silent.
+
+</Callout>
+
+<Callout type="interview" title="Say the round trip and the condition">
+
+"Every write is at least one consensus round trip, so a cluster that survives a region failure adds the round trip to the nearest other region to every commit. I'd reach for distributed SQL when acknowledged writes must survive a region or the data has outgrown one primary; otherwise a single PostgreSQL with replicas, which is faster and simpler." Naming the clock (TrueTime, hybrid logical clocks or a timestamp oracle) shows you know where the ordering comes from.
+
+</Callout>
+
+<DeepDive title="Go deeper: commit wait versus uncertainty restarts">
+
+Spanner picks a commit timestamp at TrueTime's *latest* and then waits until TrueTime's *earliest* has passed it, so any transaction that starts afterwards is guaranteed a later timestamp: external consistency bought with a few milliseconds on every write. CockroachDB has no bounded clock, so it pays the other way round: a read that finds a value whose timestamp lies inside its uncertainty window (up to the maximum offset ahead of its own clock) cannot know whether that write happened before or after it started, and restarts at a later timestamp. Spanner pays on every write; CockroachDB pays only when a read and a write collide within the window. Its *global tables* deliberately add a commit wait to writes so that reads in every region can be served locally without that risk.
+
+</DeepDive>

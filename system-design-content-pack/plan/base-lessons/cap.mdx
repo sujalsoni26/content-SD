@@ -1,0 +1,61 @@
+**CAP only matters once data lives in more than one place.** One server with one database has a single source of truth and nothing to partition.
+
+The trade-off appears with replicas and multi-region deployments, which you add to sit near users: a user in Delhi calling a server in North America pays a cross-continent round trip on every request.
+
+A **network partition** splits nodes that are running but can't talk to each other. In a distributed system it *will* happen.
+
+## The three letters
+
+- **Consistency**: every read gets the latest write or an error (strong consistency, not ACID's C).
+- **Availability**: every working node answers without error, possibly with stale data.
+- **Partition tolerance**: the system keeps running through partitions.
+
+<Callout type="warning" title={"\"Pick any two\" is misleading"}>
+
+P is unavoidable, so <mark>during a partition you choose C or A</mark>.
+
+</Callout>
+
+<Interactive name="cap-partition" />
+
+The simulation uses two copies, so in CP mode neither side can be sure it is current and both stop paying out. With three or more copies, a CP system keeps serving on the side that still holds a **majority**, which is how coordination services stay available through most partitions. How a majority is formed and kept: [Quorums and leaderless replication](/learn/quorums) and [Consensus: Raft in one picture](/learn/consensus).
+
+| Choose | During a partition | Use for | Examples |
+| --- | --- | --- | --- |
+| **CP** | Refuse or delay any request that might be wrong | Money, bookings, inventory | Two ATMs must not both pay out a ₹5,000 balance; the last iPhone in stock can't be sold twice; seat booking (BookMyShow). Systems: ZooKeeper, etcd, Spanner |
+| **AP** | Answer with possibly stale data, reconcile later | Feeds, profiles, likes, messaging | A stale bio for a few minutes; WhatsApp messages arriving late instead of the chat failing to load. Systems: Cassandra, DynamoDB (by default) |
+
+**Choose per feature, not per company**: in one app, payments can be CP while likes are AP.
+
+## Slow or partitioned?
+
+From inside a node, a slow network and a cut cable look the same: silence. A **timeout** decides when to treat it as a partition. Then you choose: keep waiting (consistency) or fail fast and answer with what you have (availability).
+
+## PACELC: the trade-off when nothing is broken
+
+Partitions are rare, so CAP says nothing about most of a system's life. Daniel Abadi's **PACELC** adds the everyday case: <mark>if Partition, choose A or C; Else, choose Latency or Consistency</mark>.
+
+<Diagram name="pacelc-tree" caption="Two questions, two cases. CAP covers the left branch; PACELC adds the right." />
+
+## Why consistency costs latency
+
+To be strongly consistent, a write must reach the replicas (say in North America, India and Dubai) and wait for their acknowledgements before confirming. One cross-continent round trip is already about **150 ms**, while responses under about **100 ms** feel instant. Eventual consistency confirms locally and replicates in the background: fast, but briefly stale.
+
+| Database | PACELC | Default behaviour |
+| --- | --- | --- |
+| Cassandra, DynamoDB | PA/EL | Available and fast, eventually consistent; stronger reads can be requested per query |
+| Google Spanner | PC/EC | Always consistent; TrueTime (GPS and atomic clocks) bounds clock error so global transactions stay ordered |
+| MongoDB | Tunable | Read and write concerns pick the trade-off (often classed PA/EC) |
+| ZooKeeper, etcd | PC/EC | Coordination data (configuration, leader election) must be correct |
+
+<Callout type="analogy" title="Two hostel friend groups">
+
+Split over semester break (a partition), they can stop gossiping until they're back (C) or keep gossiping separately and sort out the confusion later (A). Back on campus (no partition), they can talk fast and risk mishearing (L) or talk slowly until everyone agrees (C).
+
+</Callout>
+
+<Callout type="interview" title="In an interview, ask both questions">
+
+"When the network fails, do we favour consistency or availability?" and "When everything is healthy, latency or consistency?" A social feed is **PA/EL**; a payment ledger is **PC/EC**.
+
+</Callout>

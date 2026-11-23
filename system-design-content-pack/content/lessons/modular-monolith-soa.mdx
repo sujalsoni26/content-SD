@@ -1,0 +1,80 @@
+A **modular monolith** is one deployable whose code is divided into modules with hard boundaries: each module owns its tables, exposes a small public interface, and nothing outside may reach past it. Most systems should keep this shape for years; it is also what a system needs *before* any split into services. The trade-off table for monolith versus microservices is in [Microservices](/learn/microservices); this lesson is about where the lines go and when to cut along them.
+
+## What SOA promised, and where it went wrong
+
+In the early 2000s **service-oriented architecture (SOA)** promised what microservices promise now: carve the enterprise into services with published contracts, reuse them, let teams work independently. Large companies had dozens of systems that could not talk to each other, so the integration layer became the product: the **enterprise service bus (ESB)**, central middleware that routed messages, translated formats and protocols, and increasingly ran business rules and orchestrated whole processes.
+
+The bus got smart and the services got dumb. Routing, transformation and workflow logic lived in the bus's configuration, owned by one integration team, so every change queued behind that team, and one fault in the bus could stop the whole company talking. The microservices reaction, named by James Lewis and Martin Fowler in 2014, was **smart endpoints and dumb pipes**: pipes only move messages; logic lives in the services. What survived is worth keeping: explicit contracts, organisation around business capabilities rather than technical layers, asynchronous messaging. What was dropped was the clever middle.
+
+## Bounded contexts: the unit of a module
+
+Eric Evans's *Domain-Driven Design* (2003) answers "where does the boundary go?". A **bounded context** is the boundary within which one model and one vocabulary apply, set explicitly in terms of team, code base and database schema. The same word means different things across contexts: in a food-delivery app, an "order" to Ordering is a cart with prices and a promo code; to Dispatch it is a pickup point, a drop point and an ETA; to Payments it is an amount and a capture status. One `Order` class serving all three grows forty fields nobody dares touch. Draw the boundary where the language changes, and let each module keep its own `Order`.
+
+<Callout type="analogy" title="Rooms, houses and the pump house">
+
+A modular monolith is one house with rooms: you reach the study through a door, not through a hole in the wall. Microservices are separate houses on a street, each with its own plumbing; every visit means going outside, where it may rain. ESB-era SOA routed every house's plumbing through one pump house whose owner approved every change. The analogy understates one thing: moving a wall indoors is cheap, while moving a boundary in code is merely cheaper than moving it between services.
+
+</Callout>
+
+## Enforcing the boundary inside one deployable
+
+Boundaries that live only in a diagram erode within a month. Make them mechanical:
+
+<Steps>
+
+1. **One package per module**, named for the business concept (`ordering`, `dispatch`), never for the layer (`controllers`, `utils`).
+2. **A small public interface** per module; everything else is package-private, and the build fails if another module imports it.
+3. **No shared tables.** Dispatch gets the drop-off address by calling Ordering's interface or by consuming an `OrderPlaced` event and keeping its own copy, never by joining Ordering's tables.
+4. **In-process events** for cross-module reactions, so the shape already resembles the pub/sub you would use between services (see [Pub/sub](/learn/pubsub)).
+5. **A check in CI.** Shopify relabelled about 6,000 classes of its Rails monolith by business domain and built a tool, Wedge, that traces calls during the test run and flags any that bypass a component's public interface.
+
+</Steps>
+
+The test of a module: <mark>could you lift it out, with its tables, and change nothing else?</mark> If not, you have a folder.
+
+<Diagram name="monolith-vs-microservices" caption="Left: one process over one database. Right: separate services, each with its own store. A modular monolith keeps the left-hand deployment while already drawing the right-hand lines through the code and the schema." />
+
+## Decomposing by capability or by subdomain
+
+<Comparison>
+
+<ComparisonItem title="By business capability">
+
+- Something the business does to create value: order management, inventory, delivery, billing.
+- Capabilities change slowly, so the architecture stays stable, and each can map to a team of six to ten people who own it end to end.
+
+</ComparisonItem>
+
+<ComparisonItem title="By DDD subdomain">
+
+- Rank the subdomains: **core** (your differentiator, such as dispatch and ETA prediction), **supporting** (restaurant onboarding) and **generic** (payments, authentication, email).
+- Usually the same list of modules, plus advice on spending: invest in the core, keep supporting subdomains plain, buy the generic ones.
+
+</ComparisonItem>
+
+</Comparison>
+
+## The shared-database anti-pattern
+
+Two "services" that read and write the same tables are one system with a network in the middle. Every schema change needs every team that touches the table; a long transaction in one service holds locks that stall the other; one database must suit everyone's access patterns. You pay for distribution and get none of the independence. The fix is a database per service, with cross-service reads through the owner's API, events, or change data capture (see [CDC](/learn/cdc)); settle it inside the monolith, where the fix is a refactor rather than a migration.
+
+## Signals that it is time to split
+
+- **Team size.** More engineers than can hold the codebase in their heads, a deploy queue, merge conflicts between teams that never speak; Conway's law (see [Microservices](/learn/microservices)) says structure follows teams either way.
+- **Independent scaling.** One module needs fifty instances or special hardware while the rest need two.
+- **Release coupling.** A module with weekly releases is blocked by another's audit freeze or forty-minute test suite.
+- **Isolation.** Payments must stay up when a bug in Ratings exhausts memory.
+
+Not a signal: fashion. When you do split, cut along a boundary the code already enforces; one that could not survive inside a process will not survive the network.
+
+<Callout type="interview" title="Say the shape and the trigger">
+
+"I would start with a modular monolith organised around bounded contexts, each module owning its tables behind a small interface, and extract a module into a service when team size, independent scaling or release coupling makes the shared deploy the bottleneck." Then name the first candidate and why.
+
+</Callout>
+
+<DeepDive title="Go deeper: the ESB's afterlife">
+
+The bus's jobs did not vanish; they were handed to owners. Routing and edge policy went to API gateways and service meshes (see [API gateway and backend-for-frontend](/learn/api-gateway) and [Service mesh](/learn/service-mesh)); format translation into the consuming service, which DDD calls an anti-corruption layer; multi-step orchestration into sagas owned by the team whose process it is (see [Sagas](/learn/sagas)); publish/subscribe to brokers that do nothing but move bytes. Same functions, different ownership: that is what "smart endpoints" meant.
+
+</DeepDive>

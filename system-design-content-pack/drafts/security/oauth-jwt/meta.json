@@ -1,0 +1,157 @@
+{
+  "slug": "oauth-jwt",
+  "title": "OAuth 2.0, OpenID Connect and JWT",
+  "moduleId": "security",
+  "level": "intermediate",
+  "minutes": 10,
+  "problem": "Users want to log in with Google and let third-party apps touch their data, services need to call each other, and nobody should paste a password into someone else's app.",
+  "summary": "OAuth 2.0 issues short-lived access tokens through the authorization code flow with PKCE or client credentials; OpenID Connect adds a signed ID token saying who logged in; JWTs carry the claims, verified against the issuer's published keys and checked for issuer, audience and expiry.",
+  "catTip": "The vet gives the groomer a note: may wash Cache, may not vaccinate Cache, valid today only. The groomer checks the vet's signature, not my purring. Tomorrow the note is worthless, which is the whole point of the note.",
+  "recall": {
+    "q": "A resource server receives a JWT. List the checks it must perform before trusting the claims, in order.",
+    "a": "Fetch the key named by kid from the configured JWKS, verify the signature with an allow-listed algorithm, then check that iss is the expected issuer, aud includes this service, and exp and nbf are valid allowing small skew. Only then read sub and scope; the alg header is never trusted on its own."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a standard flow apps collect passwords, codes get intercepted by rogue apps on the same phone, and tokens get accepted by services they were never meant for, or with no signature at all.",
+    "tradeoffs": "Self-contained tokens are verified locally but cannot be recalled before they expire, so you trade revocation latency for request latency and lean on short lifetimes plus revocable refresh tokens.",
+    "explainSimply": "Instead of giving a valet your whole key ring, you hand over a valet key that starts the car but will not open the boot, and it stops working at midnight. The dealer who cuts those keys also writes a signed note saying who you are. Anyone who receives such a key checks the signature and the date before trusting it.",
+    "hint": "Who signed it, for whom, until when, and did you decide the algorithm or did the token?"
+  },
+  "meow": "Short meow, signed by the vet, addressed to the groomer, expires at dusk. Groomer checks all four before the bath.",
+  "quiz": [
+    {
+      "prompt": "Why does the authorization code flow use PKCE for a mobile app?",
+      "options": [
+        "To encrypt the access token so the resource server cannot read it",
+        "To bind the authorization code to the app that started the flow, so an app that intercepts the redirect cannot redeem the code",
+        "To replace the refresh token with a longer-lived access token",
+        "To let the app skip the user consent screen"
+      ],
+      "answer": 1,
+      "explanation": "PKCE sends a hash of a secret verifier up front and the verifier itself at the token endpoint, so a stolen code is useless without it. Encryption and consent are unrelated, and tokens stay short-lived."
+    },
+    {
+      "prompt": "A JWT library accepts a token whose header says alg: none and returns its claims. What is the correct fix?",
+      "options": [
+        "Switch all tokens to HS256 so the header always names an algorithm",
+        "Have the verifier decide which algorithms are allowed for each key and reject anything else, regardless of the header",
+        "Shorten the token lifetime so forged tokens expire quickly",
+        "Move the alg field from the header into the payload"
+      ],
+      "answer": 1,
+      "explanation": "RFC 8725 is explicit: the header is input and the verifier's allow-list is policy. Forged tokens can be minted at any time, so lifetime does not help, and moving the field changes nothing."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A client holds a refresh token and an access token. Which goes to the resource server, and what are refresh tokens for?",
+      "a": "Only the access token goes to the resource server. The refresh token is presented to the authorization server to obtain new access tokens without the user, and it is the thing you revoke to end a session; for public clients it must be rotated or client-bound."
+    },
+    {
+      "q": "Compare a JWT and an opaque token on verification cost and revocation.",
+      "a": "A JWT is verified locally with the issuer's cached public key: no network call, but it stays valid until exp. An opaque token needs an introspection call (or a cache) per request, but revocation is immediate and no claims are exposed."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "OIDC",
+      "full": "OpenID Connect",
+      "note": "An identity layer on OAuth 2.0 that adds a signed ID token and a discovery document."
+    },
+    {
+      "term": "JWT",
+      "full": "JSON Web Token",
+      "note": "Three base64url parts, header, claims and signature, verified against the issuer's keys (RFC 7519)."
+    },
+    {
+      "term": "PKCE",
+      "full": "Proof Key for Code Exchange",
+      "note": "Binds an authorization code to the client that requested it through a hashed verifier (RFC 7636); required for public clients."
+    },
+    {
+      "term": "JWKS",
+      "full": "JSON Web Key Set",
+      "note": "The issuer's published public keys, each with a kid, fetched by verifiers to check JWT signatures and to roll keys."
+    }
+  ],
+  "sources": [
+    {
+      "title": "RFC 6749, The OAuth 2.0 Authorization Framework (October 2012)",
+      "url": "https://www.rfc-editor.org/rfc/rfc6749",
+      "accessed": "2026-11-22",
+      "supports": "the four roles, the grant types, refresh tokens never being sent to resource servers, the state parameter",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 6750, The OAuth 2.0 Authorization Framework: Bearer Token Usage (October 2012)",
+      "url": "https://www.rfc-editor.org/rfc/rfc6750",
+      "accessed": "2026-11-22",
+      "supports": "bearer semantics, the Authorization header as the recommended transport, TLS requirement, lifetimes of one hour or less",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 7636, Proof Key for Code Exchange by OAuth Public Clients (September 2015)",
+      "url": "https://www.rfc-editor.org/rfc/rfc7636",
+      "accessed": "2026-11-22",
+      "supports": "the authorization code interception attack, the 43-128 character verifier, S256 as base64url(SHA-256(verifier))",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 9700, Best Current Practice for OAuth 2.0 Security (January 2025)",
+      "url": "https://www.rfc-editor.org/rfc/rfc9700",
+      "accessed": "2026-11-22",
+      "supports": "PKCE MUST for public clients and RECOMMENDED for confidential ones, implicit grant SHOULD NOT, password grant MUST NOT, refresh token rotation or sender-constraining, audience restriction",
+      "status": "verified"
+    },
+    {
+      "title": "OpenID Connect Core 1.0 incorporating errata set 2 (December 2023)",
+      "url": "https://openid.net/specs/openid-connect-core-1_0.html",
+      "accessed": "2026-11-22",
+      "supports": "the ID token and its required claims, the nonce, and section 10.1.1 on rotating signing keys via kid and the JWK Set",
+      "status": "verified"
+    },
+    {
+      "title": "OpenID Connect Discovery 1.0",
+      "url": "https://openid.net/specs/openid-connect-discovery-1_0.html",
+      "accessed": "2026-11-22",
+      "supports": "the /.well-known/openid-configuration document and the jwks_uri field",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 7519, JSON Web Token (JWT) (May 2015)",
+      "url": "https://www.rfc-editor.org/rfc/rfc7519",
+      "accessed": "2026-11-22",
+      "supports": "the dot-separated structure and the registered claims iss, sub, aud, exp, nbf, iat, jti",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 8725, JSON Web Token Best Current Practices (February 2020)",
+      "url": "https://www.rfc-editor.org/rfc/rfc8725",
+      "accessed": "2026-11-22",
+      "supports": "the alg none and RSA-as-HMAC confusion attacks, performing algorithm verification, validating issuer and audience",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 7517, JSON Web Key (JWK) (May 2015)",
+      "url": "https://www.rfc-editor.org/rfc/rfc7517",
+      "accessed": "2026-11-22",
+      "supports": "the JWK Set with its keys array and the kid parameter for key rollover",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 7009, OAuth 2.0 Token Revocation (August 2013)",
+      "url": "https://www.rfc-editor.org/rfc/rfc7009",
+      "accessed": "2026-11-22",
+      "supports": "the revocation endpoint and the implementation note that self-contained tokens need a non-standardised back channel for immediate revocation",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 7662, OAuth 2.0 Token Introspection (October 2015)",
+      "url": "https://www.rfc-editor.org/rfc/rfc7662",
+      "accessed": "2026-11-22",
+      "supports": "introspection of opaque tokens and the caching versus staleness trade-off",
+      "status": "verified"
+    }
+  ]
+}

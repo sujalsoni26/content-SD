@@ -1,0 +1,75 @@
+An **API gateway** is the one address your clients call: a reverse proxy (see [Proxy and reverse proxy](/learn/proxy)) that has learned about your API, so it can check who is calling, enforce limits, and route or fan out to the services behind it. A **backend-for-frontend (BFF)** is a gateway built for exactly one kind of client and owned by the team that builds that client.
+
+## What belongs at the gateway
+
+Everything a gateway does well is something that applies to *every* request and needs no knowledge of your domain.
+
+| Job | What the gateway does | Why here and not in each service |
+| --- | --- | --- |
+| TLS termination | Decrypts HTTPS once at the edge | One certificate store; services speak plain HTTP or mTLS inside |
+| Authentication | Verifies tokens or API keys, passes a trusted identity header downstream (see [Authentication](/learn/authentication)) | Checked once; services never see an unauthenticated request |
+| Rate limiting and quotas | Per client, key or plan (see [Rate limiting](/learn/rate-limiting)) | The only place that sees all of one client's traffic |
+| Routing and canaries | Path, host or header to service; weighted split to a new version | Deployment detail hidden from clients |
+| Aggregation | One client call fans out to several services and returns one response | Saves a phone three round trips on a slow network |
+| Protocol translation | HTTP and JSON outside, gRPC inside (see [gRPC](/learn/grpc)); WebSocket upgrade | Services pick the protocol that suits them |
+| Observability | Request ids, access logs, latency metrics | One consistent edge record per request |
+
+What does *not* belong: business rules. "Orders above ₹5,000 need a second factor" depends on order data and belongs to the Ordering team; put it in the gateway and it is logic nobody owns, redeployed for every tweak, impossible to unit test with the domain. The same goes for validation beyond schema shape and for orchestrating writes across services, which is a saga's job (see [Sagas](/learn/sagas)). <mark>If changing a business rule means redeploying the gateway, the rule is in the wrong place.</mark>
+
+## Backend-for-frontend
+
+A food-delivery company serves a phone app, a web site, a restaurant tablet and partner integrations from one general-purpose API. The phone wants a compact home screen in one call; the web site wants richer data; partners want a stable versioned contract. One API layer trying to please everyone grows a central team, and every front-end change queues behind it.
+
+Sam Newman's answer, drawn from REA and SoundCloud, is one backend per user experience: a **BFF** per client type, owned by that client's team, doing the aggregation and shaping that only its screens need. Stewart Gleadow's rule of thumb is "one experience, one BFF". The shared edge gateway in front still terminates TLS, authenticates and rate-limits; the BFF behind it knows what the home screen looks like. Duplication between BFFs is accepted; when the same aggregation appears a third time, extract a domain service rather than a shared library that couples the BFFs together.
+
+<Mermaid caption="A shared edge gateway does the per-request jobs; each client type gets its own BFF for aggregation and shaping; the services behind know nothing about screens." chart={`flowchart LR
+    M["Phone app"] --> G["Edge gateway: TLS, auth, rate limits"]
+    W["Web site"] --> G
+    P["Partner system"] --> G
+    G --> MB["Mobile BFF"]
+    G --> WB["Web BFF"]
+    G --> PA["Partner API"]
+    MB --> R["Restaurant service"]
+    MB --> O["Order service"]
+    WB --> R
+    WB --> O
+    WB --> V["Reviews service"]
+    PA --> O
+`} />
+
+<Callout type="analogy" title="An airport, not a hotel">
+
+Passport control checks identity once (authentication); separate queues for different ticket classes meter the flow (rate limits); signage sends you to the right gate (routing). Domestic and international terminals are laid out for different passengers: a BFF each. The check-in desk never decides the flight schedule, just as the gateway never decides business rules. Where the analogy fails: airports are slow by design, and a gateway has to add almost nothing to each request.
+
+</Callout>
+
+## Gateway, reverse proxy or service mesh
+
+| | Reverse proxy | API gateway | Service mesh |
+| --- | --- | --- | --- |
+| Sits | In front of servers | At the edge, between clients and services | Beside every service, between services |
+| Traffic | North-south | North-south | East-west |
+| Knows about | Hosts and paths | Your API: clients, keys, routes, versions | Service identities |
+| Typical jobs | TLS, caching, compression, load balancing | Auth, quotas, aggregation, protocol translation | mTLS, retries, timeouts, breakers, telemetry |
+| Examples | Nginx, HAProxy | Kong, Envoy Gateway, Amazon API Gateway | Istio, Linkerd |
+
+Envoy appears in two columns: as the engine of Envoy Gateway at the edge and as the sidecar in Istio (see [Service mesh](/learn/service-mesh)). Kong ships a plugin library for authentication, rate limiting and load balancing with health checks. Envoy Gateway manages Envoy proxies configured through the Kubernetes Gateway API. Amazon API Gateway fronts REST, HTTP and WebSocket APIs with authorizers (IAM, Lambda functions, Cognito user pools), canary releases and a web application firewall.
+
+## Failure modes
+
+- **The gateway becomes a monolith.** Plugins, transformations and "just one small rule" accumulate; a central team owns them; every change is a release of the one component all traffic passes through. This is the enterprise service bus story again (see [Monolith, modular monolith, SOA and microservices](/learn/modular-monolith-soa)). BFFs owned by client teams are the structural defence.
+- **Single point of failure.** It sits in front of everything, so run several stateless instances behind a load balancer (see [Load balancing](/learn/load-balancing)) with rate-limit counters in a shared store, and decide in advance what happens when the auth service or that store is unreachable: fail closed for authentication, perhaps fail open for quotas.
+- **A latency hop with its own clock.** Each hop adds proxying and, for aggregation, the slowest fan-out call sets the response time. Gateways also impose timeouts of their own: Amazon API Gateway's REST integration timeout is 29 seconds by default, so a backend allowed to run longer is cut off at the edge. Align timeouts across layers (see [Timeouts and retries](/learn/timeouts-retries)).
+- **Limits that disagree.** Amazon API Gateway's default throttle is 10,000 requests per second while Lambda's default concurrency is 1,000 per region; the gateway happily admits traffic the backend cannot serve (see [Serverless architecture](/learn/serverless)). Size limits across layers together.
+
+<Callout type="interview" title="Name the jobs, then the exclusions">
+
+"The gateway terminates TLS, authenticates, rate-limits, routes and aggregates; it runs as several stateless instances. Business rules stay in the owning services. Because we have a phone app and a web site with different screens, each gets a BFF owned by its team behind the shared gateway." Naming what you keep *out* of the gateway is what shows judgement.
+
+</Callout>
+
+<DeepDive title="Go deeper: aggregation without a bottleneck">
+
+Three ways to shape responses per client without a monolithic gateway. A BFF per client, as above: hand-written endpoints, maximum control, some duplication. A query layer such as GraphQL in front of the services: clients ask for the fields they need and one schema replaces many bespoke endpoints, at the cost of a new component whose expensive queries need their own limits. Or no aggregation at all: with HTTP/2 multiplexing a client can issue several small requests over one connection cheaply, which is often enough for a web site and rarely enough for a phone on a weak signal. The choice is about who owns the shaping code, not about bytes.
+
+</DeepDive>

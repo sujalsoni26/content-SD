@@ -1,0 +1,37 @@
+Right after requirements, spend 2–5 minutes estimating traffic, storage and bandwidth. These numbers decide whether you need a cache, sharding or a CDN; skipping them means drawing boxes by guesswork.
+
+<Diagram name="estimation-flow" caption="Estimation flow in four steps." />
+
+<Callout type="idea" title="Round aggressively">
+
+The inputs are guesses anyway, so a 15% rounding error is invisible. Clean powers of ten let you do the maths out loud without a calculator.
+
+</Callout>
+
+| Quantity | Exact | Round to |
+| --- | --- | --- |
+| 1 day | 86,400 s | 10⁵ s |
+| 1 month | 2.6 × 10⁶ s | 3 × 10⁶ s |
+| 1 year | 3.15 × 10⁷ s | 3–4 × 10⁷ s |
+| 2¹⁰ bytes | 1,024 | 10³ = 1 KB |
+| 2²⁰ bytes | 1,048,576 | 10⁶ = 1 MB |
+| 2³⁰ bytes | ≈ 1.07 × 10⁹ | 10⁹ = 1 GB |
+| 2⁴⁰ bytes | ≈ 1.10 × 10¹² | 10¹² = 1 TB |
+| 2⁵⁰ bytes | ≈ 1.13 × 10¹⁵ | 10¹⁵ = 1 PB |
+
+Treat each unit as 1,000× the last and **add exponents**: 1 million users × 1 KB = 10⁶ × 10³ B = 10⁹ B = <mark>1 GB</mark>.
+
+## Capacity rules of thumb
+
+State them as assumptions; real numbers vary widely with the workload.
+
+| Component | Rough capacity |
+| --- | --- |
+| App server (8 cores; auth + DB call + JSON per request) | \~1,000 QPS |
+| SQL database (PostgreSQL with indexes) | \~1–5k writes/s; reads \~10× higher |
+| Redis node (single-threaded, all in RAM) | \~100k ops/s |
+| Google Search, for scale | \~100k QPS on average (approximate) |
+
+## Sizing records
+
+A 280-character tweet is about 500 B once you add the user ID, timestamp and indexes, so **round text records up to 1 KB**. Media is 100–1,000× larger and dominates storage: estimate it separately.

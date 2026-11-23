@@ -1,0 +1,70 @@
+**Capacity planning** is deciding how much of each resource to have, and when, so that peak demand meets its latency target with room left for growth and for failure. The [estimation formulas](/learn/estimation-formulas) gave the demand side: queries per second, bytes, requests in flight. This lesson is the supply side: how much headroom to keep, how to measure what one instance can really do, and how to turn a forecast into autoscaling rules and a cost per request.
+
+## Why you cannot run at 100%
+
+Utilisation is the share of time a server is busy, and the temptation is to push it towards 100% because idle capacity is money. Queueing theory says no. For a single server with random arrivals and random service times (the textbook M/M/1 model), the average time a request spends in the system is the service time divided by 1 − utilisation:
+
+| Utilisation | Time in system, as a multiple of service time | A 20 ms request takes |
+| --- | --- | --- |
+| 50% | 2× | 40 ms |
+| 70% | 3.3× | 67 ms |
+| 80% | 5× | 100 ms |
+| 90% | 10× | 200 ms |
+| 95% | 20× | 400 ms |
+
+The curve has a **knee**: latency roughly doubles between 50% and 75%, then climbs almost vertically past 90%. Real systems have many servers and burstier arrivals than the model, which moves the knee but keeps the shape; this is why [latency](/learn/latency) warned that queues form near maximum throughput. Online services therefore target roughly 50–70% at peak; batch systems can run hotter because nobody is waiting on each job.
+
+<Callout type="analogy" title="A motorway at 95%">
+
+A motorway with a gap between every car absorbs one driver braking. At 95% occupancy the same tap on the brakes ripples back into a jam a mile long, although the road is "only" 5% from capacity. Headroom is the empty tarmac that absorbs variance. Where the analogy stops: adding a lane takes years, while adding an instance takes minutes, which is what autoscaling exploits below.
+
+</Callout>
+
+## Headroom: peak, zones and spares
+
+Three multipliers stack on top of the average:
+
+- **Peak over average.** Daily peaks run two to three times the average, planned events (an IPL final, a sale) five to ten; size for the peak you intend to serve.
+- **Zone loss.** If the service runs in three zones and must survive losing one at peak, the remaining two must carry everything, so each zone is sized for half the peak and runs at no more than about 67% of its own capacity on a normal peak day; with two zones, 50%. Autoscaling does not rescue this: it takes minutes, and in a zone event the other zones are absorbing everyone else's failover too.
+- **Spares for maintenance.** Google's SRE book describes provisioning at N+2: with clusters that each break at 5,000 QPS and a 19,000 QPS peak, four clusters carry the load and two more cover one being upgraded while another fails. Rolling deploys consume capacity the same way; taking 10% of instances out at a time is a 10% tax on headroom.
+
+## Little's law for pools
+
+Headroom applies to every bounded resource, and Little's law sizes them: items in the system = arrival rate × time in the system. A service doing 2,000 requests per second whose database calls take 20 ms holds 2,000 × 0.02 = 40 connections busy on average. A pool of 50 looks generous until the database slows to 60 ms, when it needs 120; the pool saturates, requests queue for a connection, and the latency users see is far worse than the 60 ms the database added. Size pools for the slow case you are willing to tolerate, put a short timeout on the wait for a slot, and shed when it expires (see [backpressure](/learn/backpressure)). The same arithmetic sizes thread pools, worker counts and the in-flight limit at a gateway.
+
+<Interactive name="littles-law" />
+
+## Load testing: finding the knee
+
+An instance's capacity is measured, not read off a spec sheet. The k6 documentation's taxonomy of tests is a good checklist:
+
+| Test | Load profile | What it answers |
+| --- | --- | --- |
+| Smoke | A trickle | Does the script and the system work at all? |
+| Load (average) | Expected normal traffic for a while | Are the SLOs met at the load we plan for? |
+| Stress | Above expected, stepping up | Where is the knee, and how does the system fail past it? |
+| Soak | Normal load for hours | Do memory, connections or disk leak? Does latency drift? |
+| Spike | A sudden, short, large surge | Do autoscaling lag and load shedding behave? |
+| Breakpoint | Ramp up until it breaks | What is the absolute limit, and what breaks first? |
+
+Read a stress test as two curves against offered load: throughput rises linearly, then flattens; p99 latency stays flat, then climbs steeply. The **capacity per instance** is the throughput at the point where p99 is still inside the SLO, which is the knee, not the maximum before errors. Past the knee an overloaded server does less useful work, not more: the SRE book's example has a cluster offered 1,200 QPS successfully handling well below the 1,000 it manages when not overloaded. The same book's advice is to load test components until they break, because the failure mode under overload is the thing you most need to know and least want to discover in production. Test against production-like data and dependency latencies; a mocked database that answers in a millisecond makes every service look heroic.
+
+## From forecast to autoscaling to cost
+
+A **forecast** is last quarter's weekly peaks, a growth rate and the calendar of known events, extended far enough ahead to cover the lead time for capacity (cloud quotas, reserved instances, hardware). Plan to the forecast peak times the multipliers above, and revisit monthly.
+
+Autoscaling (see [autoscaling](/learn/autoscaling)) turns the plan into a rule rather than a number. A target-tracking policy holds utilisation at a set point, and that set point is the target from the first section, about 60% for a latency-sensitive service. Kubernetes' Horizontal Pod Autoscaler, for example, computes desired replicas as current replicas × current utilisation ÷ target, checks every 15 seconds, ignores changes within 10%, and waits five minutes before scaling down, so it follows a daily curve well and a one-minute spike badly. Spikes are handled by headroom, scheduled scaling before the sale, and shedding.
+
+Cost per request closes the loop: instances × hourly price ÷ requests served per hour. At 60% utilisation each instance serves 60% of what it could, so headroom appears as a 40% premium on the ideal. That premium buys the latency curve and the surviving zone; the planning question is never "can we run hotter?" but "what does the next percentage point of utilisation cost in p99 and in risk?"
+
+<Callout type="interview" title="Give the multipliers">
+
+"Peak is 3× average at 30k requests per second; one instance does 1,200 at the knee, so 25 instances carry the peak at 100%, which we round to 42 at about 60% utilisation, spread across three zones so losing one leaves the survivors just under 90%. Pools are sized by Little's law for a 3× slowdown, and we re-measure the knee with a stress test every quarter."
+
+</Callout>
+
+<DeepDive title="Go deeper: why overload reduces throughput">
+
+A server past its knee is not merely slow; it does less. Requests that have already timed out at the client are still being processed, retries add offered load on top of the original demand, memory for in-flight requests grows until garbage collection or swapping takes CPU from useful work, and health checks start to fail, which removes capacity exactly when it is needed. This is why the capacity number from a load test must be read at the knee and why load shedding, not more queueing, is the right response to a spike. The [bulkheads](/learn/bulkheads-degradation) and [failure modes](/learn/failure-modes) lessons describe how to make the resulting failure partial rather than total.
+
+</DeepDive>

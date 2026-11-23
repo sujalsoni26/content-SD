@@ -1,0 +1,91 @@
+**Leader election** picks one process out of many to do a job alone: run the scheduler, own a partition, send the invoices. A **lease** is how the choice is enforced. The leader holds a time-limited claim on a key in a coordination service and must keep renewing it; when it stops, the claim lapses and another candidate may take it. The coordination service is itself a [consensus](/learn/consensus) cluster, so the key has exactly one value at any moment.
+
+## Electing with a coordination service
+
+Do not write your own election protocol; rent one.
+
+| Service | Mechanism | Liveness signal | Typical timing |
+| --- | --- | --- | --- |
+| etcd | A key written under a **lease**; the `concurrency` package wraps it as Campaign, Proclaim and Resign | Lease keep-alives over a stream | Session TTL defaults to 60 s |
+| ZooKeeper | An **ephemeral sequential** znode under an election path; the lowest sequence number leads | Session heartbeats | Session timeout negotiated between 2× and 20× `tickTime`, so 4–40 s with the usual 2 s tick |
+| Kubernetes | A `Lease` object renewed by the leader (client-go `leaderelection`) | Lease renewals | Controller-manager defaults: lease 15 s, renew deadline 10 s, retry 2 s |
+
+<Steps>
+
+1. Every candidate tries to create the election key with a lease attached (or an ephemeral znode). The service is linearizable, so exactly one creation succeeds; that process is the leader.
+2. The leader renews the lease well before it expires: etcd keep-alives, ZooKeeper pings, the Kubernetes renew deadline.
+3. The others watch. In ZooKeeper each candidate watches only the znode just below its own, so a leader failure wakes one client instead of all of them, which the recipe calls avoiding the herd effect.
+4. When the leader's process dies, nothing renews the lease, the key disappears, and the next candidate acquires it.
+
+</Steps>
+
+The lease length is the whole design decision. A short lease replaces a dead leader quickly but triggers false failovers on every slow heartbeat; a long one leaves the job unattended for the full TTL. Kubernetes' 15 seconds is a middle setting, and ZooKeeper caps the negotiation so that one client cannot ask for an hour.
+
+## Split-brain: the lease expires but the leader does not know
+
+Leader L1 holds a 15-second lease and renews every 5 seconds. It then stops dead in a 30-second stop-the-world garbage collection, or a VM live migration, or a network partition (see [Clocks, time and ordering](/learn/time-and-ordering) for why pauses are normal). The coordination service, which cannot tell a paused process from a dead one, expires the lease at 15 seconds. L2 acquires it and starts working. At 30 seconds L1 wakes up. No callback ran while it was frozen, its last check said "I am the leader", and the first thing it does is finish the write it had in flight. Two leaders now act at once: **split-brain**, with duplicate jobs, conflicting writes and double payments.
+
+Checking the lease before every write does not close the gap, because the check happens, then the pause, then the write. Kubernetes' client-go says so in its package documentation: it does not guarantee that only one client is acting as a leader. Leases make a second leader *likely* to be alone; they cannot make it certain.
+
+## Fencing tokens
+
+A **fencing token** is a number that increases every time leadership changes and is handed out with the lease: ZooKeeper's zxid or znode version, the consensus term, or the lock generation number that Chubby wraps in what it calls a sequencer. The leader attaches the token to every write it sends downstream, and the storage or service that receives the write remembers the highest token it has seen and rejects anything lower. The old leader's late writes bounce.
+
+<Mermaid caption="Leader 1 pauses, loses its lease and wakes up still believing it leads. The storage, not the lease, stops the damage." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant L1 as Leader 1
+    participant CS as Coordination service
+    participant L2 as Leader 2
+    participant ST as Storage
+    L1->>CS: acquire lease, TTL 15 s
+    CS-->>L1: granted, token 33
+    Note over L1: stop-the-world GC pause, 30 s
+    Note over CS: lease 33 expires at 15 s
+    L2->>CS: acquire lease
+    CS-->>L2: granted, token 34
+    L2->>ST: write(x = 7, token 34)
+    ST-->>L2: ok, highest token is now 34
+    Note over L1: resumes, still believes it leads
+    L1->>ST: write(x = 5, token 33)
+    ST-->>L1: rejected, 33 is below 34
+`} />
+
+The catch is in the last line: <mark>fencing works only if the system receiving the writes checks the token.</mark> For storage you own, add a leader-epoch column and a conditional write that fails when a higher epoch has been seen. Real systems do the same. HDFS's JournalNodes accept edits from only one NameNode at a time, so a stale active NameNode's writes are refused; the HA guide still recommends an `sshfence` or shell fencer to stop it serving stale reads. Chubby lets a lock holder request a **sequencer**, an opaque string carrying the lock's generation number, which file servers validate before honouring a request.
+
+**STONITH**, "Shoot The Other Node In The Head", is the blunt instrument from cluster managers such as Pacemaker: when a node stops responding, the cluster cuts its power, or its access to the network and shared disks, before handing its role to another node. It needs control of the hardware or the hypervisor; in the cloud, fencing tokens and single-writer storage are the equivalent.
+
+Redis-based locks and the Redlock debate belong to the next lesson, [Distributed locking](/learn/distributed-locks); here the point is leadership and leases.
+
+## Single leader, multi-leader or no leader?
+
+| Design | Who orders writes | Failover | Conflicts | Reach for it when |
+| --- | --- | --- | --- | --- |
+| Single leader | One node | Election plus fencing, as above | None while there is one leader, which is the point | You need one clear write order: SQL primaries, Kafka partitions, Raft groups |
+| Multi-leader | Each leader, for its own writes | Per leader | Concurrent writes to one key must be merged (see [Replication](/learn/replication)) | Writes must be accepted in several regions or offline; collaborative editing |
+| Leaderless | Nobody; quorums and versions | Not needed | Version vectors or last-write-wins (see [Quorums](/learn/quorums)) | Availability and write latency matter more than strict ordering: carts, sessions, metrics |
+
+Prefer a single leader by default, because ordering is what most business logic silently assumes. Move to multi-leader only when the latency or offline requirement is real, and to leaderless when you have a merge rule for every conflict.
+
+<Callout type="analogy" title="Numbered hall passes">
+
+A teacher hands out numbered hall passes that are valid for ten minutes. A student dozes off in the corridor, wakes up and walks towards the lab with pass 33. The lab door has been told that pass 34 was issued, so it stays shut, however convinced the student is. Where the analogy breaks: doors do not check passes on their own; you have to build the check into every door the leader could walk through, and that is the expensive part of fencing.
+
+</Callout>
+
+<Callout type="interview" title="Never say 'one leader' without the next three clauses">
+
+"The scheduler runs as a single leader elected through an etcd lease with a 15-second TTL; the lease comes with an epoch, and every write the leader makes carries that epoch, so the database rejects writes from a stale leader. Where I cannot fence, the job is idempotent, so two leaders only waste work." That turns split-brain from an outage into a cost.
+
+</Callout>
+
+<DeepDive title="Go deeper: Chubby's lock-delay and clock-rate skew">
+
+Google's Chubby paper describes a fallback for servers that cannot check sequencers: when a lock becomes free because its holder failed rather than released it, the lock server keeps it unavailable for a lock-delay, which clients may set up to one minute. Delayed messages from the dead holder are likely to have arrived or expired before anyone else holds the lock. The paper calls it imperfect, but it protects unmodified clients from everyday delays and restarts. The Kubernetes implementation adds another subtlety: it tolerates arbitrary clock *offset* between machines, because every process only compares timestamps it captured itself, but not arbitrary differences in clock *rate*. Its documentation suggests a 60-second lease with a 30-second renew deadline to tolerate a node whose clock runs twice as fast.
+
+</DeepDive>

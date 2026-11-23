@@ -1,0 +1,80 @@
+**Event sourcing** stores what happened instead of what is. Every change to an entity is appended as an immutable **domain event** (`OrderPlaced`, `ItemRemoved`, `OrderCancelled`), and the current state is derived by replaying those events. The event log is the source of truth; a table of current rows, if you keep one, is a cache of it.
+
+## State as a sequence of events
+
+A conventional `orders` row is overwritten in place: `status` goes from placed to paid to cancelled, and the earlier values are gone. An event-sourced order is a **stream** named `order-77` holding `OrderPlaced` (three items, ₹500), `ItemRemoved` (₹120), `PaymentCaptured` (₹380) and `OrderCancelled` (restaurant closed). The current state is a fold over the stream: start empty, apply each event in order. What you gain is history with intent (why the total changed, not just that it did), temporal queries ("what was in the cart at 19:02?"), an audit trail nobody can edit, and debugging by replaying production events in a test. Martin Fowler's 2005 write-up used ships arriving at and leaving ports.
+
+<Mermaid caption="A command loads the stream, replays it to check the rules, appends with the version it read, and the projector updates the read model from the new event. If another writer got in first, the append fails and the handler retries." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client
+    participant H as Command handler
+    participant E as Event store
+    participant P as Projector
+    participant R as Read model
+    C->>H: CancelOrder(order 77)
+    H->>E: read stream order-77
+    E-->>H: 3 events, version 3
+    Note over H: Replay to current state, check the rules
+    H->>E: append OrderCancelled, expected version 3
+    E-->>H: ok, version 4
+    H-->>C: 202 Accepted
+    E-->>P: OrderCancelled (subscription)
+    P->>R: set order 77 status to cancelled
+`} />
+
+## Replay, snapshots and projections
+
+Rebuilding an entity means replaying its stream from the first event. For a few hundred events that is fast; for a hot aggregate with a hundred thousand it is not, so you store a **snapshot**, the state at version N, and replay only the events after N. Snapshots are an optimisation, never the truth: delete them and nothing is lost.
+
+Reads come from **projections**, exactly as in [CQRS](/learn/cqrs): subscribers consume the stream and maintain tables shaped like screens. Because the full history is kept, any projection can be rebuilt from scratch: a report nobody imagined at launch can be computed over every order ever placed.
+
+The write path has one subtlety. Two handlers may load `order-77` at version 3 and both try to append; purpose-built stores such as KurrentDB (formerly EventStoreDB) take an **expected version** with each append and reject the second writer, which reloads and retries. That optimistic concurrency check lets the write model enforce its rules without locks.
+
+## Versioning events
+
+Events are forever; code is not. `OrderPlaced` version 1 stored the address as one string, version 2 needs structured fields, and a million version-1 events exist. The rules: never edit stored events; give every event type a version; prefer additive changes old readers can ignore; and for the rest use **upcasting**, a function applied on read that transforms an old event into its current structure before the domain code sees it, so that, in the Axon framework's phrasing, "the complete event history remains intact". Changes too deep to upcast, such as splitting a stream, are done by copying and transforming into a new store and switching over.
+
+## The hard parts
+
+- **Deletion and privacy.** An append-only log fights the right to erasure (GDPR Article 17). Options: **crypto-shredding**, encrypting personal fields with a per-person key and destroying the key on request; keeping personal data in a separate mutable store that events only reference; or rewriting the stream without the offending events, which breaks immutability and can leave an aggregate inconsistent. Decide before the first event is written.
+- **Schema drift.** Hundreds of event types, each with versions and upcasters, and a team that no longer remembers what a field meant.
+- **Eventual consistency.** Projections lag the stream, with everything that implies for the UI (see [CQRS](/learn/cqrs)).
+- **Debugging and replay.** Superb for "how did we get here", awkward for "what is the state now" without a projection, and dangerous if a replayed handler calls the outside world: put external systems behind a gateway so a replay does not resend ten thousand emails.
+- **Set queries.** The store answers "events of stream X" and "all events in order"; "all orders over ₹1,000" is a projection's job.
+
+<Callout type="analogy" title="A bank statement, not a balance">
+
+Your bank does not store a balance and overwrite it; it stores the statement lines and derives the balance. A mistake is fixed with a reversal line, never by editing history, and the opening balance at the top of a monthly statement is a snapshot. Where the analogy fails: a statement is one stream; questions across customers, such as how many hold more than one lakh, need a report built over all streams, which is a projection.
+
+</Callout>
+
+## Kafka is a log, not an event store
+
+The temptation is obvious: Kafka (see [Kafka architecture](/learn/kafka-architecture)) is a durable, ordered, append-only log, so why not keep the events there? Because an event store has needs Kafka was not built for.
+
+| Need | Event store | Kafka |
+| --- | --- | --- |
+| Read one entity's history | By stream name, in order, in one call | Consumers read a partition by offset; a key is not an index, and a topic per entity does not scale |
+| Concurrency control on append | Expected version per stream | None |
+| Retention | Forever, by design | Time or size based, broker default 168 hours; compaction keeps only the latest record per key, which destroys history |
+| Fan-out to many consumers | Subscriptions | Consumer groups, which it does superbly |
+
+Retention can be made infinite, but the first two gaps remain. Oskar Dudycz's summary is that streaming platforms are "designed to move things from one place to another, not to be used as durable databases". The working pattern uses both: an event store (or a relational table with a version column) owns the events and publishes them onward to Kafka for projections and other services. <mark>Use Kafka to move events; use an event store to own them.</mark>
+
+<Callout type="interview" title="Say the model, then volunteer the costs">
+
+"The order is an append-only stream of domain events; current state is a replay with snapshots; projections serve reads; appends carry an expected version. The costs are event versioning, erasure requests against immutable data and eventually consistent reads, so I would use it in the ordering context and nowhere else." Naming the costs first separates a design from a slogan.
+
+</Callout>
+
+<DeepDive title="Go deeper: corrections by reversal">
+
+Fowler notes that reversing an event is easy when events are differences ("add ₹10 to the account") and awkward when they are absolutes ("set the balance to ₹110"). A mistaken event is corrected by appending its reversal or, for a retroactive fix, by reversing it and every later event, inserting the correction and replaying. Business-visible corrections, such as a refund after a cancelled order, are events too, the same idea as the compensating actions in [Sagas](/learn/sagas).
+
+</DeepDive>

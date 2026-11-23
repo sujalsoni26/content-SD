@@ -1,0 +1,85 @@
+A **container** is an ordinary process that the Linux kernel has walled off: it sees its own filesystem, its own process tree and its own network, and it can be capped on CPU and memory. It does not get its own kernel. An **image** is the read-only filesystem and start-up instructions a container is created from, and because an image never changes after it is built, the same bytes run on your laptop, on the test cluster and on two hundred production machines.
+
+Once you [scale out](/learn/scaling) to many machines, every one of them must carry the same libraries, the same language runtime and the same configuration, or requests behave differently depending on which server the load balancer picks. Installing software onto machines by hand, or with scripts that drift, is how "works on my machine" becomes an outage. Containers move the whole dependency tree into the artefact you ship.
+
+## What a container isolates, and what it shares
+
+The isolation comes from two kernel features. **Namespaces** give a process its own view of a global resource; **cgroups** (control groups) limit and account for how much of a resource a group of processes may use.
+
+| Namespace | The container gets its own… |
+| --- | --- |
+| PID | process tree: its first process is PID 1 |
+| Network | network devices, IP addresses and ports |
+| Mount | filesystem mounts, so the image is its root filesystem |
+| UTS | hostname |
+| IPC | System V IPC and POSIX message queues |
+| User | user and group IDs, so root inside need not be root outside |
+| Cgroup | view of the cgroup hierarchy |
+| Time | boot and monotonic clocks |
+
+Cgroups add the limits: a container allowed half a CPU and 256 MiB of memory is throttled when it wants more CPU and may be killed by the kernel when it exceeds the memory limit. The requests and limits in [Kubernetes](/learn/kubernetes) are these cgroup settings with a scheduler in front.
+
+What is shared is the kernel. Every container on a machine makes system calls into the same kernel, so a kernel bug is a shared risk, and a Linux container needs a Linux kernel underneath it.
+
+<Comparison>
+
+<ComparisonItem title="Container">
+
+One process (or a few) inside namespaces and cgroups, sharing the host kernel. Starts in roughly the time a process takes to start; images are typically tens of megabytes. Isolation is only as strong as the kernel.
+
+</ComparisonItem>
+
+<ComparisonItem title="Virtual machine">
+
+A whole emulated computer run by a hypervisor, with its own kernel and operating system. Boots like a computer; images run to gigabytes. Isolation is a hardware-level boundary, which is why a stronger tenant boundary usually means a VM.
+
+</ComparisonItem>
+
+</Comparison>
+
+<Callout type="analogy" title="Flats and detached houses">
+
+A container is a flat: its own front door, rooms and meter, but the foundations, plumbing and roof (the kernel) belong to the building. A virtual machine is a detached house with its own foundations. Flats are cheap and quick to let; a crack in the foundations affects every flat. The analogy flatters containers slightly: a flat's walls are solid, whereas a container's isolation is software inside the shared kernel, and kernel bugs have crossed it.
+
+</Callout>
+
+## Images: layers, tags and digests
+
+An image is an ordered stack of read-only **layers**. Each layer is a changeset, the files added, changed or deleted by one build step, so a `Dockerfile` with eight instructions that touch files produces eight layers. A layer is stored under the SHA-256 **digest** of its content, which means two images built `FROM` the same base share those layers instead of copying them. When a container starts, the runtime stacks the layers and adds a thin writable layer on top; deleting the container deletes only that writable layer, and the image is untouched.
+
+<Mermaid caption="Build once, push once, pull everywhere: the image is identical on every node because each piece is addressed by its digest." chart={`flowchart LR
+    D["Dockerfile"] -->|build| I["Image: layers, config, manifest"]
+    I -->|push| R["Registry"]
+    R -->|pull by tag or digest| N1["Node 1"]
+    R -->|pull by tag or digest| N2["Node 2"]
+    N1 --> C1["Container: image plus writable layer"]
+    N2 --> C2["Container: image plus writable layer"]
+`} />
+
+A **registry** (Docker Hub, GitHub Container Registry, or a private one such as Amazon ECR) stores images and serves them over the HTTP API defined by the OCI distribution specification, where a manifest is fetched by *tag or digest*. A **tag** such as `api:2.4.1` or `api:latest` is a human-readable pointer that can be moved to a different image tomorrow; `latest` is simply what Docker assumes when you give no tag. A **digest** such as `api@sha256:9f2c…` names exactly one set of bytes forever. Production systems record the digest they deployed.
+
+The **Open Container Initiative** (OCI), launched in June 2015 by Docker, CoreOS and others, standardised the three pieces so that tools interoperate: the *image spec* (manifest, configuration, layers, digests), the *runtime spec* (a bundle of `config.json` plus a root filesystem, and the create, start, kill and delete operations) and the *distribution spec* (the registry API). Docker is the everyday tool for building and running images; `runc`, which Docker donated to the OCI, is the low-level runtime that `containerd` and CRI-O drive, and Kubernetes talks to those through its Container Runtime Interface.
+
+## Why immutable images make deployments boring
+
+Because an image cannot change after it is built, a deployment is a statement, not a procedure: "run digest `9f2c…` on forty machines". The artefact that passed the tests in staging is the artefact that runs in production. A rollback is the same statement with yesterday's digest: no uninstall, no undo script, just start the old image again, which is why a Kubernetes Deployment keeps old versions around. Anything that differs between environments, such as database URLs, feature flags and credentials, is injected at start time through environment variables or mounted files, never baked into the image.
+
+<mark>Build once, run the same bytes everywhere; vary only the configuration.</mark>
+
+<Callout type="warning" title="Three ways immutability goes wrong">
+
+Deploying `latest` means two nodes can pull two different images minutes apart and nobody can say which code is running: pin a version tag at least, a digest ideally. Deleting a file in a later layer only hides it (the layer records a whiteout entry), so a password copied in and removed by a later step is still inside the image. And a registry outage stops new nodes from starting, so keep a mirror or pull-through cache near production.
+
+</Callout>
+
+<Callout type="interview" title="Say what the artefact is and how it moves">
+
+"Each commit builds one image, identified by its digest. The same image is promoted from staging to production unchanged; configuration comes from the environment. A rollback redeploys the previous digest." That tells the interviewer you understand repeatable deployments before they ask.
+
+</Callout>
+
+<DeepDive title="Go deeper: what the runtime does when a container starts">
+
+An OCI runtime such as `runc` receives a *bundle*: a directory holding `config.json` (which namespaces to create, which cgroup limits to set, which user to run as, which program to execute) and the root filesystem assembled from the image layers. The `create` operation sets up namespaces, cgroups and mounts and leaves the container in the *created* state without running your program; `start` executes the program named in the configuration; `kill` sends it a signal; `delete` tears down everything `create` built. Higher-level tools (Docker, `containerd`, the Kubernetes kubelet) do the pulling, unpacking and supervising; the runtime's job is deliberately small and swappable.
+
+</DeepDive>

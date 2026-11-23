@@ -1,0 +1,70 @@
+A **bulkhead** gives each dependency, tenant or feature its own bounded share of a resource, so that one of them misbehaving can exhaust only that share. The [circuit breaker](/learn/circuit-breaker) lesson borrowed the word from shipbuilding; this lesson builds the compartments at three sizes (a pool inside a process, a cell of the whole service, a switch on a feature) and decides what to do when a compartment floods anyway: degrade on purpose rather than fail by accident.
+
+## Pools inside one process
+
+The smallest bulkhead is a pool per dependency. A feed service that calls ranking, ads and search from one shared pool of 200 threads has one compartment: when ads starts taking ten seconds, 200 threads are soon waiting on ads, and ranking and search fail with it although both are healthy. Give each dependency its own pool and the same ads outage pins only the ads pool.
+
+Resilience4j, the Java resilience library, ships the two common forms. A **semaphore bulkhead** caps concurrent calls (25 by default) and, with its default wait of zero, rejects the twenty-sixth immediately. A **thread-pool bulkhead** runs calls on a dedicated pool (sized to the CPU count by default) behind a bounded queue of 100. Rejecting immediately is usually right: a queue in front of a saturated dependency turns a fast failure into a slow one and ties up the caller too, the overload spiral that [backpressure](/learn/backpressure) describes. Size the cap with Little's law from [latency](/learn/latency): at 200 calls per second and 50 ms, ads holds 10 threads; at a 2-second timeout it would hold 400, so a cap of 30 says "ads may cost us 30 threads and no more". The breaker then stops the calls; the bulkhead has already limited the damage.
+
+## Cells: a bulkhead for the whole service
+
+A **cell** is a complete, independent copy of the service: its own compute, its own data store, no shared state with other cells. A thin **cell router** sends each request to a cell by a partition key, usually the customer id, and presents one endpoint to the world.
+
+<Mermaid caption="Cells. The router is kept as thin as possible so that it is the only thing every customer shares. A bad deploy rolled out one cell at a time, or a poison request, stays inside one cell." chart={`flowchart LR
+    C["Clients"] --> RT["Cell router: customer id to cell"]
+    subgraph C1["Cell 1: customers A to H"]
+        A1["App"] --> D1["Data store"]
+    end
+    subgraph C2["Cell 2: customers I to P"]
+        A2["App"] --> D2["Data store"]
+    end
+    subgraph C3["Cell 3: customers Q to Z"]
+        A3["App"] --> D3["Data store"]
+    end
+    RT --> A1
+    RT --> A2
+    RT --> A3
+    X["Bad deploy or poison request"] -.-> C2
+`} />
+
+The gain is blast radius: with ten cells, a failure in one leaves 90% of requests untouched, including failures redundancy cannot help with, such as a bad release or a request that crashes every replica that sees it. The costs are real: a cell must be big enough for your largest customer, anything that spans customers (global search, cross-tenant reports) must fan out across cells, and you need a control plane to create cells and move tenants between them.
+
+## Shuffle sharding
+
+Plain sharding caps the damage at one shard: with 8 workers in 4 shards of 2, a customer whose requests poison a worker takes down their shard, and a quarter of all customers with it. **Shuffle sharding**, which AWS describes in its Builders' Library and uses in Route 53, instead deals each customer their own random pair of workers. From 8 workers there are 28 distinct pairs. The poison customer still saturates their two, but another customer is fully affected only if dealt exactly the same pair, about 1 in 28; most others share at most one worker with the troublemaker and keep working, provided their client retries against the other. That proviso is the whole mechanism. The arithmetic scales absurdly well: Route 53 gives each domain four of 2,048 virtual name servers, roughly 730 billion possible combinations, enough for every domain to have a shard of its own.
+
+## Kill switches and degraded modes
+
+The third compartment is a switch. Of the kinds of **feature flag** Pete Hodgson catalogues (release, experiment, permission and operations toggles), the operations kind includes long-lived **kill switches** that let an operator turn off non-vital behaviour when the system is under strain. A **degraded mode** is what the feature does while it is off:
+
+| Full behaviour | Degraded behaviour |
+| --- | --- |
+| Ranked, personalised feed | Chronological feed from the cache |
+| Live recommendations per item | Yesterday's top sellers |
+| Exact stock count on the product page | "In stock" when the count is positive |
+| Search suggestions as you type | No suggestions; search still works |
+| Reviews written and shown instantly | Accepted into a queue, shown later |
+
+Which switches to throw, and in what order, is the criticality decision from the backpressure lesson: the tiers there (payments and authentication last, logging and recommendations first) are also the kill-switch order, decided in a quiet week rather than during the Flipkart sale.
+
+<Callout type="analogy" title="Kitchen stations">
+
+When the fryer dies, the grill still sends out steaks (bulkhead), the menu loses its fried items for the evening (degraded mode) and the host stops taking those orders at the door (kill switch). Dealing each table two waiters at random from a staff of eight is shuffle sharding: a demanding table exhausts its two, but almost every other table shares at most one of them. Where the analogy stops: waiters can be reassigned on the spot, while a shuffle shard is fixed by hashing.
+
+</Callout>
+
+## Fallbacks that fail
+
+Every degraded mode is a code path that runs only when things are already going wrong, the worst time to discover it is broken. Amazon's engineers go as far as avoiding fallback logic where they can: a path that rarely runs is rarely tested, it often adds load at the moment of least capacity, and in their words it usually improves only the odds of success. They prefer making the primary path more reliable, making the fallback the normal behaviour (always serve the cached price and refresh it in the background, rather than reading the cache only on failure), and exercising any fallback that must exist continuously in production. The same goes for switches: throw each kill switch on a schedule, in production, for a slice of traffic, because a switch untested for a year is a hope, not a control. And treat flags as inventory with a carrying cost: remove release flags once released, and keep the kill-switch list short enough for an on-call engineer to recite.
+
+<Callout type="interview" title="Three compartments, one order">
+
+"Each downstream gets its own bounded pool sized by Little's law, customers are partitioned into cells so a bad deploy touches one cell, and features carry kill switches that we throw in criticality order, lowest tier first. We run each degraded mode for a slice of real traffic every week so we know it works."
+
+</Callout>
+
+<DeepDive title="Go deeper: the shuffle-shard arithmetic">
+
+With n workers and shards of size k there are n choose k possible shards: 8 choose 2 is 28, and 2,048 choose 4 is about 7.3 × 10¹¹. A second customer is fully affected only if dealt the identical shard, 1 in 28 in the small example. They share at least one worker with probability 1 − (6 choose 2) ÷ (8 choose 2) = 13 ÷ 28, about 46%, and in every such case the untouched worker keeps them alive if their client retries there. The 28, the quarter, the 1 in 28 and the Route 53 figures are the Builders' Library's; the overlap probability is our derivation.
+
+</DeepDive>

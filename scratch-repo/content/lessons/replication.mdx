@@ -1,0 +1,36 @@
+Keep copies of the same data on several machines. The common setup is **primary–replica** (leader–follower; older docs say master–slave): the primary takes **all writes** and streams changes to replicas, which serve **reads**. Social apps are read-heavy, so this helps a lot.
+
+<Diagram name="primary-replicas" caption="Writes go to one primary; reads spread across replicas that copy its changes." />
+
+## What you win
+
+- **Reads scale out**: add replicas for more read capacity.
+- **Failover**: promote a replica if the primary dies, which gives high availability.
+- **Extra copies** protect data.
+- Replicas can sit **near users** in other regions.
+
+## Synchronous vs asynchronous
+
+|  | Synchronous | Asynchronous |
+| --- | --- | --- |
+| How | Primary waits for the replica before confirming | Primary confirms at once; replicas catch up |
+| Pros | Replica always current; no loss on failover | Fast writes |
+| Cons | Slower writes; a slow replica stalls them | Replication lag → stale reads; recent writes can be lost |
+
+## Lag in practice
+
+You comment, refresh, and the read hits a lagging replica, so <mark>your comment seems to vanish</mark>. Fix it with **read-your-own-writes**: send a user's reads to the primary for a short time after they write.
+
+<Interactive name="replication-lag" />
+
+<Callout type="warning" title="The limit">
+
+One primary means **writes don't scale**. Replication cures read-heavy load, not write-heavy load. Multi-leader and leaderless designs (Cassandra) exist, but they must resolve conflicting writes. They are covered in [Replication strategies in depth](/learn/replication-internals) and [Quorums and leaderless replication](/learn/quorums).
+
+</Callout>
+
+<DeepDive title="Go deeper: the middle ground, semi-synchronous">
+
+Waiting for every replica is slow; waiting for none risks losing data. Many setups wait for **one** replica (or a quorum) to confirm and let the rest catch up asynchronously. MySQL calls this semi-synchronous replication; PostgreSQL configures it with synchronous standbys. A committed write then always exists on at least two machines, and you only pay for the fastest replica's round trip.
+
+</DeepDive>

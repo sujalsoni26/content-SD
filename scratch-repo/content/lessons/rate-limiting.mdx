@@ -1,0 +1,61 @@
+A **rate limiter** caps requests per client per time window (for example, 100 per minute per user) to stop bots, buggy scripts, brute-force logins, scraping and cost abuse.
+
+- Over the limit → **HTTP 429 Too Many Requests** (with `Retry-After`), or delay the request (throttling).
+- Key it by user ID, API key or IP; enforce it per instance or across the cluster (below).
+
+<Callout type="idea" title="Limit by the right key">
+
+A per-IP limit punishes everyone behind one office or mobile-carrier address and barely slows a bot with many addresses. A per-user or per-API-key limit is precise but only works after authentication. Most APIs combine the two: a generous per-IP limit in front of login, a precise per-key limit behind it.
+
+</Callout>
+
+## Algorithms
+
+| Algorithm | How | Trade-off |
+| --- | --- | --- |
+| Fixed window | Count per fixed minute (12:00–12:01) | Simple; allows 2× bursts at boundaries (100 at 12:00:59 + 100 at 12:01:00) |
+| Sliding window | Count over the last 60 s, rolling | Accurate and smooth; more memory and compute |
+| Token bucket | Tokens refill at a steady rate; each request spends one | Allows short bursts within an average rate; very common |
+| Leaky bucket | Requests drain at a constant rate; overflow is dropped | Smooth, steady output |
+
+<Interactive name="token-bucket" />
+
+## Quotas in multi-tenant services
+
+When one service serves many clients (**tenants**), a sudden spike usually comes from a single tenant. Per-tenant quotas (say 500 QPS for client B) reject only that tenant's excess, so the others are unaffected: isolation and fairness. A <mark>429 means "you used up your quota"</mark>, not "the server is out of capacity".
+
+## Local vs global limiter
+
+|  | Local limiter | Global limiter |
+| --- | --- | --- |
+| Where | On each instance (middleware or a sidecar) | At the API gateway or load balancer, with shared counters (Redis) |
+| Enforces | A fair share of that one node's capacity | One quota across all instances |
+| Pros | Fast, simple, no extra network hop | Accurate across the whole cluster |
+| Cons | Approximate when traffic is uneven across instances | Needs a highly available central store; more complex |
+
+Many systems start with local limits as the first line of defense and add global limits where accuracy matters.
+
+## Rate limiting vs load shedding
+
+Interviewers listen for the difference.
+
+<Diagram name="rate-limit-vs-shedding" caption="Where each check sits: policy at the front door, survival inside each service." />
+
+|  | Rate limiting | Load shedding |
+| --- | --- | --- |
+| Asks | "Who are you, and how much have you used?" | "Am I healthy enough to take this?" |
+| Purpose | Policy and fairness: stop one client starving the rest | Survival: keep the server alive under any load |
+| Decides on | The client's quota | Server health (CPU, in-flight requests, memory) |
+| Where | Before heavy work, usually the API gateway | Inside each service |
+| Response | 429 Too Many Requests | 503 Service Unavailable |
+| Client should | Wait until the quota resets (Retry-After); retrying sooner only earns more 429s | Retry with exponential backoff and jitter while autoscaling adds capacity |
+
+<DeepDive title="Go deeper: building one with Redis">
+
+A fixed window is two Redis commands: `INCR rate:user42:1201` then `EXPIRE` on first use; reject when the count passes the limit. A token bucket needs a read-modify-write (refill by elapsed time, then spend), so it usually runs as a small Lua script that Redis executes atomically.
+
+A cheap middle ground is the **sliding window counter**: estimate the rolling count as `current window + previous window × (fraction of it still inside the last 60 s)`. Cloudflare has described using this approximation at scale: two counters per client instead of a log of every timestamp.
+
+A full design, including Redis failure and per-tenant quotas: [Design a distributed rate limiter](/learn/design-rate-limiter). Limits as one layer of API defence: [API security](/learn/api-security).
+
+</DeepDive>

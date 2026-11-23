@@ -1,0 +1,121 @@
+In **leaderless replication** there is no primary. Any replica accepts writes, and a client, or a coordinator acting for it, sends each write to every copy and each read to several. A **quorum** is the minimum number of replicas that must answer before the operation counts as done. This builds on [Replication](/learn/replication) and the [consistency models](/learn/consistency).
+
+## N, W and R
+
+**N** is how many replicas hold each key, **W** how many must acknowledge a write before the client is told it succeeded, and **R** how many must answer a read. The rule is **R + W > N**: any W writers and any R readers then share at least one node, so at least one replica you read from took the latest acknowledged write. Every value carries a version, and the coordinator returns the newest it sees.
+
+<Mermaid caption="N = 3, W = 2, R = 2. Replica 3 is slow, but the read still meets a replica that has the new version." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Coordinator
+    participant R1 as Replica 1
+    participant R2 as Replica 2
+    participant R3 as Replica 3
+    C->>R1: put(cart, v2)
+    C->>R2: put(cart, v2)
+    C->>R3: put(cart, v2)
+    R1-->>C: ack
+    R2-->>C: ack
+    Note over C: W = 2 reached, write confirmed
+    Note over R3: slow, still holds v1
+    C->>R2: get(cart)
+    C->>R3: get(cart)
+    R2-->>C: v2
+    R3-->>C: v1
+    Note over C: R = 2 answers, v2 is newer, return v2 and repair R3
+`} />
+
+Other settings move the balance:
+
+| Setting (N = 3) | Reads | Writes | Fits |
+| --- | --- | --- | --- |
+| W = 3, R = 1 | One replica, fast | Stall if any replica is down | Data read constantly and rarely changed |
+| W = 1, R = 3 | Every replica must answer | Fast, but only one copy exists at acknowledgement time | Append-heavy data where losing a rare write is tolerable |
+| W = 2, R = 2 | Balanced | Balanced, survives one node down | Dynamo's default; most general-purpose stores |
+| W = 1, R = 1 | Fastest | Fastest | R + W is not above N: stale reads are accepted by design |
+
+A quorum operation is as slow as its slowest counted replica, which is why W and R usually stay below N.
+
+## Why a quorum read can still be stale
+
+R + W > N promises overlap, nothing more. A successful read can still return old data when:
+
+- **Writes are concurrent.** Two clients update the same key at once; "newest" is now a rule such as last-write-wins, and the rule can pick wrong.
+- **A write partially failed.** A write that reached one node before the client timed out is reported as failed but not rolled back, so later reads may or may not return it.
+- **The quorum was sloppy.** The W acknowledgements came from stand-in nodes, so the read and write sets no longer overlap.
+- **The read overlaps the write.** One replica already has the new version and another does not; quorum reads are not linearizable (see [Linearizability](/learn/linearizability)).
+
+Put simply, <mark>quorums give you overlap, not agreement</mark>. When nodes must agree on one order of events you need [consensus](/learn/consensus).
+
+## Strict and sloppy quorums
+
+A **strict quorum** counts only the N replicas that own the key; if too many are unreachable, the write fails. Dynamo chose availability instead: a **sloppy quorum** uses the first N *healthy* nodes it finds, so a node that does not normally hold the key can acknowledge a write. The stand-in stores the value with a **hint** naming the owner and hands it over when that node recovers: **hinted handoff**, which keeps writes flowing through failures at the price of the overlap guarantee.
+
+<Mermaid caption="A coordinator's write path. The strict branch fails fast; the sloppy branch stays available and repairs later." chart={`flowchart TD
+    A["Write arrives at the coordinator"] --> B["Send to the N home replicas"]
+    B --> Q{"W acknowledgements before the timeout?"}
+    Q -- yes --> OK["Confirm to the client"]
+    Q -- no --> S{"Sloppy quorum allowed?"}
+    S -- no --> F["Report failure, replicas that stored it keep it"]
+    S -- yes --> H["Write to the next healthy nodes with a hint"]
+    H --> OK
+    H -. when the owner returns .-> HH["Hinted handoff delivers the value"]
+`} />
+
+Cassandra differs in detail. A write always goes to all replicas; the consistency level only decides how many acknowledgements the coordinator waits for. For a replica that does not respond, the coordinator stores a hint and replays it when the replica returns, for up to `max_hint_window` (3 hours by default); a replica down for longer stays inconsistent until repair. Only the `ANY` write level counts a stored hint as success.
+
+## Repairing replicas
+
+Two mechanisms pull diverged copies back together:
+
+- **Read repair.** When the R answers disagree, the coordinator writes the newest version back to the stale replicas it heard from. Cassandra does this on reads above `ONE`, blocking by default, which makes its quorum reads monotonic.
+- **Anti-entropy.** A background process compares whole replicas, which would be too expensive key by key, so each builds a **Merkle tree**: leaves are hashes of key ranges, parents are hashes of their children. Equal roots mean equal data; otherwise the replicas descend only into the subtrees that differ and stream just those ranges. Cassandra's `nodetool repair` works this way, and its documentation recommends repairing every node at least weekly.
+
+Hinted handoff covers short outages, read repair covers hot keys, anti-entropy covers cold data nobody reads.
+
+## Which version wins?
+
+<Comparison>
+
+<ComparisonItem title="Last-write-wins (LWW)">
+
+Each write carries a timestamp; the highest survives and the rest are discarded. Simple, convergent, no application code. It silently loses concurrent writes and trusts wall clocks that disagree (see [Clocks, time and ordering](/learn/time-and-ordering)). Fine for write-once keys, such as events stored under a UUID, or when only the latest sample matters, such as a driver's current location.
+
+</ComparisonItem>
+
+<ComparisonItem title="Version vectors">
+
+Each value carries a vector of (replica, counter) pairs. A write that descends from the version the client read replaces it; two writes that neither descend from the other are concurrent, so the store keeps both as **siblings** for the application to merge on the next read. Dynamo's shopping cart merged siblings by union, so a deleted item could occasionally reappear. Riak recommends dotted version vectors and warns that unmerged siblings pile up.
+
+</ComparisonItem>
+
+</Comparison>
+
+## Dynamo, Cassandra and DynamoDB
+
+Dynamo (DeCandia and colleagues, 2007) put all of this together, plus gossip-based membership. Cassandra exposes the same ideas as per-request **consistency levels**: `ONE`, `TWO`, `THREE`, `QUORUM` (a majority, n/2 + 1 of the replicas), `LOCAL_QUORUM` (a majority within the coordinator's data centre), `EACH_QUORUM`, `ALL`, `ANY` and `LOCAL_ONE`. Clusters spanning data centres mostly use `LOCAL_QUORUM`, trading overlap with writes made in the other data centre for a local round trip.
+
+DynamoDB, the AWS service, shares the name but hides N, R and W. Reads are eventually consistent by default; `ConsistentRead=true` buys a strongly consistent read at twice the cost, on tables and local secondary indexes only.
+
+<Callout type="analogy" title="Three admins, two pins">
+
+A WhatsApp group has three admins, and a notice counts as posted once two of them have pinned it. Ask any two admins what the current notice is and at least one has the pin. Where the analogy breaks: if two admins pinned different notices at the same moment, asking two of them gives two answers, and the overlap alone cannot tell you which to trust. That is the conflict problem, and overlap does not solve it.
+
+</Callout>
+
+<Callout type="interview" title="Say the three numbers">
+
+"Replication factor 3, write quorum 2, read quorum 2, hinted handoff on. Sessions use last-write-wins because the latest heartbeat is the only one that matters; the cart uses version vectors and merges siblings, because dropping an item is worse than showing a deleted one." Naming the conflict rule per table is what separates a quorum answer from a buzzword.
+
+</Callout>
+
+<DeepDive title="Go deeper: why Riak moved to dotted version vectors">
+
+A plain version vector describes a value's history but, as Riak's documentation puts it, cannot identify which value was associated with each update. When clients write without first reading, the store cannot tell a stale resubmission from a genuinely new concurrent write, so siblings multiply, which Riak calls sibling explosion and warns can grow an object until reads of it crash the node. A dotted version vector tags each sibling with the exact update that created it, so a value that has already been seen can be pruned. Riak enables them on every bucket type since version 2.0, and keeps plain vector clocks only for legacy buckets.
+
+</DeepDive>

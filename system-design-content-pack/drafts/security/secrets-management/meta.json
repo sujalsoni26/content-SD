@@ -1,0 +1,138 @@
+{
+  "slug": "secrets-management",
+  "title": "Secrets management",
+  "moduleId": "security",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "Database passwords and API keys end up in git, images, environment files and logs, and once copied there they outlive every rotation nobody remembered to do.",
+  "summary": "Secrets belong in a secrets manager that encrypts, access-controls and audits them, issues dynamic short-lived credentials on demand and rotates the static ones; workloads authenticate to it with a platform-issued identity instead of a stored key, so there is no secret zero.",
+  "catTip": "The humans used to tape the treat-cupboard key under the mat. Now the cupboard issues a card that works for one hour and writes down who used it. I am told this is progress. I am still working on getting a card.",
+  "recall": {
+    "q": "A service needs a database password. Describe the design in which no engineer ever sees it and a stolen copy is useless within an hour.",
+    "a": "The service authenticates to a secrets manager such as Vault with its workload identity (a cloud role, Kubernetes service account or SPIFFE identity), and the manager creates a unique database user with a one-hour lease on demand. The credential is held only in memory, renewed or replaced before expiry and revoked when the lease ends; the audit log names the instance."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A secret pasted into git, an image or an env file is readable by everyone who can read those, lives forever in forks and caches, and cannot be traced to whoever used it.",
+    "tradeoffs": "The secrets manager becomes a tier-one dependency at startup, dynamic credentials add database users and connection churn, and rotation needs dual-version rollouts that take engineering time.",
+    "explainSimply": "Instead of hiding the cupboard key under the mat where everyone knows to look, a desk issues each helper a card that opens only their cupboard for one hour and writes down who used it. Lose a card and little is lost. Nobody ever holds the master key.",
+    "hint": "Who hands the credential out, how long does it live, and how did the service prove who it was in order to ask?"
+  },
+  "meow": "No key under the mat. Cupboard card, one hour, name on the log. Lose it, shrug, get a new one.",
+  "quiz": [
+    {
+      "prompt": "A developer pushes an AWS access key to a public repository by mistake, then force-pushes to remove the commit. What must happen next?",
+      "options": [
+        "Nothing; the commit is gone from the repository history",
+        "Rotate or revoke the key immediately: forks, clones and cached views may still hold the commit, so the key is compromised regardless of the rewrite",
+        "Wait for the key's automatic 90-day rotation",
+        "Encrypt the repository so the old commit cannot be read"
+      ],
+      "answer": 1,
+      "explanation": "Once pushed, a secret is compromised: history rewrites do not reach forks or cached views. Access keys do not rotate themselves, and encrypting the repository does nothing about copies already taken."
+    },
+    {
+      "prompt": "What problem does workload identity solve that a secrets manager alone does not?",
+      "options": [
+        "Encrypting secrets at rest inside the manager",
+        "The bootstrapping problem: how a service authenticates to the secrets manager without a stored long-lived credential",
+        "Rotating third-party API keys on a schedule",
+        "Keeping secrets out of application logs"
+      ],
+      "answer": 1,
+      "explanation": "A platform-issued identity (cloud role, service account, SPIFFE document) lets the service prove who it is with no secret zero to leak. Encryption, rotation and log redaction are handled by other parts of the design."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Why is a dynamic database credential with a one-hour lease safer than a well-protected static password, and what does it cost?",
+      "a": "A leaked copy works for an hour at most, every instance has its own credential so the audit trail names it, and revocation is automatic when the lease ends. It costs more database users and connection churn, pools that survive credential change, and a secrets manager you cannot start without."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "SPIFFE",
+      "full": "Secure Production Identity Framework for Everyone",
+      "note": "A standard for workload identities of the form spiffe://trust-domain/path, delivered as short-lived X.509 or JWT documents, so services can authenticate without a stored secret."
+    }
+  ],
+  "sources": [
+    {
+      "title": "OWASP Cheat Sheet Series: Secrets Management Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html",
+      "accessed": "2026-11-22",
+      "supports": "centralised management, least privilege, dynamic secrets and short leases, restart not revoking stolen credentials, environment variables being readable by all processes and included in logs or dumps, secrets never baked into images, pre-commit detection",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP Cheat Sheet Series: Logging Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html",
+      "accessed": "2026-11-22",
+      "supports": "the list of data to exclude from logs: passwords, session ids, access tokens, connection strings, encryption keys",
+      "status": "verified"
+    },
+    {
+      "title": "GitHub Docs: Removing sensitive data from a repository",
+      "url": "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository",
+      "accessed": "2026-11-22",
+      "supports": "revoke or rotate the secret first; rewritten history may still be accessible in forks, clones and cached views",
+      "status": "verified"
+    },
+    {
+      "title": "GitHub Docs: About push protection",
+      "url": "https://docs.github.com/en/code-security/secret-scanning/introduction/about-push-protection",
+      "accessed": "2026-11-22",
+      "supports": "push protection blocking pushes that contain supported secrets before they reach the repository",
+      "status": "verified"
+    },
+    {
+      "title": "HashiCorp Vault documentation: Databases secrets engine",
+      "url": "https://developer.hashicorp.com/vault/docs/secrets/databases",
+      "accessed": "2026-11-22",
+      "supports": "dynamic database credentials generated per role, unique credentials per service aiding audit, revocation on lease expiry, root credential rotation",
+      "status": "verified"
+    },
+    {
+      "title": "HashiCorp Vault documentation: Lease, renew, and revoke",
+      "url": "https://developer.hashicorp.com/vault/docs/concepts/lease",
+      "accessed": "2026-11-22",
+      "supports": "every dynamic secret carrying a lease with a TTL, renewal, automatic revocation on expiry, immediate invalidation on revoke",
+      "status": "verified"
+    },
+    {
+      "title": "AWS Secrets Manager User Guide: Rotate AWS Secrets Manager secrets",
+      "url": "https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotating-secrets.html",
+      "accessed": "2026-11-22",
+      "supports": "rotation updating both the secret and the target service, managed rotation and Lambda-based rotation",
+      "status": "verified"
+    },
+    {
+      "title": "Amazon EC2 User Guide: IAM roles for Amazon EC2",
+      "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html",
+      "accessed": "2026-11-22",
+      "supports": "applications retrieving temporary credentials through the instance role instead of distributed long-term keys",
+      "status": "verified"
+    },
+    {
+      "title": "SPIFFE standards: The SPIFFE Identity and Verifiable Identity Document",
+      "url": "https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE-ID.md",
+      "accessed": "2026-11-22",
+      "supports": "the spiffe://trust-domain/path identity format and SVIDs in X.509 and JWT forms",
+      "status": "verified"
+    },
+    {
+      "title": "SPIFFE documentation: Overview",
+      "url": "https://spiffe.io/docs/latest/spiffe-about/overview/",
+      "accessed": "2026-11-22",
+      "supports": "the expansion of SPIFFE and short-lived identity documents delivered and rotated through the Workload API",
+      "status": "verified"
+    },
+    {
+      "title": "Istio documentation: Security concepts",
+      "url": "https://istio.io/latest/docs/concepts/security/",
+      "accessed": "2026-11-22",
+      "supports": "a service mesh issuing and rotating X.509 workload identities for mutual TLS",
+      "status": "verified"
+    }
+  ]
+}

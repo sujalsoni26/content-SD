@@ -1,0 +1,1 @@
+171 charts parsed, 0 failed; by type: sequence=68, flowchart-v2=62, stateDiagram=17, classDiagram=24

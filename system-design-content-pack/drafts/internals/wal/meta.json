@@ -1,0 +1,75 @@
+{
+  "slug": "wal",
+  "title": "Write-ahead logging and crash recovery",
+  "moduleId": "internals",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "A crash between acknowledging a commit and writing the changed pages would lose or half-apply the transaction unless something durable records it first.",
+  "summary": "The write-ahead log records every change sequentially before data pages are touched, so a commit is one flush of the log. Checkpoints bound recovery, group commit amortises flushes, and the same log feeds replicas and change data capture.",
+  "catTip": "Before I nap on a new server I scratch a note on the wall: Cache was here, 14:02. If the humans move me mid-nap, the note survives. Databases scratch the log first and move the furniture later.",
+  "recall": {
+    "q": "After a crash, how does a database know which committed changes to reapply and how far back to look?",
+    "a": "It replays the write-ahead log from the last checkpoint, redoing records whose LSN is newer than the LSN stored on the page. Changes of uncommitted transactions are undone, or in PostgreSQL simply left invisible for vacuum to remove."
+  },
+  "archNodes": ["db"],
+  "guide": {
+    "breaks": "Without a log the engine must write every dirty page at commit, which is slow and still leaves half-written pages after a crash; without checkpoints the log grows unbounded and recovery replays all of it.",
+    "tradeoffs": "Every commit pays for a disk flush, full-page images and logical detail inflate the log, and frequent checkpoints trade shorter recovery for extra I/O.",
+    "explainSimply": "Before changing anything on disk, the database writes a one-line note describing the change in a diary, then confirms your transaction. If the power fails, it reads the diary and redoes what was lost. Every so often it tidies up and marks a page in the diary as the new starting point.",
+    "hint": "Think about what gets flushed at commit, what gets written later, and where replay starts."
+  },
+  "meow": "Log first, page later, fsync in between. Checkpoint says start replay here. Purr-sistent.",
+  "quiz": [
+    {
+      "prompt": "PostgreSQL runs with synchronous_commit = off and crashes 200 ms after telling a food-delivery app that order 881 was committed. Which statement is accurate?",
+      "options": [
+        "The order is safe because the WAL record reached the operating system before the acknowledgement",
+        "The order may be lost, but the database restarts consistent, as if that transaction had been rolled back",
+        "The database may be corrupted because the flush was skipped",
+        "The order is safe because the data page was already written"
+      ],
+      "answer": 1,
+      "explanation": "synchronous_commit = off only delays the flush, so recently acknowledged transactions can vanish while consistency is preserved. It is fsync = off that risks corruption."
+    },
+    {
+      "prompt": "Why does PostgreSQL log the entire content of a page the first time that page is modified after each checkpoint?",
+      "options": [
+        "To make streaming replication faster",
+        "To guard against torn pages, where a crash mid-write leaves a page half old and half new",
+        "Because row-level records are kept only for indexes",
+        "So that checkpoints can be skipped entirely"
+      ],
+      "answer": 1,
+      "explanation": "A row-level record cannot repair a page that is partly old and partly new, but a full-page image can. Replication benefits incidentally and is not the reason."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A service commits 5,000 small transactions per second on one PostgreSQL primary whose disk completes only a few hundred flushes per second. How is this possible without giving up durability?",
+      "a": "Group commit: many commit records share one WAL flush. The first backend to flush leads, later arrivals ride on the next flush, and commit_delay can hold the leader a few microseconds to gather more, so throughput scales with concurrency while every commit still waits for a real fsync."
+    },
+    {
+      "q": "InnoDB needs undo logs during crash recovery; PostgreSQL does not. Why?",
+      "a": "InnoDB updates rows in place in the clustered index, so an uncommitted change must be reversed from its undo log. PostgreSQL's MVCC writes a new row version and leaves the old one, so an aborted transaction's versions are simply never visible and vacuum removes them later; recovery is redo-only."
+    }
+  ],
+  "glossary": [
+    { "term": "LSN", "full": "Log Sequence Number", "note": "A byte position in the write-ahead log; pages record the LSN of their last change and replicas report how far they have replayed." },
+    { "term": "ARIES", "full": "Algorithms for Recovery and Isolation Exploiting Semantics", "note": "The 1992 recovery method (analysis, redo, undo with compensation records) that most relational engines follow in some form." }
+  ],
+  "sources": [
+    { "title": "PostgreSQL documentation, Reliability (WAL)", "url": "https://www.postgresql.org/docs/current/wal-reliability.html", "accessed": "2026-11-22", "supports": "volatile disk caches, SSDs not honouring flush commands, 8192-byte pages written as 16 sectors, full page images written before pages", "status": "verified" },
+    { "title": "PostgreSQL documentation, Write-Ahead Logging (WAL)", "url": "https://www.postgresql.org/docs/current/wal-intro.html", "accessed": "2026-11-22", "supports": "changes to data files are written only after WAL records are flushed; roll-forward recovery (REDO); only the WAL needs flushing at commit", "status": "verified" },
+    { "title": "PostgreSQL documentation, WAL Configuration", "url": "https://www.postgresql.org/docs/current/wal-configuration.html", "accessed": "2026-11-22", "supports": "checkpoint definition; checkpoint_timeout 5 min and max_wal_size 1 GB defaults; checkpoint_completion_target 0.9; group commit leader and followers via commit_delay", "status": "verified" },
+    { "title": "PostgreSQL documentation, Write Ahead Log settings", "url": "https://www.postgresql.org/docs/current/runtime-config-wal.html", "accessed": "2026-11-22", "supports": "fsync, synchronous_commit (default on, off loses up to three times wal_writer_delay without corruption), full_page_writes default on, wal_level default replica, commit_delay 0, commit_siblings 5, wal_writer_delay 200 ms", "status": "verified" },
+    { "title": "PostgreSQL documentation, Logical Decoding Concepts", "url": "https://www.postgresql.org/docs/current/logicaldecoding-explanation.html", "accessed": "2026-11-22", "supports": "logical decoding definition, replication slots retaining WAL, output plugins", "status": "verified" },
+    { "title": "PostgreSQL documentation, Log-Shipping Standby Servers", "url": "https://www.postgresql.org/docs/current/warm-standby.html", "accessed": "2026-11-22", "supports": "streaming replication sends WAL records as they are generated", "status": "verified" },
+    { "title": "PostgreSQL documentation, Transactions and Identifiers", "url": "https://www.postgresql.org/docs/current/transaction-id.html", "accessed": "2026-11-22", "supports": "commit status recorded in pg_xact", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Redo Log", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-redo-log.html", "accessed": "2026-11-22", "supports": "redo log definition and the #innodb_redo directory", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, InnoDB Startup Options and System Variables", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-parameters.html", "accessed": "2026-11-22", "supports": "innodb_flush_log_at_trx_commit default 1 and the meaning of 0, 1 and 2", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Undo Logs", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-undo-logs.html", "accessed": "2026-11-22", "supports": "undo log records hold how to undo the latest change and serve consistent reads", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Doublewrite Buffer", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-doublewrite-buffer.html", "accessed": "2026-11-22", "supports": "pages written to the doublewrite buffer before their real position; enabled by default in most cases", "status": "verified" },
+    { "title": "C. Mohan, D. Haderle, B. Lindsay, H. Pirahesh, P. Schwarz, \"ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging\", ACM TODS 17(1), 1992", "url": "https://dl.acm.org/doi/10.1145/128765.128770", "accessed": "2026-11-22", "supports": "the analysis, redo and undo passes, repeating history, compensation log records and page LSNs", "status": "reference" },
+    { "title": "Adrian Colyer, \"ARIES\" summary, The Morning Paper, 2016", "url": "https://blog.acolyer.org/2016/01/08/aries/", "accessed": "2026-11-22", "supports": "the three recovery passes and repeating history as described in the DeepDive and Steps", "status": "secondary" }
+  ]
+}

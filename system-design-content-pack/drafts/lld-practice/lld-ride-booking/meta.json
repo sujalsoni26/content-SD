@@ -1,0 +1,63 @@
+{
+  "slug": "lld-ride-booking",
+  "title": "LLD: Ride booking",
+  "moduleId": "lld-practice",
+  "level": "advanced",
+  "minutes": 14,
+  "problem": "Two trips rank the same driver at the same instant and both assign him, while a double-tapped 'start trip' and a late offer timeout corrupt the ride's state.",
+  "summary": "Model the trip as an explicit state machine and treat the driver as a resource claimed with one compareAndSet before the offer goes out. Matching, pricing and cancellation fees are Strategies around those two facts, surge is a Decorator, and listeners hear every transition.",
+  "catTip": "Two humans reach for me at once. One compare-and-set wins and the other hears 'cat already on trip', so nobody carries half a cat. Whether leaving early costs a fee depends on which state the nap is in.",
+  "recall": {
+    "q": "What is the key design decision in the ride-booking case study, and how does it stop two trips from being assigned the same driver?",
+    "a": "Make the trip an explicit state machine whose transitions are the only way it changes, and treat the driver as a resource claimed with compareAndSet on its status (Available to Offered) before the driver is asked. Matching, pricing and cancellation fees are Strategies around those two facts, and listeners are notified after each transition."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without an atomic claim on the driver and a single owner of the trip's state, two trips are assigned one driver, a late offer timeout releases a driver who just accepted, and fee and surge rules get hard-coded into the trip.",
+    "tradeoffs": "Claiming before offering makes a driver unavailable for the whole offer window, sequential offers slow the match when drivers decline, and the in-memory claim and index must move to a shared store once matching spans machines.",
+    "explainSimply": "Think of a taxi-rank dispatcher with a whiteboard: a magnet beside each driver says free, offered or on a job, and the dispatcher moves the magnet before picking up the radio. Two dispatchers can never radio the same driver, because only one of them finds the magnet on free. The ride itself moves through a fixed set of stages, and what cancelling costs depends on the stage.",
+    "hint": "Ask at which exact moment a driver stops being available, and who is allowed to move the trip from one stage to the next."
+  },
+  "meow": "Claim the driver, then ask. Requested, assigned, en route, started, done. Purr-ice is a strategy and surge just wraps it.",
+  "quiz": [
+    {
+      "prompt": "Two matching requests run at the same instant and both rank driver D first. Which design guarantees D is offered exactly one trip without serialising all matching on one lock?",
+      "options": [
+        "Read D's status, and if it is Available set it to Offered and send the offer",
+        "Call D.tryOffer(), which does status.compareAndSet(AVAILABLE, OFFERED), and move to the next candidate when it returns false",
+        "Make TripService.request synchronized",
+        "Let both trips send the offer and let the driver's app accept only the first one it shows"
+      ],
+      "answer": 1,
+      "explanation": "compareAndSet makes the check and the claim one indivisible step, so exactly one request gets true for a given driver. Letting the driver's app decide is the strongest distractor: it moves the race onto a phone with a flaky network and still leaves one trip stuck until a timeout, while a synchronized request also works but makes every request in the city wait on one lock."
+    },
+    {
+      "prompt": "Surge must multiply whatever base fare rule is in force (standard, airport flat rate, corporate tariff), and a festival promotion may later apply on top. Where does surge belong?",
+      "options": [
+        "A multiplier field on Trip that StandardPricing reads",
+        "A SurgePricing class that implements PricingStrategy and wraps another PricingStrategy",
+        "A subclass of StandardPricing that overrides fare()",
+        "An if-branch in TripService.complete that multiplies the fare when demand is high"
+      ],
+      "answer": 1,
+      "explanation": "A Decorator wraps any base rule and stacks with a promotion decorator without changing the base classes. The subclass is the strongest distractor: it works for one base rule but needs a new subclass for every base rule and cannot be combined with a promotion, which is composition over inheritance in a single example."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In the ride-booking design, why does TripService claim the driver with tryOffer() before sending the offer rather than after the driver accepts, and why is releaseOffer() a compareAndSet too?",
+      "a": "Two trips can rank the same driver at the same instant; claiming first with compareAndSet(AVAILABLE, OFFERED) means exactly one trip may ask, and the loser moves to the next candidate. releaseOffer() uses compareAndSet(OFFERED, AVAILABLE) so a timeout that fires after the driver accepted (status already ON_TRIP) fails and never frees a driver who is on a trip."
+    }
+  ],
+  "glossary": [
+    { "term": "ETA", "full": "Estimated Time of Arrival", "note": "How long until the driver reaches the pickup, from a routing service; an input to matching and a promise to nobody." }
+  ],
+  "sources": [
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.AtomicReference", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicReference.html", "accessed": "2026-11-22", "supports": "compareAndSet atomically sets the value to newValue if the current value == expectedValue and returns false otherwise, so tryOffer, startTrip and releaseOffer each succeed for exactly one caller", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.locks.ReentrantLock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/locks/ReentrantLock.html", "accessed": "2026-11-22", "supports": "the per-driver lock alternative: the untimed tryLock() acquires the lock immediately if it is available and otherwise returns false without waiting, and does not honour the fairness setting", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.CopyOnWriteArrayList", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/CopyOnWriteArrayList.html", "accessed": "2026-11-22", "supports": "a thread-safe list whose mutations copy the array, efficient when traversals vastly outnumber mutations; iterators work on a snapshot and never throw ConcurrentModificationException, which is why the listener list uses it", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ConcurrentHashMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html", "accessed": "2026-11-22", "supports": "retrievals do not block and overlap with updates; putIfAbsent associates the key only if absent and returns the previous value, performed atomically, which gives request idempotency in the trips map", "status": "verified" },
+    { "title": "Java SE 21 API: java.time.Clock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/Clock.html", "accessed": "2026-11-22", "supports": "injecting a Clock so offer timeouts and cancellation-fee windows can be tested with a fixed or offset clock", "status": "verified" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, State, Observer, Decorator, Command, Facade, Factory Method and Singleton as used and as deliberately not used here", "status": "reference" }
+  ]
+}

@@ -1,0 +1,70 @@
+**Command Query Responsibility Segregation (CQRS)** uses one model to change state and a different one to read it. Writes arrive as **commands** that a write model checks against the business rules; reads are served from **read models**, also called projections, shaped like the screens that need them.
+
+## Commands and queries
+
+Bertrand Meyer's command-query separation says a method either changes state or returns data, never both. Greg Young, who named CQRS around 2010, applied the rule one level up: in his words, "the creation of two objects where there was previously only one". Commands are imperatives in the domain's language, `PlaceOrder`, `CancelOrder`; they can be rejected, and each is processed once. Queries return data and change nothing. Events such as `OrderPlaced` are facts about what a command did, and any number of consumers may react to them. A CRUD screen says "update order"; a task-based screen says "cancel" or "change the address", and the command carries that intent to the model instead of a bag of changed fields.
+
+## One write model, many read models
+
+The write model is normalised (see [Normalization and denormalization](/learn/normalization)) and transactional, and it is where the invariants live: an order cannot be cancelled after dispatch, a promo code applies once. Read models are denormalised, usually one per screen: the customer's order list with restaurant name and live status, the restaurant's board of open orders, the courier's next pickups, the analyst's hourly totals. Each can sit in whatever store suits it, a Postgres table, a search index, a Redis hash. One write model can feed many projections, and one projection can combine several write models when a screen needs data from more than one.
+
+<Mermaid caption="A command is validated against the write model and committed; the resulting event reaches projectors through a topic (fed by an outbox or CDC); each projector maintains a read store that queries hit directly." chart={`flowchart LR
+    U["Customer app"] -->|"PlaceOrder"| C["Command handler and write model"]
+    C -->|"commit"| W[("Orders DB, normalised")]
+    C -->|"OrderPlaced"| B["Topic via outbox or CDC"]
+    B --> P1["Projector: my orders"]
+    B --> P2["Projector: restaurant board"]
+    P1 --> R1[("Read store: order list")]
+    P2 --> R2[("Read store: open orders")]
+    R1 -->|"query"| U
+    R2 -->|"query"| S["Restaurant tablet"]
+`} />
+
+## How projections get built
+
+<Steps>
+
+1. The command handler loads the write model, checks the rules and commits the change in one transaction.
+2. The change leaves the write side as an event, either written to an outbox table in that same transaction and relayed afterwards (see the deep dive in [Pub/sub](/learn/pubsub)), or captured from the database log by change data capture (see [CDC](/learn/cdc)). The event shapes and the pitfalls are in [Event-driven architecture in practice](/learn/eda-patterns).
+3. Each projector consumes the event and upserts its read store. Events can arrive twice, so the upsert must be idempotent (see [Idempotency](/learn/idempotency)).
+4. Queries touch only read stores. The write database never serves a list screen.
+5. A new screen next year means a new projector, fed by replaying the retained events.
+
+</Steps>
+
+CQRS does not require two databases. A materialised view, or a denormalised table maintained in the same transaction as the write, is CQRS with no lag and no independent scaling; the event-fed version buys scaling and freedom of storage at the price of the next section.
+
+## Eventual consistency and what the UI must do
+
+After `PlaceOrder` returns, the "my orders" projection may lag by milliseconds or, during an incident, minutes (see [Consistency](/learn/consistency)). The failure to design for is the most common CQRS bug report: "I just paid and my order is not in my list."
+
+| Technique | How | Cost |
+| --- | --- | --- |
+| Render from the command response | The command returns the new order's id and state; the client draws it immediately | The client holds a copy that may differ briefly from the projection |
+| Optimistic UI | Show the order as "placing" and reconcile when the projection catches up | Needs a path for a rejected command |
+| Wait for a version | The command returns version N; the client polls until the projection reports N or later | Extra reads and a spinner |
+| Read your own writes | For the user who just wrote, read briefly from the write model | Couples the UI to the write model it was meant to avoid |
+
+<Callout type="analogy" title="The kitchen pass and the front-of-house boards">
+
+Orders go into the kitchen through the pass, where the rules are enforced: no substitutions once cooking has started. The front of house keeps its own boards, the ready display, the wait-time estimate, the bill, each updated from shouts coming out of the kitchen and each a few seconds behind reality. Nobody looks into the pans to find out whether their food is ready. Where the analogy fails: a restaurant has one board of each kind, while read models are many and can be rebuilt from the ticket spike at any time.
+
+</Callout>
+
+## When CQRS is overkill
+
+Fowler calls CQRS "a significant mental leap" and notes that most information systems fit the plain information-base model, where adding CQRS brings complexity, "reducing productivity and increasing risk"; he restricts it to specific portions of a system, a bounded context, never the whole. Young agrees: "CQRS is not a top-level architecture." Udi Dahan is blunter: "Most people using CQRS (and event sourcing too) shouldn't have done so."
+
+It fits collaborative domains, where many actors work on the same data and the outcome is contested, such as seats for a sold-out IPL match; heavy read-write imbalance with screens unlike the write schema; and complex write rules beside simple reads. It does not fit admin tools, small single-team applications, or any context where a normalised schema plus an index serves every screen. <mark>Use CQRS where read shapes and write rules pull one model apart; elsewhere a normalised table with an index is simpler and faster to build.</mark>
+
+<Callout type="interview" title="Say the split, then the lag">
+
+"Ordering has a write model that enforces the rules and read-optimised projections for the order list and the restaurant board, updated from `OrderPlaced` events. The list is eventually consistent, so the app renders the new order from the command response rather than re-querying." Then add, unprompted, that you would apply this only in the ordering context, not across the system.
+
+</Callout>
+
+<DeepDive title="Go deeper: CQRS without events">
+
+The humblest CQRS is a read replica (see [Replication](/learn/replication)): same model, different hardware, and the same lag problem in a smaller form. One step up is a materialised view or a denormalised table refreshed inside the write transaction: read-optimised shapes with no lag, at the cost of slower writes and a shared schema. The event-fed design earns its complexity only when the read store must differ in kind (a search index, a cache cluster) or scale independently of the writes.
+
+</DeepDive>

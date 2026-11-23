@@ -1,0 +1,1088 @@
+[
+ {
+  "term": "2PC",
+  "full": "Two-Phase Commit",
+  "note": "Prepare and vote, then commit or abort; participants hold locks while in doubt.",
+  "lessonSlug": "distributed-transactions"
+ },
+ {
+  "term": "ABAC",
+  "full": "Attribute-Based Access Control",
+  "note": "Policies over attributes of the subject, object, action and environment; defined in NIST SP 800-162 and preferred by OWASP for application data.",
+  "lessonSlug": "authorization"
+ },
+ {
+  "term": "ABR",
+  "full": "Adaptive Bitrate (streaming)",
+  "note": "The player chooses a quality rung for each segment from measured throughput and buffer, so quality follows the network instead of stalling.",
+  "lessonSlug": "design-youtube"
+ },
+ {
+  "term": "ACID",
+  "full": "Atomicity, Consistency, Isolation, Durability",
+  "note": "The four guarantees of a database transaction.",
+  "lessonSlug": "acid"
+ },
+ {
+  "term": "ACK",
+  "full": "Acknowledgment",
+  "note": "A receiver confirming it got the data.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "ALB",
+  "full": "Application Load Balancer",
+  "note": "AWS's layer-7 load balancer for HTTP, HTTPS and gRPC, routing by host, path, header, method, query string or source address.",
+  "lessonSlug": "cloud-networking"
+ },
+ {
+  "term": "AMQP",
+  "full": "Advanced Message Queuing Protocol",
+  "note": "The open messaging protocol RabbitMQ implements (version 0-9-1): publishers send to exchanges, which route to queues through bindings.",
+  "lessonSlug": "brokers-compared"
+ },
+ {
+  "term": "AOF",
+  "full": "Append-Only File",
+  "note": "Redis persistence: every write is logged to disk so data survives a restart.",
+  "lessonSlug": "url-shortener"
+ },
+ {
+  "term": "AP",
+  "full": "Available + Partition-tolerant",
+  "note": "During a partition, answer with possibly stale data.",
+  "lessonSlug": "cap"
+ },
+ {
+  "term": "API",
+  "full": "Application Programming Interface",
+  "note": "The contract between pieces of software.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "ARIES",
+  "full": "Algorithms for Recovery and Isolation Exploiting Semantics",
+  "note": "The 1992 recovery method (analysis, redo, undo with compensation records) that most relational engines follow in some form.",
+  "lessonSlug": "wal"
+ },
+ {
+  "term": "AWS",
+  "full": "Amazon Web Services",
+  "note": "Amazon's cloud platform.",
+  "lessonSlug": "scaling"
+ },
+ {
+  "term": "AZ",
+  "full": "Availability Zone",
+  "note": "One or more data centres with independent power, cooling and networking inside a cloud region; replicas spread across AZs survive the loss of a data centre.",
+  "lessonSlug": "failure-modes"
+ },
+ {
+  "term": "BaaS",
+  "full": "Backend as a Service",
+  "note": "Rent whole backend pieces (authentication, storage, databases, queues) instead of running them.",
+  "lessonSlug": "serverless"
+ },
+ {
+  "term": "BFF",
+  "full": "Backend For Frontend",
+  "note": "A gateway built for one client type (phone, web, partner) and owned by the team that builds that client.",
+  "lessonSlug": "api-gateway"
+ },
+ {
+  "term": "BGP",
+  "full": "Border Gateway Protocol",
+  "note": "The routing protocol networks use to announce which address prefixes they own.",
+  "lessonSlug": "design-netflix"
+ },
+ {
+  "term": "CAP",
+  "full": "Consistency, Availability, Partition tolerance",
+  "note": "During a network partition you must choose C or A.",
+  "lessonSlug": "cap"
+ },
+ {
+  "term": "CAS",
+  "full": "Compare-And-Swap",
+  "note": "An atomic instruction that sets a value only if it still equals the expected old value; Java exposes it as compareAndSet.",
+  "lessonSlug": "concurrency-basics"
+ },
+ {
+  "term": "CDC",
+  "full": "Change Data Capture",
+  "note": "Reading a database's log and publishing each row change as an event for other systems.",
+  "lessonSlug": "replication-internals"
+ },
+ {
+  "term": "CDN",
+  "full": "Content Delivery Network",
+  "note": "Edge servers near users that cache static files.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "CI/CD",
+  "full": "Continuous Integration / Continuous Delivery (or Deployment)",
+  "note": "Merge and test every change automatically; keep every passing change deployable, or deploy it automatically.",
+  "lessonSlug": "iac"
+ },
+ {
+  "term": "CIA",
+  "full": "Confidentiality, Integrity, Availability",
+  "note": "The three security properties; availability counts even though a denial-of-service attack steals nothing.",
+  "lessonSlug": "security-fundamentals"
+ },
+ {
+  "term": "CIDR",
+  "full": "Classless Inter-Domain Routing",
+  "note": "The address-plus-prefix notation such as 10.0.0.0/16 used to size VPCs and subnets.",
+  "lessonSlug": "cloud-networking"
+ },
+ {
+  "term": "CORS",
+  "full": "Cross-Origin Resource Sharing",
+  "note": "Browser-enforced headers that let a server say which other origins may read its responses; not authentication and no barrier to non-browser clients.",
+  "lessonSlug": "api-security"
+ },
+ {
+  "term": "CP",
+  "full": "Consistent + Partition-tolerant",
+  "note": "During a partition, refuse or delay answers that might be wrong.",
+  "lessonSlug": "cap"
+ },
+ {
+  "term": "CPU",
+  "full": "Central Processing Unit",
+  "note": "The processor that runs your code.",
+  "lessonSlug": "backpressure"
+ },
+ {
+  "term": "CQRS",
+  "full": "Command Query Responsibility Segregation",
+  "note": "Separate models for changing state (commands) and for reading it (queries served by projections).",
+  "lessonSlug": "cqrs"
+ },
+ {
+  "term": "CRDT",
+  "full": "Conflict-free Replicated Data Type",
+  "note": "A data structure whose concurrent updates on different replicas merge deterministically without coordination.",
+  "lessonSlug": "replication-internals"
+ },
+ {
+  "term": "CSRF",
+  "full": "Cross-Site Request Forgery",
+  "note": "A hostile page makes the victim's browser send a state-changing request with the victim's cookies; blunted by SameSite cookies and anti-CSRF tokens.",
+  "lessonSlug": "api-security"
+ },
+ {
+  "term": "CSS",
+  "full": "Cascading Style Sheets",
+  "note": "The styling language of web pages; a typical static file.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "DASH",
+  "full": "Dynamic Adaptive Streaming over HTTP",
+  "note": "The MPEG standard (ISO/IEC 23009-1) for adaptive streaming: an MPD manifest describing representations and segments fetched over HTTP.",
+  "lessonSlug": "design-youtube"
+ },
+ {
+  "term": "DAU",
+  "full": "Daily Active Users",
+  "note": "Unique users per day; the starting input for estimates.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "DB",
+  "full": "Database",
+  "note": "Where the data lives.",
+  "lessonSlug": "sql-nosql"
+ },
+ {
+  "term": "DDoS",
+  "full": "Distributed Denial of Service",
+  "note": "An attack that floods a service with traffic from many machines.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "DI",
+  "full": "Dependency Injection",
+  "note": "A class receives its collaborators from outside, ideally through its constructor, instead of constructing them.",
+  "lessonSlug": "interfaces-abstractions-di"
+ },
+ {
+  "term": "DLQ",
+  "full": "Dead-Letter Queue",
+  "note": "Where messages that keep failing are parked for inspection.",
+  "lessonSlug": "message-queues"
+ },
+ {
+  "term": "DNS",
+  "full": "Domain Name System",
+  "note": "The internet's phone book: names to IP addresses.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "DR",
+  "full": "Disaster Recovery",
+  "note": "The plan and machinery for restoring service after an event high availability cannot absorb, such as losing a region or the data itself, measured by RPO and RTO.",
+  "lessonSlug": "disaster-recovery"
+ },
+ {
+  "term": "DRM",
+  "full": "Digital Rights Management",
+  "note": "Encrypted media segments that a player can only decrypt with a licence from a licence server; the one case where a video stops being a plain cacheable file.",
+  "lessonSlug": "design-youtube"
+ },
+ {
+  "term": "E2E",
+  "full": "End-to-End (encryption)",
+  "note": "Only the sender's and recipients' devices hold the keys, so every server in between stores and forwards ciphertext it cannot read.",
+  "lessonSlug": "design-whatsapp"
+ },
+ {
+  "term": "EB",
+  "full": "Exabyte",
+  "note": "10¹⁸ bytes, a thousand petabytes.",
+  "lessonSlug": "design-netflix"
+ },
+ {
+  "term": "EDA",
+  "full": "Event-Driven Architecture",
+  "note": "Services emit and react to events instead of calling each other.",
+  "lessonSlug": "pubsub"
+ },
+ {
+  "term": "ELB",
+  "full": "Elastic Load Balancing",
+  "note": "AWS's managed load balancer.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "EOS",
+  "full": "Exactly-Once Semantics",
+  "note": "Kafka's name for processing in which each record's effect appears once in the output; built from the idempotent producer and transactions, and scoped to Kafka topics and state stores.",
+  "lessonSlug": "delivery-semantics"
+ },
+ {
+  "term": "ESB",
+  "full": "Enterprise Service Bus",
+  "note": "Central middleware that routed, transformed and orchestrated messages between SOA services; its accumulated smarts became the bottleneck.",
+  "lessonSlug": "modular-monolith-soa"
+ },
+ {
+  "term": "ETA",
+  "full": "Estimated Time of Arrival",
+  "note": "A routing engine's road-graph travel time, corrected by a model trained on actual trips; the hot read path of a ride-hailing design.",
+  "lessonSlug": "design-uber"
+ },
+ {
+  "term": "EXIF",
+  "full": "Exchangeable Image File Format",
+  "note": "Metadata a camera stores inside a photo file, such as the model, the time and often the GPS location; servers strip it when re-encoding uploads.",
+  "lessonSlug": "design-instagram"
+ },
+ {
+  "term": "FaaS",
+  "full": "Functions as a Service",
+  "note": "Run a handler per event on provider-managed environments that scale from zero; billed per request and per GB-second.",
+  "lessonSlug": "serverless"
+ },
+ {
+  "term": "FIFO",
+  "full": "First In, First Out",
+  "note": "Queue order in which the earliest entry is served first, as in the library's reservation queue.",
+  "lessonSlug": "lld-library-management"
+ },
+ {
+  "term": "GDPR",
+  "full": "General Data Protection Regulation",
+  "note": "EU data-protection law; its Article 17 right to erasure is the main reason immutable event logs need crypto-shredding or a separate store for personal data.",
+  "lessonSlug": "event-sourcing"
+ },
+ {
+  "term": "GoF",
+  "full": "Gang of Four",
+  "note": "Gamma, Helm, Johnson and Vlissides, authors of Design Patterns (1994); their 23 patterns are the ones interviewers name.",
+  "lessonSlug": "design-patterns-creational"
+ },
+ {
+  "term": "gRPC",
+  "full": "gRPC Remote Procedure Call",
+  "note": "Google's open-source RPC framework. The 'g' changes meaning each release.",
+  "lessonSlug": "grpc"
+ },
+ {
+  "term": "GSI",
+  "full": "Global Secondary Index",
+  "note": "DynamoDB's index with its own key schema and throughput, partitioned independently and updated asynchronously.",
+  "lessonSlug": "partitioning-internals"
+ },
+ {
+  "term": "HA",
+  "full": "High Availability",
+  "note": "Surviving failures without users noticing.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "HLC",
+  "full": "Hybrid Logical Clock",
+  "note": "A timestamp that pairs a physical clock reading with a logical counter, so it tracks causality while staying close to real time (used by CockroachDB).",
+  "lessonSlug": "time-and-ordering"
+ },
+ {
+  "term": "HLD",
+  "full": "High-Level Design",
+  "note": "Designing which services, stores and queues a system has and how data and traffic move between them.",
+  "lessonSlug": "lld-intro"
+ },
+ {
+  "term": "HLS",
+  "full": "HTTP Live Streaming",
+  "note": "Apple's adaptive streaming format (RFC 8216): a master playlist of variant streams, a media playlist of short segments per variant, all over plain HTTP.",
+  "lessonSlug": "design-youtube"
+ },
+ {
+  "term": "HMAC",
+  "full": "Hash-based Message Authentication Code",
+  "note": "A keyed hash (HMAC with SHA-256 at Stripe and Razorpay) that proves a webhook body came from a party holding the shared secret and was not altered.",
+  "lessonSlug": "design-payment-system"
+ },
+ {
+  "term": "HPA",
+  "full": "Horizontal Pod Autoscaler",
+  "note": "Kubernetes controller that changes a Deployment's replica count from CPU, memory or custom metrics.",
+  "lessonSlug": "kubernetes"
+ },
+ {
+  "term": "HTTP",
+  "full": "HyperText Transfer Protocol",
+  "note": "The message format of the web: requests and responses.",
+  "lessonSlug": "http"
+ },
+ {
+  "term": "HTTPS",
+  "full": "HTTP Secure",
+  "note": "HTTP over TLS: encrypted, tamper-proof, authenticated.",
+  "lessonSlug": "http"
+ },
+ {
+  "term": "I/O",
+  "full": "Input/Output",
+  "note": "Reading and writing to disk or network.",
+  "lessonSlug": "latency"
+ },
+ {
+  "term": "IaC",
+  "full": "Infrastructure as Code",
+  "note": "Describing servers, networks and permissions in version-controlled files that a tool such as Terraform applies, instead of configuring them by hand.",
+  "lessonSlug": "iac"
+ },
+ {
+  "term": "ICS",
+  "full": "Incident Command System",
+  "note": "The emergency-management structure firefighters created in 1968, with a single commander delegating roles; Google's incident response is adapted from it.",
+  "lessonSlug": "incident-response"
+ },
+ {
+  "term": "IoC",
+  "full": "Inversion of Control",
+  "note": "Control over which objects are built, and when, moves out of the class that uses them to a framework or a composition root.",
+  "lessonSlug": "interfaces-abstractions-di"
+ },
+ {
+  "term": "IP",
+  "full": "Internet Protocol",
+  "note": "Addresses and routes packets between machines.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "IPv4",
+  "full": "Internet Protocol version 4",
+  "note": "32-bit addresses like 203.0.113.10 (DNS A record).",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "IPv6",
+  "full": "Internet Protocol version 6",
+  "note": "128-bit addresses (DNS AAAA record).",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "ISBN",
+  "full": "International Standard Book Number",
+  "note": "Identifies an edition or format of a book, not a physical copy; 13 digits for numbers assigned since 2007.",
+  "lessonSlug": "lld-library-management"
+ },
+ {
+  "term": "ISP",
+  "full": "Internet Service Provider",
+  "note": "Your internet company; often runs your DNS resolver.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "ISR",
+  "full": "In-Sync Replicas",
+  "note": "The replicas of a partition that are caught up with the leader; a record is committed once all of them have it.",
+  "lessonSlug": "kafka-architecture"
+ },
+ {
+  "term": "JDBC",
+  "full": "Java Database Connectivity",
+  "note": "The Java API for talking to relational databases; Kafka Connect's JDBC source connector polls tables through it.",
+  "lessonSlug": "cdc"
+ },
+ {
+  "term": "JPA",
+  "full": "Jakarta Persistence API",
+  "note": "The Java standard for mapping objects to relational tables; a field marked @Version gives optimistic locking, and PESSIMISTIC_WRITE maps to a row lock.",
+  "lessonSlug": "lld-movie-ticket-booking"
+ },
+ {
+  "term": "JS",
+  "full": "JavaScript",
+  "note": "The programming language of the browser.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "JSON",
+  "full": "JavaScript Object Notation",
+  "note": "A text format for structured data, used by most REST APIs.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "JWKS",
+  "full": "JSON Web Key Set",
+  "note": "The issuer's published public keys, each with a kid, fetched by verifiers to check JWT signatures and to roll keys.",
+  "lessonSlug": "oauth-jwt"
+ },
+ {
+  "term": "JWT",
+  "full": "JSON Web Token",
+  "note": "Three base64url parts, header, claims and signature, verified against the issuer's keys (RFC 7519).",
+  "lessonSlug": "oauth-jwt"
+ },
+ {
+  "term": "K8s",
+  "full": "Kubernetes",
+  "note": "The numeronym: K, the eight letters of 'ubernete', s. The container orchestrator that reconciles declared state.",
+  "lessonSlug": "kubernetes"
+ },
+ {
+  "term": "KB",
+  "full": "Kilobyte",
+  "note": "About 10^3 bytes (1,024 exactly).",
+  "lessonSlug": "estimation-numbers"
+ },
+ {
+  "term": "KIP",
+  "full": "Kafka Improvement Proposal",
+  "note": "The design document that precedes any user-visible change to Apache Kafka; cited by number, such as KIP-679.",
+  "lessonSlug": "kafka-architecture"
+ },
+ {
+  "term": "KMS",
+  "full": "Key Management Service",
+  "note": "Holds master keys in hardware modules, never releases them, and wraps or unwraps data keys with access control and an audit log.",
+  "lessonSlug": "encryption"
+ },
+ {
+  "term": "L4",
+  "full": "Layer 4 (transport layer)",
+  "note": "Load balancing by IP and port; fast but content-blind.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "L7",
+  "full": "Layer 7 (application layer)",
+  "note": "Load balancing by HTTP path, headers and cookies.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "LB",
+  "full": "Load Balancer",
+  "note": "Spreads requests across a pool of servers.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "LFU",
+  "full": "Least Frequently Used",
+  "note": "Cache eviction: drop the entry used the fewest times.",
+  "lessonSlug": "caching"
+ },
+ {
+  "term": "LLD",
+  "full": "Low-Level Design",
+  "note": "Designing the classes, responsibilities, relationships and interactions inside one component of a system.",
+  "lessonSlug": "lld-intro"
+ },
+ {
+  "term": "LRU",
+  "full": "Least Recently Used",
+  "note": "Cache eviction: drop the entry untouched for the longest.",
+  "lessonSlug": "caching"
+ },
+ {
+  "term": "LSI",
+  "full": "Local Secondary Index",
+  "note": "DynamoDB's index that shares the table's partition key with a different sort key; it lives with the data, so reads can be strongly consistent.",
+  "lessonSlug": "partitioning-internals"
+ },
+ {
+  "term": "LSM",
+  "full": "Log-Structured Merge (tree)",
+  "note": "A storage design that turns random writes into fast sequential ones.",
+  "lessonSlug": "latency"
+ },
+ {
+  "term": "LSN",
+  "full": "Log Sequence Number",
+  "note": "A byte position in the write-ahead log; pages record the LSN of their last change and replicas report how far they have replayed.",
+  "lessonSlug": "wal"
+ },
+ {
+  "term": "LSP",
+  "full": "Liskov Substitution Principle",
+  "note": "A subtype must work anywhere its parent is expected, without stricter preconditions, weaker postconditions or surprise exceptions.",
+  "lessonSlug": "solid"
+ },
+ {
+  "term": "LWW",
+  "full": "Last-Write-Wins",
+  "note": "Conflict rule that keeps the write with the highest timestamp and discards the rest; simple and convergent, but it loses concurrent writes.",
+  "lessonSlug": "quorums"
+ },
+ {
+  "term": "MAU",
+  "full": "Monthly Active Users",
+  "note": "Unique users per month. DAU is roughly 25–50% of MAU.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "MD5",
+  "full": "Message Digest 5",
+  "note": "An old 128-bit hash function.",
+  "lessonSlug": "url-shortener"
+ },
+ {
+  "term": "MDC",
+  "full": "Mapped Diagnostic Context",
+  "note": "A per-thread map of context values, such as a request id, that the logger copies into every event written on that thread.",
+  "lessonSlug": "lld-logging-framework"
+ },
+ {
+  "term": "MFA",
+  "full": "Multi-Factor Authentication",
+  "note": "Proof from two different factor types (know, have, are); WebAuthn passkeys are the phishing-resistant kind, SMS the restricted one.",
+  "lessonSlug": "authentication"
+ },
+ {
+  "term": "mTLS",
+  "full": "Mutual TLS",
+  "note": "Both client and server present certificates, giving each service a cryptographic identity; service meshes automate issuance and rotation.",
+  "lessonSlug": "encryption"
+ },
+ {
+  "term": "MTTD",
+  "full": "Mean Time To Detect",
+  "note": "Average time from a fault starting to the alert; useful per incident, noisy as a quarterly average.",
+  "lessonSlug": "incident-response"
+ },
+ {
+  "term": "MTTR",
+  "full": "Mean Time To Recover",
+  "note": "Average time from alert (or fault) to service restored; heavy-tailed durations and small samples make it a poor trend metric.",
+  "lessonSlug": "incident-response"
+ },
+ {
+  "term": "MVCC",
+  "full": "Multi-Version Concurrency Control",
+  "note": "Keeping several versions of each row so readers see a snapshot while writers create new versions.",
+  "lessonSlug": "mvcc-isolation"
+ },
+ {
+  "term": "NACL",
+  "full": "Network Access Control List",
+  "note": "A stateless, numbered allow-and-deny filter attached to a subnet, evaluated in order until a rule matches.",
+  "lessonSlug": "cloud-networking"
+ },
+ {
+  "term": "NAT",
+  "full": "Network Address Translation",
+  "note": "Rewriting private source addresses to a shared public one on the way out; a NAT gateway does it for private subnets, zonally and per gigabyte.",
+  "lessonSlug": "cloud-networking"
+ },
+ {
+  "term": "NewSQL",
+  "full": "Distributed SQL databases",
+  "note": "Relational databases that shard and replicate automatically (Spanner, CockroachDB, TiDB) while keeping SQL and transactions.",
+  "lessonSlug": "sql-nosql"
+ },
+ {
+  "term": "NLB",
+  "full": "Network Load Balancer",
+  "note": "AWS's layer-4 load balancer for TCP, UDP and TLS with a static address per zone and the client's source address preserved.",
+  "lessonSlug": "cloud-networking"
+ },
+ {
+  "term": "NoSQL",
+  "full": "Not only SQL",
+  "note": "A family of non-relational databases: key-value, document, wide-column, graph.",
+  "lessonSlug": "sql-nosql"
+ },
+ {
+  "term": "NP-hard",
+  "full": "Non-deterministic Polynomial-time hard",
+  "note": "At least as hard as every problem in NP; no polynomial-time algorithm is known, so exact answers for large inputs are impractical and heuristics are used instead.",
+  "lessonSlug": "lld-splitwise"
+ },
+ {
+  "term": "NTP",
+  "full": "Network Time Protocol",
+  "note": "How machines correct their clocks against time servers; well-run servers still disagree by milliseconds.",
+  "lessonSlug": "distributed-fundamentals"
+ },
+ {
+  "term": "OCI",
+  "full": "Open Container Initiative",
+  "note": "Standards body (launched 2015) behind the image, runtime and distribution specifications that let Docker, containerd, CRI-O and registries interoperate.",
+  "lessonSlug": "containers"
+ },
+ {
+  "term": "OIDC",
+  "full": "OpenID Connect",
+  "note": "An identity layer on OAuth 2.0 that adds a signed ID token and a discovery document.",
+  "lessonSlug": "oauth-jwt"
+ },
+ {
+  "term": "OLAP",
+  "full": "Online Analytical Processing",
+  "note": "Scans and aggregates over millions of rows and a few columns; the workload column stores are built for.",
+  "lessonSlug": "storage-engines"
+ },
+ {
+  "term": "OLTP",
+  "full": "Online Transaction Processing",
+  "note": "Many small reads and writes that touch whole rows; the workload row stores are built for.",
+  "lessonSlug": "storage-engines"
+ },
+ {
+  "term": "OOP",
+  "full": "Object-Oriented Programming",
+  "note": "Organising code as objects that hide state behind methods; its four pillars are encapsulation, abstraction, inheritance and polymorphism.",
+  "lessonSlug": "oop-pillars"
+ },
+ {
+  "term": "ORM",
+  "full": "Object-Relational Mapper",
+  "note": "A library that maps objects to tables and generates SQL; a common source of N+1 query patterns.",
+  "lessonSlug": "query-execution"
+ },
+ {
+  "term": "OS",
+  "full": "Operating System",
+  "note": "Windows, Linux, macOS, Android, iOS.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "OTel",
+  "full": "OpenTelemetry",
+  "note": "The CNCF project, formed by merging OpenTracing and OpenCensus, that defines vendor-neutral APIs, SDKs and a Collector for traces, metrics and logs.",
+  "lessonSlug": "tracing"
+ },
+ {
+  "term": "OWASP",
+  "full": "Open Worldwide Application Security Project",
+  "note": "Publisher of the API Security Top 10 and the Cheat Sheet Series this module leans on.",
+  "lessonSlug": "api-security"
+ },
+ {
+  "term": "PACELC",
+  "full": "if Partition: Availability or Consistency; Else: Latency or Consistency",
+  "note": "Daniel Abadi's extension of CAP for the everyday, healthy case.",
+  "lessonSlug": "cap"
+ },
+ {
+  "term": "PB",
+  "full": "Petabyte",
+  "note": "About 10^15 bytes.",
+  "lessonSlug": "estimation-numbers"
+ },
+ {
+  "term": "PCI DSS",
+  "full": "Payment Card Industry Data Security Standard",
+  "note": "The card schemes' security rules for anyone who stores, processes or transmits card data.",
+  "lessonSlug": "design-ecommerce"
+ },
+ {
+  "term": "PII",
+  "full": "Personally Identifiable Information",
+  "note": "Any data that identifies a person directly or indirectly: names, id numbers, emails, phone numbers, location, online identifiers. Keep it out of logs or redact it at the source.",
+  "lessonSlug": "logging"
+ },
+ {
+  "term": "PKCE",
+  "full": "Proof Key for Code Exchange",
+  "note": "Binds an authorization code to the client that requested it through a hashed verifier (RFC 7636); required for public clients.",
+  "lessonSlug": "oauth-jwt"
+ },
+ {
+  "term": "PKI",
+  "full": "Public Key Infrastructure",
+  "note": "Certificate authorities, certificates, chains of trust and revocation: how a client decides that a public key belongs to a name.",
+  "lessonSlug": "encryption"
+ },
+ {
+  "term": "PoP",
+  "full": "Point of Presence",
+  "note": "A CDN edge location near users.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "PoPs",
+  "full": "Points of Presence",
+  "note": "CDN edge locations near users.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "PSP",
+  "full": "Payment Service Provider",
+  "note": "The company (Stripe, Razorpay, Adyen) that authorises, captures, refunds and settles payments on a merchant's behalf and tokenises card details so they never reach the merchant's servers.",
+  "lessonSlug": "design-payment-system"
+ },
+ {
+  "term": "QoE",
+  "full": "Quality of Experience",
+  "note": "What the viewer perceives: time to first frame, rebuffering and picture quality.",
+  "lessonSlug": "design-netflix"
+ },
+ {
+  "term": "QPS",
+  "full": "Queries Per Second",
+  "note": "Request rate. Also called RPS or TPS.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "QUIC",
+  "full": "QUIC (originally \"Quick UDP Internet Connections\")",
+  "note": "A transport built on UDP that powers HTTP/3.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "RAM",
+  "full": "Random Access Memory",
+  "note": "Fast, volatile main memory. About 1,000x faster than SSD for random reads.",
+  "lessonSlug": "latency"
+ },
+ {
+  "term": "RBAC",
+  "full": "Role-Based Access Control",
+  "note": "Users hold roles, roles hold permissions; good for coarse organisational rights, weak for per-object decisions.",
+  "lessonSlug": "authorization"
+ },
+ {
+  "term": "RED",
+  "full": "Rate, Errors, Duration",
+  "note": "Tom Wilkie's three metrics for every service: requests per second, failures per second, and the latency distribution.",
+  "lessonSlug": "metrics-monitoring"
+ },
+ {
+  "term": "REST",
+  "full": "Representational State Transfer",
+  "note": "An API style: resources with URLs, HTTP methods as verbs.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "RFC",
+  "full": "Request for Comments",
+  "note": "The numbered documents that define internet standards, such as RFC 9110 for HTTP.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "RLS",
+  "full": "Row-Level Security",
+  "note": "Database policies that filter every query by a predicate such as the current tenant id, so a missing WHERE clause returns nothing rather than another tenant's rows.",
+  "lessonSlug": "multi-tenancy"
+ },
+ {
+  "term": "RPC",
+  "full": "Remote Procedure Call",
+  "note": "Calling a function on another machine as if it were local.",
+  "lessonSlug": "grpc"
+ },
+ {
+  "term": "RPO",
+  "full": "Recovery Point Objective",
+  "note": "How much data you can afford to lose in a failure.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "RPS",
+  "full": "Requests Per Second",
+  "note": "Same idea as QPS.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "RTO",
+  "full": "Recovery Time Objective",
+  "note": "How long you can afford to be down.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "S3",
+  "full": "Simple Storage Service",
+  "note": "Amazon's object storage.",
+  "lessonSlug": "object-storage"
+ },
+ {
+  "term": "SaaS",
+  "full": "Software as a Service",
+  "note": "Software run by its vendor and used by many customers over the network; multi-tenancy is how one deployment serves them all.",
+  "lessonSlug": "multi-tenancy"
+ },
+ {
+  "term": "SHA-256",
+  "full": "Secure Hash Algorithm, 256-bit",
+  "note": "A cryptographic hash function.",
+  "lessonSlug": "url-shortener"
+ },
+ {
+  "term": "SKU",
+  "full": "Stock Keeping Unit",
+  "note": "One sellable variant of a product, such as a phone in one colour and storage size.",
+  "lessonSlug": "design-ecommerce"
+ },
+ {
+  "term": "SLA",
+  "full": "Service Level Agreement",
+  "note": "The contractual promise to customers, with penalties.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "SLI",
+  "full": "Service Level Indicator",
+  "note": "What you measure: uptime, p99 latency.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "SLO",
+  "full": "Service Level Objective",
+  "note": "Your internal target for an SLI.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "SMT",
+  "full": "Single Message Transform",
+  "note": "A Kafka Connect plug-in that rewrites each record in flight; Debezium's outbox event router is one.",
+  "lessonSlug": "cdc"
+ },
+ {
+  "term": "SNS",
+  "full": "Amazon Simple Notification Service",
+  "note": "AWS's managed pub/sub topic that pushes each message to every subscription, such as SQS queues, Lambda functions or HTTP endpoints.",
+  "lessonSlug": "brokers-compared"
+ },
+ {
+  "term": "SOA",
+  "full": "Service-Oriented Architecture",
+  "note": "2000s style in which enterprise applications were exposed as reusable services with contracts, usually integrated through a central bus.",
+  "lessonSlug": "modular-monolith-soa"
+ },
+ {
+  "term": "SOLID",
+  "full": "Single responsibility, Open/closed, Liskov substitution, Interface segregation, Dependency inversion",
+  "note": "Five object-oriented design principles collected by Robert C. Martin; the acronym was coined by Michael Feathers.",
+  "lessonSlug": "solid"
+ },
+ {
+  "term": "SPIFFE",
+  "full": "Secure Production Identity Framework for Everyone",
+  "note": "A standard for workload identities of the form spiffe://trust-domain/path, delivered as short-lived X.509 or JWT documents, so services can authenticate without a stored secret.",
+  "lessonSlug": "secrets-management"
+ },
+ {
+  "term": "SPOF",
+  "full": "Single Point of Failure",
+  "note": "One component whose failure takes everything down.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "SQL",
+  "full": "Structured Query Language",
+  "note": "The query language of relational databases.",
+  "lessonSlug": "sql-nosql"
+ },
+ {
+  "term": "SQS",
+  "full": "Amazon Simple Queue Service",
+  "note": "AWS's managed queue: consumers poll, a received message is hidden for the visibility timeout, and it is deleted only when the consumer says so.",
+  "lessonSlug": "brokers-compared"
+ },
+ {
+  "term": "SRE",
+  "full": "Site Reliability Engineering",
+  "note": "Google's discipline for running reliable production systems.",
+  "lessonSlug": "backpressure"
+ },
+ {
+  "term": "SRP",
+  "full": "Single Responsibility Principle",
+  "note": "A class should have one reason to change: gather what changes together, separate what changes for different reasons.",
+  "lessonSlug": "solid"
+ },
+ {
+  "term": "SSD",
+  "full": "Solid-State Drive",
+  "note": "Flash storage: faster than spinning disks, slower than RAM.",
+  "lessonSlug": "latency"
+ },
+ {
+  "term": "SSE",
+  "full": "Server-Sent Events",
+  "note": "A one-way server-to-client stream over HTTP.",
+  "lessonSlug": "websockets"
+ },
+ {
+  "term": "SSI",
+  "full": "Serializable Snapshot Isolation",
+  "note": "PostgreSQL's serializable mode: snapshot reads plus detection of dangerous read-write dependency patterns, aborting one transaction instead of blocking.",
+  "lessonSlug": "mvcc-isolation"
+ },
+ {
+  "term": "SSO",
+  "full": "Single Sign-On",
+  "note": "One identity provider authenticates the user and sends your app a signed assertion (SAML) or ID token (OIDC); you never see the password.",
+  "lessonSlug": "authentication"
+ },
+ {
+  "term": "SSTable",
+  "full": "Sorted String Table",
+  "note": "An immutable file of key-value pairs in key order, written by flushing a memtable; the on-disk unit of an LSM tree.",
+  "lessonSlug": "btree-vs-lsm"
+ },
+ {
+  "term": "STONITH",
+  "full": "Shoot The Other Node In The Head",
+  "note": "Fencing by force: the cluster powers off or disconnects a suspect node so it cannot keep writing.",
+  "lessonSlug": "leader-election"
+ },
+ {
+  "term": "STRIDE",
+  "full": "Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege",
+  "note": "Microsoft's six threat categories, each the violation of one security property; applied per trust boundary or per element.",
+  "lessonSlug": "threat-modelling"
+ },
+ {
+  "term": "SYN",
+  "full": "Synchronize",
+  "note": "The first packet of the TCP handshake.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "TB",
+  "full": "Terabyte",
+  "note": "About 10^12 bytes.",
+  "lessonSlug": "estimation-numbers"
+ },
+ {
+  "term": "TCP",
+  "full": "Transmission Control Protocol",
+  "note": "Reliable, ordered delivery with a handshake.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "TLD",
+  "full": "Top-Level Domain",
+  "note": "The last part of a name: .com, .in, .org.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "TLS",
+  "full": "Transport Layer Security",
+  "note": "Encryption, integrity and server authentication for connections.",
+  "lessonSlug": "http"
+ },
+ {
+  "term": "TPS",
+  "full": "Transactions Per Second",
+  "note": "Same idea as QPS.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "TSO",
+  "full": "Timestamp Oracle",
+  "note": "A central service that hands out monotonically increasing timestamps to order transactions; in TiDB it is provided by the Placement Driver.",
+  "lessonSlug": "distributed-sql"
+ },
+ {
+  "term": "TTL",
+  "full": "Time To Live",
+  "note": "How long a cached copy stays valid before it expires.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "UDP",
+  "full": "User Datagram Protocol",
+  "note": "Fast, connectionless, no delivery guarantees.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "UML",
+  "full": "Unified Modeling Language",
+  "note": "The standard notation for class, sequence and state diagrams; interviews use about a dozen of its symbols.",
+  "lessonSlug": "class-relationships-uml"
+ },
+ {
+  "term": "UPI",
+  "full": "Unified Payments Interface",
+  "note": "India's real-time bank-to-bank payment system, in which the payer approves a request in their bank app.",
+  "lessonSlug": "design-ecommerce"
+ },
+ {
+  "term": "URL",
+  "full": "Uniform Resource Locator",
+  "note": "A web address.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "USE",
+  "full": "Utilisation, Saturation, Errors",
+  "note": "Brendan Gregg's checklist for every resource: how busy it is, how much work is queued because it cannot be served, and how many errors it reports.",
+  "lessonSlug": "metrics-monitoring"
+ },
+ {
+  "term": "UUID",
+  "full": "Universally Unique Identifier",
+  "note": "A random 128-bit ID, practically never repeated.",
+  "lessonSlug": "idempotency"
+ },
+ {
+  "term": "VM",
+  "full": "Virtual Machine",
+  "note": "A software computer running on shared hardware; takes minutes to boot.",
+  "lessonSlug": "backpressure"
+ },
+ {
+  "term": "VPC",
+  "full": "Virtual Private Cloud",
+  "note": "A software-defined private network inside a cloud region with its own address range, subnets, route tables and gateways.",
+  "lessonSlug": "cloud-networking"
+ },
+ {
+  "term": "WAL",
+  "full": "Write-Ahead Log",
+  "note": "The sequential log a database flushes before confirming a commit; replayed after a crash.",
+  "lessonSlug": "acid"
+ },
+ {
+  "term": "XA",
+  "full": "X/Open XA interface (Distributed Transaction Processing: The XA Specification)",
+  "note": "The 1991 standard API between a transaction manager and resource managers for two-phase commit.",
+  "lessonSlug": "distributed-transactions"
+ },
+ {
+  "term": "XID",
+  "full": "Transaction ID",
+  "note": "PostgreSQL's 32-bit transaction identifier, stamped on row versions as xmin and xmax.",
+  "lessonSlug": "mvcc-isolation"
+ }
+]

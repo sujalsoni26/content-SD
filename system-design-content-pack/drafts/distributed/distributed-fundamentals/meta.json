@@ -1,0 +1,60 @@
+{
+  "slug": "distributed-fundamentals",
+  "title": "What makes a system distributed",
+  "moduleId": "distributed",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Once the app runs on more than one machine, the network between them can lose, delay or duplicate messages, and no machine can tell a slow neighbour from a dead one.",
+  "summary": "A distributed system is many machines that share nothing but an unreliable network. Design for partial failure: a timeout is a guess, clocks disagree, and every missing reply has at least three explanations.",
+  "catTip": "I meow at the door. No answer. Are the humans out, asleep, or did my meow get lost on the way? I cannot tell. That is a distributed system, and I am its very small client.",
+  "recall": {
+    "q": "What is partial failure, and why does it make distributed systems hard?",
+    "a": "Some machines or links fail while the rest keep working. Because the only signal is silence, no node can tell a crashed peer from a slow one, so every decision about failure is a timeout-based guess that can be wrong in either direction."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "On one machine a call either returns or the process crashes; across a network a call can hang, succeed silently or hit a machine that is alive but unreachable, and code that assumes otherwise double-charges, deadlocks or declares healthy servers dead.",
+    "tradeoffs": "Every defence against an unreliable network, such as timeouts, retries, acknowledgements and replication, costs latency, duplicates or complexity, so you choose which failures to tolerate rather than eliminating them.",
+    "explainSimply": "A distributed system is several computers that can only talk by sending messages, and the messages behave like letters: they can be late, lost or arrive twice. Nobody has a master clock, and nobody can see whether a silent neighbour is dead or just slow. Designing for that uncertainty is what this whole track is about.",
+    "hint": "Think about what a missing reply tells you, then list everything it does not tell you."
+  },
+  "meow": "Meow sent. No reply. Lost meow, lost reply or slow human? A timeout is a guess, purr-haps a wrong one.",
+  "quiz": [
+    {
+      "prompt": "A service calls a payment API and gets no response within its timeout. Which statement is correct?",
+      "options": [
+        "The payment definitely did not happen, so the service should charge again",
+        "The payment definitely happened, so the service should mark the order paid",
+        "The request may have been lost, the payment may have happened with the reply lost, or the API may be slow; the caller cannot tell which",
+        "The network must be partitioned, so the service should fail over to another region"
+      ],
+      "answer": 2,
+      "explanation": "A timeout only says that no reply arrived in time. Idempotency keys and status queries exist precisely because the caller cannot distinguish a lost request from a lost reply or a slow server."
+    },
+    {
+      "prompt": "Which of these is one of the fallacies of distributed computing?",
+      "options": ["Latency is never zero", "The network is reliable", "Bandwidth is finite", "Topology changes over time"],
+      "answer": 1,
+      "explanation": "The fallacies are the false assumptions: the network is reliable, latency is zero, bandwidth is infinite, and so on. The other three options are the true statements a design should respect."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A remote call times out. Name three different things that could have happened.",
+      "a": "The request was lost; the remote processed it but the reply was lost; the remote is alive but slow (or crashed). The caller cannot tell which, so writes need idempotency keys and a way to query status."
+    },
+    {
+      "q": "Which two fallacies of distributed computing does a retry storm rely on?",
+      "a": "\"The network is reliable\" (so a failure must be the server's fault and retrying is harmless) and \"latency is zero\" (so retrying immediately costs nothing). Backoff with jitter rejects both."
+    }
+  ],
+  "glossary": [
+    { "term": "NTP", "full": "Network Time Protocol", "note": "How machines correct their clocks against time servers; well-run servers still disagree by milliseconds." }
+  ],
+  "sources": [
+    { "title": "Martin Kleppmann, Designing Data-Intensive Applications, ch. 8 \"The Trouble with Distributed Systems\" (O'Reilly, 2017)", "url": "https://dataintensive.net/", "accessed": "2026-11-22", "supports": "the six outcomes of an unanswered request; clock drift and process pauses; partial failure", "status": "reference" },
+    { "title": "L. Peter Deutsch, \"The Eight Fallacies of Distributed Computing\" (1994; eighth fallacy added by James Gosling)", "url": "https://en.wikipedia.org/wiki/Fallacies_of_distributed_computing", "accessed": "2026-11-22", "supports": "the list of eight fallacies and their attribution", "status": "secondary" },
+    { "title": "Fischer, Lynch, Paterson, \"Impossibility of Distributed Consensus with One Faulty Process\", JACM 32(2), 1985", "url": "https://dl.acm.org/doi/10.1145/3149.214121", "accessed": "2026-11-22", "supports": "the FLP result summarised in the DeepDive", "status": "reference" },
+    { "title": "Akkoyunlu, Ekanadham, Huber, \"Some constraints and tradeoffs in the design of network communications\", SOSP 1975 (origin of the Two Generals' Problem)", "url": "https://dl.acm.org/doi/10.1145/800213.806523", "accessed": "2026-11-22", "supports": "the Two Generals' Problem analogy", "status": "reference" }
+  ]
+}

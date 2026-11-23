@@ -1,0 +1,139 @@
+An **error-handling strategy** decides, for every way a function can fail, who finds out, how, and what they can do about it. Java gives you two mechanisms: **exceptions**, where control jumps to the nearest handler, and **result types** such as `Optional`, where the failure is a value the caller has to look at.
+
+Code most of us have written at least once:
+
+```java
+Order load(String id) {
+    try {
+        return repo.find(id);              // returns null when missing; the NullPointerException appears three layers up
+    } catch (Exception e) {
+        log.error("error");                // swallowed: no id, no cause, and the caller believes it succeeded
+        return null;
+    }
+}
+```
+
+Four mistakes in seven lines: absence is signalled by `null`, so the failure surfaces far from its cause; `catch (Exception e)` treats bugs and infrastructure failures the same; the log line carries nothing useful at 3 a.m.; and the method returns normally, so the caller continues as if an order existed.
+
+## Exceptions or values?
+
+The split that works: a value when the failure is an expected outcome the caller will branch on, an exception when the caller cannot sensibly continue.
+
+<Comparison>
+
+<ComparisonItem title="Result or Optional">
+
+For normal outcomes: a lookup finds nothing, a coupon has expired, a username is taken.
+
+The type forces the caller to deal with it: an `Optional` cannot be dereferenced by accident. Java's API note positions `Optional` primarily as a method return type for "no result".
+
+</ComparisonItem>
+
+<ComparisonItem title="Exception">
+
+For failures that stop the current operation: the database is unreachable, an invariant is broken, an argument is invalid.
+
+The handler can be far away, usually at the request boundary, so business code stays free of plumbing. The cost is invisible control flow: no signature says what an unchecked exception does.
+
+</ComparisonItem>
+
+</Comparison>
+
+Java divides exceptions into **checked**, which the compiler forces callers to catch or declare in a `throws` clause, and **unchecked**, the subclasses of `RuntimeException` and `Error`, which propagate without declaration. The language intended checked exceptions for recoverable conditions; the modern consensus is narrower. Checked exceptions do not compose with lambdas and streams and leak implementation details through every layer that must declare them, so most new code and frameworks throw documented unchecked exceptions, keeping checked ones for the rare case where every caller must decide. A widely held judgement, not a language rule.
+
+<Mermaid caption="Choosing how a failure travels. The first question is whether the caller will branch on the outcome or cannot continue at all." chart={`flowchart TD
+    Q{"How can this operation fail?"} --> A["An expected outcome the caller branches on"]
+    Q --> B["The caller cannot sensibly continue"]
+    A --> A1["Return Optional, an empty collection or a result type"]
+    B --> B1{"Whose fault?"}
+    B1 -->|"the caller's: bad argument, broken invariant"| B2["Throw an unchecked exception at once: fail fast"]
+    B1 -->|"infrastructure: timeout, unreachable, 5xx"| B3["Wrap with context and rethrow, with a timeout and a retry policy at the call site"]
+    B2 --> L["Translate and log once, with ids, at the boundary"]
+    B3 --> L
+`} />
+
+## Validate at the boundary, fail fast
+
+Check inputs once, where they enter: the request handler, the message consumer, the constructor; inside, assume they are valid. A record's compact constructor makes an invariant impossible to bypass, and `orElseThrow` turns absence into a failure exactly where absence stops being acceptable:
+
+```java
+record Money(long paise) {
+    Money { if (paise < 0) throw new IllegalArgumentException("amount must be >= 0, got " + paise); }
+}
+
+Optional<Order> find(OrderId id);                                       // absence is normal here
+
+Order load(OrderId id) {
+    return repo.find(id).orElseThrow(() -> new OrderNotFound(id));      // and exceptional here
+}
+```
+
+**Fail fast** means the stack trace points at the cause: a negative amount dies in the `Money` constructor, not in the ledger a week later.
+
+## Never swallow; wrap with context
+
+Catch and continue only when you can actually handle it; otherwise add what you know and rethrow, keeping the original as the cause so the chain survives:
+
+```java
+try {
+    gateway.charge(order);
+} catch (GatewayTimeout e) {
+    throw new PaymentFailed("charge for order " + order.id() + " via " + gateway.name(), e);
+}
+```
+
+Catch broadly in one place: the top-level boundary that turns any failure into a response or a dead-lettered message and logs it once. A `catch` in every layer that logs and rethrows produces five log lines for one failure and no new information. Thread pools swallow too: an exception inside a task passed to `submit()` is stored in its `Future` and vanishes unless someone calls `get()` (see [Concurrency and thread safety](/learn/concurrency-basics)).
+
+## Retries and timeouts in code
+
+Every remote call needs a timeout, and only some deserve a retry. The system-level rules live in [Timeouts and retries](/learn/timeouts-retries) and [Circuit breaker](/learn/circuit-breaker); at code level they become three decisions at the call site:
+
+```java
+for (int attempt = 1; ; attempt++) {
+    try { return client.send(request); }                       // request carries a timeout and an idempotency key
+    catch (TransientFailure e) {
+        if (attempt == 3 || !request.isIdempotent()) throw e;
+        backoffWithJitter(attempt);
+    }
+}
+```
+
+Which failures are transient (a timeout, a 503) and which are not (a 400). How many attempts, with what backoff. And whether the operation is safe to repeat: a retried charge without an idempotency key is a double charge (see [Idempotency](/learn/idempotency)).
+
+| Situation | Represent it as | Example |
+| --- | --- | --- |
+| Absence is a normal outcome | `Optional` or an empty collection | find an order by id |
+| The caller will choose between outcomes | A result type, or a specific documented exception | insufficient balance |
+| A bug in the caller | Unchecked exception thrown at once | negative amount, null where not allowed |
+| Infrastructure failure | Unchecked, wrapped with context; timeout and retry policy at the call site | gateway timeout |
+
+## Logging context
+
+A log line is for the person debugging without you. Log once, at the boundary, with the identifiers that find the request again: order id, customer id, trace id, attempt number. Log the exception as an object so the stack trace and cause chain survive (see [Logging](/learn/logging) and [Tracing](/learn/tracing)).
+
+<Callout type="analogy" title="Airport security">
+
+Validation at the boundary is airport security: everyone is screened once at the entrance, and inside nobody checks again. Swallowing an exception is a passenger who vanishes between check-in and the gate with no record anywhere. Where the analogy fails: a terminal has one entrance; a service has several (the HTTP handler, the queue consumer, the scheduled job), and each must validate.
+
+</Callout>
+
+<Callout type="interview" title="Say where errors stop">
+
+Three sentences cover it: "Validate at the edge and construct valid objects, so inner code assumes valid input. Propagate unchecked exceptions with context and translate them in one place. Remote calls have timeouts; retry only transient errors on idempotent operations, with backoff." Then: log once, with ids.
+
+</Callout>
+
+<DeepDive title="Go deeper: a sealed Result type">
+
+Java 17's sealed interfaces and records let you write a result type whose cases the compiler knows:
+
+```java
+sealed interface Charge permits Charge.Ok, Charge.Declined {
+    record Ok(Receipt receipt) implements Charge {}
+    record Declined(String reason) implements Charge {}
+}
+```
+
+A pattern-matching `switch` over a `Charge` (Java 21) must handle both cases or fail to compile, which is the appeal: the outcomes are in the signature. The cost: every call site unwraps, and a third outcome, say `Pending`, changes every switch. Use it for the few operations whose outcomes callers really branch on; keep exceptions for everything that should not happen.
+
+</DeepDive>

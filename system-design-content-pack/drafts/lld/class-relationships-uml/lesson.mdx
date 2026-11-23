@@ -1,0 +1,123 @@
+A **class diagram** shows the classes in a design and how they relate; a **sequence diagram** shows the objects of one use case calling each other in time order. Both belong to the **Unified Modeling Language (UML)**, a standard with hundreds of symbols of which interviews use about a dozen: six relationships, multiplicity, visibility, and the two diagrams you will draw in every low-level design.
+
+## Six ways two classes can be related
+
+Every line in a class diagram answers one question: how does an object of class A come to know about an object of class B, and for how long?
+
+| Relationship | Meaning | Arrow | In code | Example |
+| --- | --- | --- | --- | --- |
+| Dependency | A uses B briefly: a parameter, a local, a return type | Dashed arrow `..>` | In a method signature or body, not a field | `Library` creates and returns a `Loan` |
+| Association | A holds a reference to B over time | Solid arrow `-->` | A field | `Member` has a list of `Loan`s |
+| Aggregation | A has-a B, but B lives on without A | Hollow diamond on A `o--` | A field holding an object created elsewhere | `Shelf` holds `Item`s that exist when off the shelf |
+| Composition | A owns B; B cannot exist without A | Filled diamond on A `*--` | A field that A creates and nobody else references | `Library` owns its `Shelf`s |
+| Inheritance | B is-an A and inherits its implementation | Hollow triangle at A `<\|--` | `class Book extends Item` | `Book` and `Dvd` are `Item`s |
+| Realisation | B promises A's contract without inheriting code | Dashed line, hollow triangle `..\|>` | `class StandardPolicy implements LoanPolicy` | A policy implements an interface |
+
+Inheritance and realisation are the is-a relationships from [OOP pillars](/learn/oop-pillars); the other four are about knowing and owning. The two diamonds are the pair people confuse, and the test is lifetime: delete the whole, and do the parts survive? A shelf that is removed leaves its books intact (aggregation); a library that closes takes its shelves with it (composition). Fowler quotes Jim Rumbaugh describing aggregation as a modelling placebo; in an interview, say the lifetime rule in words rather than arguing about diamonds.
+
+## Multiplicity and visibility
+
+**Multiplicity** is written at each end of a line and says how many objects take part: `1` exactly one, `0..1` optional, `*` or `0..*` any number, `1..*` at least one, `2..4` a range. Read it at the far end: `Member "1" --> "0..*" Loan` means one member holds any number of loans and each loan belongs to exactly one member. Multiplicity is where business rules hide: `0..5` on the loan end would encode "at most five items out at once" directly in the picture.
+
+**Visibility** prefixes each member: `+` public, `-` private, `#` protected, `~` package. Draw the public methods and the private fields that matter to the design, and leave out getters, setters and constructors: the diagram is for decisions, not completeness.
+
+<Callout type="analogy" title="A family tree, then a phone call">
+
+A class diagram is a family tree combined with an address book: who is a kind of whom, and who keeps whose number. A sequence diagram is the transcript of one phone call, read top to bottom. Where the analogy stops: the lines in a class diagram are knowledge, not calls; the calls only appear in the sequence.
+
+</Callout>
+
+## Reading a class diagram
+
+<Mermaid caption="A library in one diagram. Each relationship kind appears once and is labelled with its name; read the multiplicity at the far end of each line." chart={`classDiagram
+    direction LR
+    class LoanPolicy {
+        <<interface>>
+        +loanDays(Member m, Item i) int
+    }
+    class Item {
+        <<abstract>>
+        #String title
+        +isLendable() boolean
+    }
+    class Library {
+        -String name
+        +checkout(Member m, Item i) Loan
+    }
+    class Loan {
+        -LocalDate dueDate
+        +isOverdue() boolean
+    }
+    class Member {
+        -String id
+        +canBorrow() boolean
+    }
+    Library "1" *-- "1..*" Shelf : composition
+    Shelf "1" o-- "0..*" Item : aggregation
+    Item <|-- Book : inheritance
+    Item <|-- Dvd
+    Member "1" --> "0..*" Loan : association
+    Loan "0..*" --> "1" Item : association
+    StandardPolicy ..|> LoanPolicy : realisation
+    Library ..> Loan : dependency
+    Library --> LoanPolicy : association
+`} />
+
+Read it in three passes. First the nouns: nine classes, one an interface and one abstract. Second the triangles: `Book` and `Dvd` are kinds of `Item`, and `StandardPolicy` is one way of being a `LoanPolicy`. Third the diamonds and arrows, from the plain end towards the diamond: shelves are parts of the library and die with it; items sit on shelves but survive being taken off; a member knows their loans; each loan points at exactly one item. The dashed arrow from `Library` to `Loan` says the library creates loans inside `checkout` without keeping them; the member holds the list.
+
+The diagram maps straight onto code:
+
+```java
+final class Library {
+    private final List<Shelf> shelves = new ArrayList<>();   // composition: created and owned here
+    private final LoanPolicy policy;                         // association: handed in, outlives us
+    Library(LoanPolicy policy) { this.policy = policy; }
+    Loan checkout(Member member, Item item) {                 // Loan: a dependency, created and returned
+        int days = policy.loanDays(member, item);
+        return new Loan(item, LocalDate.now().plusDays(days));
+    }
+}
+```
+
+## One use case as a sequence diagram
+
+A class diagram cannot show order. For that, pick one use case, usually the main one, and draw a **sequence diagram**: each box across the top is an object or an actor, the dashed vertical line beneath it is its **lifeline**, time runs downwards, a solid arrow is a call and a dashed arrow is the reply.
+
+<Mermaid caption="Checking out an item. Read downwards: the library asks the item, the policy and the notifier in turn, and the branch shows the rejected case." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant M as Member
+    participant L as Library
+    participant I as Item
+    participant P as LoanPolicy
+    participant N as Notifier
+    M->>L: checkout(member, item)
+    L->>I: isLendable()
+    I-->>L: true or false
+    alt lendable and member may borrow
+        L->>P: loanDays(member, item)
+        P-->>L: 14
+        Note over L: new Loan(item, today + 14 days)
+        L->>N: dueDateReminder(member, loan)
+        L-->>M: Loan
+    else reference copy or member over limit
+        L-->>M: CheckoutRejected
+    end
+`} />
+
+Arrows *into* a lifeline are that object's responsibilities: `Library` receives `checkout`, so it owns what a checkout means; `LoanPolicy` receives `loanDays`, so the loan period is its decision alone. Arrows *out of* one box to many others mark the coordinator, and ten outgoing arrows is the first sign of a class doing too much. The `alt` block is the edge case made visible: an interviewer who sees the rejected branch knows you thought about it.
+
+## Drawing them in an interview
+
+Draw five to eight classes, not twenty; the fields and methods that carry a decision, not the getters; multiplicity only where it encodes a rule; one sequence for the main flow and, if there is time, one for the trickiest edge case.
+
+<Callout type="interview" title="Say the relationship out loud">
+
+"A `Loan` refers to an `Item` but does not own it, so returning the book deletes the loan and leaves the item." That sentence is the whole point of the arrow; drawing it without saying it leaves the interviewer to guess whether you know the difference.
+
+</Callout>

@@ -1,0 +1,68 @@
+{
+  "slug": "tracing",
+  "title": "Distributed tracing",
+  "moduleId": "operations",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "A checkout takes two seconds across nine services and nobody can say which hop or query spent the time, because each service sees only its own slice.",
+  "summary": "A trace is the tree of spans one request creates across services, joined by a trace id carried in the W3C traceparent header. OpenTelemetry produces it, sampling keeps it affordable, and the waterfall view shows where the time went.",
+  "catTip": "Every room my mouse runs through gets the same tracking number scratched on the floor. Afterwards I read the trail like a map: which room cost the most time, and where it went round in forty tiny circles.",
+  "recall": {
+    "q": "How does a span in the payment service end up in the same trace as the gateway's span?",
+    "a": "The gateway sends a traceparent header carrying the trace id, its own span id and a sampled flag. The payment service reads it, creates a child span with that span id as parent and the same trace id, and forwards a new traceparent downstream; the backend stitches the spans together by trace id."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without propagated context each service records its timings in isolation, so a slow request becomes a nine-way argument, N+1 query storms hide in plain sight, and the one failing request in a thousand leaves no connected record.",
+    "tradeoffs": "Recording every span of every request is unaffordable, so you sample and lose detail; tail sampling needs stateful collectors; and context must cross every hop, including message queues, or the trace breaks in two.",
+    "explainSimply": "A trace follows one request like a parcel with a tracking number scanned at every depot. Each service adds its own step with a start and end time, and the tracking number travels in a header so the steps can be stitched together. The result reads like a timeline that shows exactly where the waiting happened.",
+    "hint": "Think about what has to travel with the request so that two services can agree they worked on the same one."
+  },
+  "meow": "One tracking number, many depots, one timeline. The slow depot cannot hide from the waterfall.",
+  "quiz": [
+    {
+      "prompt": "A request arrives with the header traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01. What does the final 01 mean?",
+      "options": [
+        "The trace contains one span so far",
+        "The caller is recording this trace, so this service should record its spans too",
+        "This is version 1 of the Trace Context specification",
+        "The request is a retry of an earlier attempt"
+      ],
+      "answer": 1,
+      "explanation": "The last field is trace-flags, and its lowest bit is the sampled flag; the version is the first field, 00. Nothing in the header counts spans or marks retries."
+    },
+    {
+      "prompt": "You want to keep every trace that contains an error while recording only 1% of normal traffic. Which approach does this require?",
+      "options": [
+        "Head-based sampling at 1%, since errors will be represented in proportion",
+        "Tail-based sampling in a collector that sees all the spans of a trace before deciding",
+        "Head-based sampling at 100% in the services that produce most errors",
+        "Logging the errors instead, since traces cannot capture failures"
+      ],
+      "answer": 1,
+      "explanation": "Whether a trace contains an error is only known once its spans have completed, so the decision must be made at the tail by a collector holding the whole trace. Head-based sampling at 1% is the strongest distractor: it keeps 1% of error traces too, which means losing 99 of every 100 failures you wanted to see."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In a waterfall you see 40 identical 10 ms database spans in a staircase under one handler span. Name the pattern and the fix.",
+      "a": "The N+1 pattern: one query per item in a loop. Batch the lookups into a single query or bulk call (or fetch them in parallel), and the staircase collapses into one short span."
+    },
+    {
+      "q": "Why does tail-based sampling need all spans of a trace to reach the same collector instance, and how is that arranged at scale?",
+      "a": "The decision depends on the whole trace (an error in any span, total latency), and spans arrive from many services. A first tier of collectors routes spans by trace id to a second tier that buffers each trace for a decision window (30 seconds by default in the OpenTelemetry Collector) and then keeps or drops it whole."
+    }
+  ],
+  "glossary": [
+    { "term": "OTel", "full": "OpenTelemetry", "note": "The CNCF project, formed by merging OpenTracing and OpenCensus, that defines vendor-neutral APIs, SDKs and a Collector for traces, metrics and logs." }
+  ],
+  "sources": [
+    { "title": "W3C Recommendation, \"Trace Context\" (23 November 2021)", "url": "https://www.w3.org/TR/trace-context/", "accessed": "2026-11-22", "supports": "traceparent format version-trace-id-parent-id-trace-flags; field sizes 1, 16, 8 and 1 bytes; version 00; sampled flag as the least significant bit; all-zero ids invalid; the example header value; tracestate for vendor-specific pairs", "status": "verified" },
+    { "title": "OpenTelemetry docs, \"Traces\" (concepts)", "url": "https://opentelemetry.io/docs/concepts/signals/traces/", "accessed": "2026-11-22", "supports": "span fields (name, parent span id, timestamps, context, attributes, events, links, status); span kinds Client, Server, Internal, Producer, Consumer; the root span has no parent; context propagation as the enabling concept", "status": "verified" },
+    { "title": "OpenTelemetry docs, \"Sampling\" (concepts)", "url": "https://opentelemetry.io/docs/concepts/sampling/", "accessed": "2026-11-22", "supports": "head sampling decides as early as possible and cannot use whole-trace data; tail sampling considers all or most spans, can keep every error, and requires stateful components; Collector sampling processors", "status": "verified" },
+    { "title": "OpenTelemetry specification, \"Tracing SDK\" (Sampling)", "url": "https://opentelemetry.io/docs/specs/otel/trace/sdk/", "accessed": "2026-11-22", "supports": "the default sampler is ParentBased(root=AlwaysOn); ratio-based sampling must be deterministic on the trace id and is recommended for root spans with ParentBased", "status": "verified" },
+    { "title": "OpenTelemetry Collector Contrib, \"Tail Sampling Processor\" README", "url": "https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/processor/tailsamplingprocessor/README.md", "accessed": "2026-11-22", "supports": "decision_wait default 30 s; policies such as status_code and latency; all spans of a trace must reach the same collector instance; two collector layers with a load-balancing exporter", "status": "verified" },
+    { "title": "OpenTelemetry docs, \"What is OpenTelemetry?\"", "url": "https://opentelemetry.io/docs/what-is-opentelemetry/", "accessed": "2026-11-22", "supports": "vendor- and tool-agnostic framework of APIs, SDKs and a Collector; a CNCF project formed by merging OpenTracing and OpenCensus; covers traces, metrics and logs; not an observability backend", "status": "verified" },
+    { "title": "Sigelman et al., \"Dapper, a Large-Scale Distributed Systems Tracing Infrastructure\", Google, 2010", "url": "https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/", "accessed": "2026-11-22", "supports": "spans with a span id and parent id forming a trace tree; adequate trace data for high-volume services at a sampling rate as low as 1/1024 (read from the paper's PDF)", "status": "verified" }
+  ]
+}

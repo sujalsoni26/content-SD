@@ -1,0 +1,61 @@
+{
+  "slug": "lld-parking-lot",
+  "title": "LLD: Parking lot",
+  "moduleId": "lld-practice",
+  "level": "intermediate",
+  "minutes": 13,
+  "problem": "Four entry gates hand out spots at once; without one owner of spot state, two cars are sent to the same bay and nobody can price a lost ticket.",
+  "summary": "Model floors, spots, vehicles and tickets as plain entities, put spot allocation and pricing behind two Strategy interfaces, and make each spot claim itself atomically so concurrent gates never share a bay.",
+  "catTip": "I treat every warm laptop as a parking spot: check it is free, claim it in one pounce, nap. Two cats pouncing on the same laptop is a race condition, and I always win the compare-and-set.",
+  "recall": {
+    "q": "What is the key design decision in the parking-lot case study, and how does it stop two entry gates from assigning the same spot?",
+    "a": "Keep the entities (floors, spots, tickets) apart from the decisions (SpotAllocationStrategy, PricingStrategy), and let the allocation strategy claim the spot it finds with an atomic compareAndSet on the spot's occupied flag. Finding and claiming become one step, so there is no gap for a second gate to slip into."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without one owner of spot state and an atomic claim, two gates can issue tickets for the same bay, and pricing rules hard-coded into the lot change every time finance changes its mind.",
+    "tradeoffs": "Two Strategy interfaces and a per-spot atomic flag add classes, make 'nearest free spot' best-effort under contention, and the in-memory design must move to a database once gates span machines.",
+    "explainSimply": "Picture a car park where every bay has a light that turns red the instant a car is sent to it. Gate staff pick from the green bays, and the light switches so fast that two gates can never pick the same one. How bays are chosen and how much you pay are separate rule books that can be rewritten without touching the bays.",
+    "hint": "Separate what the lot has from what the lot decides, then ask at which exact moment a spot stops being free."
+  },
+  "meow": "Spot free? Compare, set, mine. Other cat gets Optional.empty and a purr-fectly polite 'lot full'.",
+  "quiz": [
+    {
+      "prompt": "Two entry gates ask for a spot at the same instant and both are handed bay F2-041. Which fix removes the race without serialising every gate on one lock?",
+      "options": [
+        "Mark the spot's occupied field volatile so both gates see the latest value",
+        "Have the allocation strategy claim each candidate with compareAndSet(false, true) and move on when the claim fails",
+        "Make ParkingLot.park synchronized so only one gate runs at a time",
+        "Let the second gate retry after a random back-off"
+      ],
+      "answer": 1,
+      "explanation": "compareAndSet makes the check and the claim one indivisible step, so exactly one gate gets true for a given bay. A synchronized park also removes the race but makes every gate take turns on one lock, and volatile fixes visibility, not the gap between checking and setting."
+    },
+    {
+      "prompt": "Finance wants hourly pricing on weekdays, a flat rate at weekends and a monthly pass, and each rule will change again next quarter. Where should the rules live?",
+      "options": [
+        "In a switch inside Ticket, since the ticket knows its entry time",
+        "In subclasses of ParkingLot that override a pricing step (Template Method)",
+        "Behind a PricingStrategy interface with one class per rule, chosen at the composition root",
+        "In a Singleton PricingConfig that the exit gate reads"
+      ],
+      "answer": 2,
+      "explanation": "Each rule becomes a small class tested alone, and adding one edits nothing that already works. Template Method also varies the algorithm, but through inheritance, so every rule becomes a ParkingLot subclass and two rules cannot be combined on one lot."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In the parking lot, why does SpotAllocationStrategy claim the spot instead of returning a free one for ParkingLot to claim?",
+      "a": "Returning a free spot and claiming it later is a check-then-act with a gap in which another gate can take the same spot. Claiming inside the search with tryOccupy makes find-and-claim one step; a failed claim simply moves the search to the next candidate."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.AtomicBoolean", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicBoolean.html", "accessed": "2026-11-22", "supports": "compareAndSet atomically sets the value only if the current value equals the expected value, so tryOccupy succeeds for exactly one caller", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ConcurrentHashMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html", "accessed": "2026-11-22", "supports": "put, get and remove are safe for concurrent callers; retrieval operations do not block", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.AtomicInteger", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicInteger.html", "accessed": "2026-11-22", "supports": "incrementAndGet and decrementAndGet update the per-floor free counters atomically", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.locks.ReentrantLock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/locks/ReentrantLock.html", "accessed": "2026-11-22", "supports": "the per-floor lock alternative: lock() followed by try/finally unlock()", "status": "verified" },
+    { "title": "Java SE 21 API: java.time.Clock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/Clock.html", "accessed": "2026-11-22", "supports": "injecting a Clock so tests can use a fixed or offset clock instead of the system time", "status": "verified" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, Facade, Factory Method, Singleton, Observer and Builder as used and as deliberately not used here", "status": "reference" }
+  ]
+}

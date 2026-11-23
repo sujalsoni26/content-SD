@@ -1,0 +1,93 @@
+A **service mesh** takes the networking concerns of service-to-service calls (encryption, retries, timeouts, circuit breaking, traffic splitting, telemetry) out of every application and puts them into proxies that the platform runs beside each service, configured from one **control plane**. The application talks to localhost and is allowed to believe the network is simple.
+
+## Sidecars and the two planes
+
+In a Kubernetes cluster (see [Kubernetes](/learn/kubernetes)) the mesh injects a proxy container, the **sidecar**, into every pod. Outbound calls from the app are redirected through its own sidecar; inbound calls arrive through the destination's sidecar. The proxies are the **data plane**: they carry the bytes and make the per-request decisions. The control plane never touches a request. It watches the cluster, turns your routing and policy objects into proxy configuration, pushes that configuration out, and acts as the certificate authority that gives every proxy an identity.
+
+Istio's data plane is **Envoy**, an out-of-process proxy that works with any language and can be upgraded without touching application code; its control plane is one binary, `istiod`, doing discovery, configuration and certificates. Linkerd's control plane is a destination service (discovery, per-route retries and timeouts), an identity service (certificates) and a proxy injector; its data plane is `linkerd2-proxy`, a small single-purpose proxy written in Rust, chosen deliberately over Envoy.
+
+<Mermaid caption="Two services with sidecars. Application traffic (solid) passes through two proxies and is encrypted between them; the control plane (dotted) pushes configuration and certificates and never sits in the request path." chart={`flowchart LR
+    CP["Control plane: istiod or Linkerd"]
+    subgraph PA["Pod: orders"]
+        A["orders app"] --> SA["sidecar proxy"]
+    end
+    subgraph PB["Pod: payments"]
+        SB["sidecar proxy"] --> B["payments app"]
+    end
+    SA -->|"mTLS"| SB
+    CP -.->|"config, certificates"| SA
+    CP -.->|"config, certificates"| SB
+    SA -.->|"metrics, traces, logs"| T["Telemetry backend"]
+    SB -.->|"metrics, traces, logs"| T
+`} />
+
+## What moves out of application code
+
+| Concern | In each service, before | In the mesh, after |
+| --- | --- | --- |
+| Encryption and identity | A TLS library per language, certificates managed by hand | Mutual TLS between proxies; certificates issued and rotated by the control plane |
+| Retries | Whatever each client library did | Declared per route; Istio retries twice by default, with a per-try timeout you set |
+| Timeouts | Library defaults, rarely tuned | Declared per route; Istio's HTTP timeout is off by default, so set one |
+| Circuit breaking | A resilience library per service (see [Circuit breaker](/learn/circuit-breaker)) | Connection and request limits, plus outlier detection that ejects a host after consecutive errors |
+| Canary traffic | Deployment tricks | Weighted routing between versions: 90/10, then 50/50 |
+| Telemetry | Instrument every service by hand | Metrics, access logs and trace spans from the proxies; the app only forwards trace headers (see [Tracing](/learn/tracing)) |
+
+An Istio route that does three of these at once:
+
+```yaml
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: payments
+spec:
+  hosts:
+    - payments
+  http:
+    - timeout: 2s
+      retries:
+        attempts: 2
+        perTryTimeout: 800ms
+      route:
+        - destination:
+            host: payments
+            subset: v1
+          weight: 90
+        - destination:
+            host: payments
+            subset: v2
+          weight: 10
+```
+
+Two cautions. Retries stack: three attempts in the application times three in the mesh turn one user action into nine requests to a service that is already struggling; retry in one layer only and keep the operation idempotent (see [Idempotency](/learn/idempotency)). And Istio's mesh-wide mutual TLS defaults to PERMISSIVE, which accepts plain text alongside mTLS so that workloads can be migrated gradually; until you set STRICT, the encryption exists in the diagram but not necessarily on the wire.
+
+<Callout type="analogy" title="A receptionist at every office door">
+
+Before the mesh, every team hired its own security guard and bookkeeper, in its own language. The mesh gives every office door a receptionist trained by head office: she checks the visitor's ID, logs the visit, and redials if the line drops. The cost is an extra desk per office and a walk past two receptionists for every visit. Where the analogy fails: receptionists are visible, while sidecars are transparent to the application, which makes them easy to forget when debugging.
+
+</Callout>
+
+## What it costs
+
+- **Two extra hops per call.** Client sidecar and server sidecar each add proxying time. Small per hop, visible at the tail of a chatty call chain; measure p99, not the mean.
+- **Resources.** A proxy per pod means CPU and memory that scale with pod count. Istio's own announcement of its sidecar-less mode lists "large CPU and memory requirements" per workload among the reasons it was built.
+- **Operations.** A control plane to run and upgrade; in sidecar mode a proxy upgrade means restarting every pod; one more suspect in every incident; and the control plane becomes a dependency of every deploy, since a new pod cannot join the mesh without configuration and a certificate.
+
+## Sidecar-less: ambient mode
+
+Istio's **ambient mode**, generally available since Istio 1.24 in November 2024, drops the per-pod proxy. A per-node proxy called **ztunnel** handles mutual TLS, Layer 4 authorisation and telemetry for every pod on the node; an optional per-namespace **waypoint** proxy, which is Envoy, adds Layer 7 features (routing, retries, fine-grained policy) only where a namespace needs them. No injection, no pod restarts on upgrade, and proxy memory grows with nodes rather than pods. Sidecar mode remains supported; the project's words are that sidecars "are not going away". Linkerd made the opposite bet: keep the sidecar, make it tiny.
+
+## When a mesh is worth it
+
+Worth it when you have many services in several languages, a requirement for encrypted and authenticated traffic everywhere, a need for uniform retries, timeouts and telemetry across teams, canaries by traffic weight, and a platform team to run it. Not worth it for a handful of services in one language, where a shared client library does the same job; for teams without platform capacity; for latency budgets that cannot spare the hops; or on a managed platform that already does this for you. <mark>A mesh buys consistency across teams and languages; with one team and one language, a library is cheaper.</mark>
+
+<Callout type="interview" title="Name the planes, then the price">
+
+"The mesh moves mTLS, retries, timeouts, circuit breaking, canary weights and telemetry into sidecar proxies configured by a control plane, so the services stay language-agnostic and consistent. The price is two proxy hops per call, memory per pod and a control plane to operate; ambient mode trades the per-pod proxy for a per-node one." Volunteer the price before you are asked.
+
+</Callout>
+
+<DeepDive title="Go deeper: why Linkerd wrote its own proxy">
+
+In 2020 Linkerd's William Morgan explained why the project uses `linkerd2-proxy` instead of Envoy: Envoy is a general-purpose proxy (ingress, egress or sidecar, around 172,000 lines of C++ at the time), while Linkerd wanted a proxy built for exactly one role and small enough to be an implementation detail (around 30,000 lines of Rust, with Rust's memory safety as a security argument). Linkerd's own benchmark put its proxy's memory an order of magnitude below Istio's Envoy sidecar at the same load; those are vendor numbers, and the author himself notes the comparison is not entirely fair to Envoy. For a designer the lesson is that the per-pod proxy's size is the mesh's main cost; a smaller sidecar and no sidecar are two answers to it.
+
+</DeepDive>

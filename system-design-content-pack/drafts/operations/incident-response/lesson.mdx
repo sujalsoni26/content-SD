@@ -1,0 +1,102 @@
+An **incident** is an unplanned event in which the service is failing its users badly enough that normal work stops; **incident response** is handling it with named roles, a timeline and a written record, so that a 3 a.m. outage is run the same way as a 3 p.m. one. [SLOs and error budgets](/learn/slos-error-budgets) defined what "failing users" means and set the burn-rate alerts that start most incidents. This lesson is what happens after the pager goes off.
+
+## Severity decides the response
+
+Google's SRE book gives a plain test for declaring an incident: do you need to involve a second team, is the outage visible to customers, or is the issue still unsolved after an hour's concentrated analysis? If any is true, declare. Severity then decides who is woken and who is told; levels differ by company, and the shape below follows PagerDuty's and Atlassian's scales.
+
+| Level | Looks like | Triggers |
+| --- | --- | --- |
+| SEV-1 | The service is down for everyone, or data is lost or exposed | Incident commander paged, executives informed, public status page updated, postmortem required |
+| SEV-2 | A core function is broken for many customers | Incident commander paged, status page updated, postmortem required |
+| SEV-3 | A minor fault with a workaround | Owning team paged with high urgency, fixed in working hours |
+| SEV-4 | Cosmetic, or no customer impact | A ticket |
+
+Two rules make the table usable: when unsure, pick the higher level, and anything at SEV-2 or above is a *major incident* that follows the full process below.
+
+## On-call and paging hygiene
+
+The SRE book keeps at least 50% of an SRE's time for engineering work and allows at most 25% on call, with at most two incidents per 12-hour shift: more than that leaves no time to fix anything, only to react. Every page should be actionable and urgent, and should fire on a **symptom** users feel (error rate, latency) rather than a cause (CPU, queue depth), because causes multiply and symptoms do not. Response times are agreed in advance, about 5 minutes for user-facing services and 30 for the rest, and every alert links to its runbook, so that the first fifteen minutes are checks rather than guesses.
+
+## Roles: command, operations, communication
+
+Google's incident management is adapted from the **Incident Command System** that firefighters created in 1968, and has three roles. The **incident commander (IC)** owns the overall picture, assigns work and holds every role not yet delegated; the **operations lead (OL)** owns the fix and is the only one touching production; the **communications lead (CL)** owns updates to the status page, stakeholders and customers, on a cadence, with what is known so far. Three artefacts help: a **live incident document** with the timeline, decisions and current state; a recognised **command post**, usually a chat channel named for the incident; and an explicit **handoff** when a shift ends, said out loud and written down. The Workbook sums it up as the three Cs: coordinate, communicate, maintain control.
+
+<Mermaid caption="A SEV-2 from page to postmortem owner. The on-call engineer tries the runbook, then declares and hands over command. The communications lead updates the status page on a cadence while the operations lead works the fix." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant M as Monitoring
+    participant O as On-call engineer
+    participant IC as Incident commander
+    participant CL as Communications lead
+    participant S as Status page
+    participant OL as Operations lead
+    M->>O: Page, burn rate 14 over the last hour
+    Note over O: Runbook checks, 15 minutes, not resolved
+    O->>IC: Declare SEV-2 and hand over command
+    IC->>CL: Own the updates
+    IC->>OL: Own the fix
+    CL->>S: Investigating, 10:42
+    OL->>IC: Rolling back release 418
+    CL->>S: Identified, 10:55
+    OL->>IC: Error rate back inside the SLO
+    CL->>S: Resolved, 11:08
+    Note over IC: Timeline closed, postmortem owner named
+`} />
+
+## Runbooks
+
+A **runbook** is the written response to one alert: the symptom, the checks, the actions with exact commands, when to escalate and whom to tell. [Disaster recovery](/learn/disaster-recovery) described the failover runbook; the daily pages deserve the same. One nobody has followed in a year is out of date; game days find that out.
+
+## The blameless postmortem
+
+Every major incident ends with a **postmortem**; the SRE book lists the triggers: user-visible downtime or degradation past a threshold, data loss of any kind, on-call intervention such as a rollback or traffic reroute, a resolution time above a threshold, or a monitoring failure, which usually means a human found the incident. **Blameless** means assuming everyone acted reasonably on the information they had and asking what let a reasonable action cause harm; name a person and the next postmortem will be written to protect people, not to find causes.
+
+The template from the SRE book's worked example is short:
+
+<Steps>
+
+1. **Summary and impact.** What users saw, for how long, how many, and the error budget it burned.
+2. **Timeline.** Detection, every decision and action with its time, and resolution, taken from the live document.
+3. **Root causes and trigger.** The conditions that made the failure possible and the event that set it off, rarely the same thing.
+4. **Detection and resolution.** How it was found and how it was fixed, with how long each took.
+5. **Action items.** Each with a type (prevent, detect, mitigate, process), an owner and a tracking ticket.
+6. **Lessons learned.** What went well, what went wrong, where you got lucky.
+
+</Steps>
+
+An unreviewed postmortem, the book says, might as well never have existed. The Workbook's catalogue of bad ones is a checklist: missing context, key details omitted, action items without owners, counterproductive finger-pointing, publication weeks late.
+
+## MTTD, MTTR and their caveats
+
+**Mean time to detect (MTTD)** is the average gap from fault to alert; **mean time to recover (MTTR)** from alert to service restored. Both are useful per incident. As quarterly averages they mislead: incident durations are heavy-tailed and few, so the mean is dominated by one long outage and swings by chance. Štěpán Davidovič's 2021 report for Google showed by Monte Carlo simulation that MTTR and its cousins are poorly suited to decision-making or trend analysis: even a real improvement is hard to tell from noise. Track instead error budget burned, detection time and method per incident, and action items closed on time.
+
+## Error budgets close the loop
+
+Incidents spend the error budget; postmortem action items buy it back. When the budget is exhausted, the SLO lesson's policy pauses feature launches and puts reliability first, and the postmortem's action items are the list the team works, which is why they need owners and dates. Action items that never close spend the same budget on the same incident next quarter.
+
+## Chaos engineering and game days
+
+Waiting for incidents to find weaknesses is slow. **Chaos engineering** experiments on a system to build confidence that it withstands turbulent conditions in production. Its published principles: state the steady state as a hypothesis (the SLI should not move), vary real-world events (kill an instance, add latency), run in production with the smallest useful blast radius, and automate what you learn. Netflix's Chaos Monkey, which randomly terminates production instances, made the idea famous from 2010 and was open-sourced in 2012. A **game day** is the human half: a scheduled exercise in which the real team responds to a simulated failure with the same people and procedures as a real event, testing the runbooks, roles and handoffs as much as the system.
+
+<Callout type="analogy" title="An emergency department">
+
+Triage assigns a severity at the door. One attending physician runs the resuscitation and does not also draw blood; a nurse keeps the chart with every drug and its time, which becomes the record reviewed the next morning; someone else talks to the family. Where it breaks: a hospital cannot rehearse by making real patients ill, while chaos engineering does exactly that, in small doses, to a system that is not a person.
+
+</Callout>
+
+<Callout type="interview" title="Name the roles and close the loop">
+
+"I'd declare on the SRE book's test, page an incident commander who delegates operations and communications, keep a live timeline and a status-page cadence, and write a blameless postmortem with owned action items. Incidents burn the error budget and the action items buy it back. I'd judge the programme by budget burned and action items closed, not by MTTR."
+
+</Callout>
+
+<DeepDive title="Go deeper: why the mean fails you">
+
+A quarter with eight incidents of 20 to 40 minutes and one of nine hours has an MTTR of about an hour and a half. The next quarter, with identical practices and no nine-hour outage, shows 30 minutes: a threefold "improvement" that nobody earned. Medians help a little, but eight samples of a heavy-tailed quantity swing however you summarise them, which is Davidovič's point. Counting budget burned ties each incident to its actual user impact, and counting detection methods (alert, customer report, chance) tells you whether monitoring is improving without pretending a mean is stable.
+
+</DeepDive>

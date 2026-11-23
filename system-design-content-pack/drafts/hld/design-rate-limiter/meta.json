@@ -1,0 +1,136 @@
+{
+  "slug": "design-rate-limiter",
+  "title": "Design a distributed rate limiter",
+  "moduleId": "hld",
+  "level": "intermediate",
+  "minutes": 14,
+  "problem": "Dozens of gateway instances must share one client's quota and decide in about a millisecond, without the shared counter becoming the slowest or most fragile part of every request.",
+  "summary": "A gateway rate limiter keeps shared counters in a per-region Redis cluster updated by an atomic Lua script, checks a local bucket first, returns 429 with Retry-After and rate-limit headers, and fails open to local limits when Redis is slow or down.",
+  "catTip": "Several doors, one guest list. The doormen radio one counter so nobody sneaks in twice through different doors, and if the radio dies they count at their own door rather than locking everyone out. I nap by the quietest door.",
+  "recall": {
+    "q": "Many gateway instances share a client's limit with a 1 ms budget per decision. Where does the counter live, how is the race between instances avoided, and what happens when the store is down?",
+    "a": "In an in-region Redis cluster, updated by a small Lua script that refills and spends atomically (using Redis TIME so gateway clocks do not matter), with a local token bucket in front. When Redis is slow or down the gateway times out at the budget, opens a circuit breaker and fails open to per-instance local limits for ordinary rules, failing closed only for hard quotas."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without shared, atomically updated counters, each gateway instance enforces its own approximate share, two instances can both spend the last token, and a slow or dead counter store either adds tens of milliseconds to every request or takes the whole API down.",
+    "tradeoffs": "Every request now pays an in-region Redis round trip, accuracy is traded for throughput through local buckets and batching, and rule propagation, canaries and fail-open policy become an operational surface the platform team must own.",
+    "explainSimply": "Several doormen at different doors of one venue need to share a single head count. They radio a central tally before letting each guest in, turn away anyone obviously over the limit without radioing, and if the radio breaks they count at their own doors for a while instead of locking everyone out.",
+    "hint": "Think about who updates the counter, how many of them there are, how far away the counter is, and what you would rather do when you cannot reach it."
+  },
+  "meow": "One shared counter, one atomic script, and if Redis naps, let them in and raise a paw.",
+  "quiz": [
+    {
+      "prompt": "Two gateway instances both read tokens = 1 from Redis, both admit a request, and both write tokens = 0. Which change removes the race?",
+      "options": [
+        "Wrap the GET and SET in a MULTI/EXEC transaction",
+        "Run refill-and-spend as one Lua script (or use an atomic INCR for fixed windows) so Redis executes the read-modify-write without interleaving",
+        "Take a mutex inside each gateway instance around the Redis calls",
+        "Lower every limit by 10% to leave headroom for double spends"
+      ],
+      "answer": 1,
+      "explanation": "Only a server-side atomic update stops two clients interleaving a read and a write. MULTI/EXEC is the strongest distractor, but a transaction cannot branch on the value it read, so the conditional spend still happens on the client side; a per-instance mutex does nothing about the other instances."
+    },
+    {
+      "prompt": "Redis p99 latency jumps to 50 ms and the gateway's limiter has a 2 ms budget. For ordinary per-client rate limits, what should a well-designed limiter do?",
+      "options": [
+        "Wait for Redis, because accuracy comes first",
+        "Return 429 to every request until Redis recovers",
+        "Time out at the budget, open a circuit breaker, fall back to per-instance local buckets and fail open while counting and alerting",
+        "Disable rate limiting and remove the Redis dependency"
+      ],
+      "answer": 2,
+      "explanation": "A limiter that waits has already broken its latency promise, and one that denies everyone has turned a cache incident into an API outage. Failing closed is the strongest distractor and is right only for hard paid quotas and brute-force targets, which is why the mode is a per-rule setting."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: many gateway instances share one client's limit, and a plain GET then SET lets two instances both spend the last token. Decision?",
+      "a": "Make the update atomic on the server: INCR for fixed windows, a small Lua script for token-bucket refill-and-spend. Redis runs the whole script without interleaving, the script reads TIME from Redis so gateway clock skew is irrelevant, a hash tag keeps a client's keys in one slot, and the script stays a few commands long because it blocks the shard while it runs."
+    },
+    {
+      "q": "Problem: Redis is slow or down and each decision has a 1–2 ms budget. Decision?",
+      "a": "Decide per rule in advance. For ordinary limits: time out at the budget, open a circuit breaker, fall back to per-instance local buckets (global limit divided by instances) and fail open while counting fail-open decisions and alerting. Fail closed only for hard paid quotas and brute-force targets. On recovery, handle NOSCRIPT by reloading the script and restore durable quota counters before re-enabling strict rules."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    {
+      "title": "Redis documentation, \"Scripting with Lua\" (Eval introduction)",
+      "url": "https://redis.io/docs/latest/develop/programmability/eval-intro/",
+      "accessed": "2026-11-22",
+      "supports": "Redis guarantees a script's atomic execution and blocks all server activity while it runs; effects replication is the default since Redis 5.0 and the only mode since 7.0, which lets scripts that write use TIME; the script cache is volatile and EVALSHA returns NOSCRIPT after a restart or failover; all keys a script accesses must be passed as KEYS; Redis Functions as the 7.0 alternative",
+      "status": "verified"
+    },
+    {
+      "title": "Redis documentation, \"INCR\" command, section Pattern: rate limiter",
+      "url": "https://redis.io/docs/latest/commands/incr/",
+      "accessed": "2026-11-22",
+      "supports": "the INCR-then-EXPIRE race that leaks a key without an expiry, and the documented fix of a MULTI/EXEC block or a Lua script",
+      "status": "verified"
+    },
+    {
+      "title": "Redis documentation, \"Redis cluster specification\", sections Key distribution model and Hash tags",
+      "url": "https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/",
+      "accessed": "2026-11-22",
+      "supports": "16384 hash slots; hash tags ({...}) force multiple keys into the same hash slot so multi-key operations work in Redis Cluster",
+      "status": "verified"
+    },
+    {
+      "title": "Cloudflare, \"How we built rate limiting capable of scaling to millions of domains\" (7 June 2017)",
+      "url": "https://blog.cloudflare.com/counting-things-a-lot-of-different-things/",
+      "accessed": "2026-11-22",
+      "supports": "the sliding window counter approximation (previous window weighted by overlap plus current window); two numbers per counter; on 400 million requests from 270,000 sources, 0.003% of requests wrongly allowed or limited and no false positives",
+      "status": "verified"
+    },
+    {
+      "title": "Paul Tarjan, \"Scaling your API with rate limiters\" (Stripe Engineering, 30 March 2017)",
+      "url": "https://stripe.com/blog/rate-limiters",
+      "accessed": "2026-11-22",
+      "supports": "token bucket request rate limiter implemented with Redis; guidance that bugs in the rate limiting code or Redis going down should not affect requests (fail open); concurrent-request limiter and load shedders as the other limiter types",
+      "status": "verified"
+    },
+    {
+      "title": "Envoy proxy documentation, \"Global rate limiting\" (architecture overview)",
+      "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_features/global_rate_limiting",
+      "accessed": "2026-11-22",
+      "supports": "Envoy calls an external gRPC rate limit service; the reference implementation is written in Go with a Redis backend; local rate limiting can be used with global rate limiting to reduce load on the global service; quota-based mode where Envoy requests quota assignments and reports load periodically",
+      "status": "verified"
+    },
+    {
+      "title": "Envoy proxy documentation, \"Rate limit\" HTTP filter",
+      "url": "https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/rate_limit_filter",
+      "accessed": "2026-11-22",
+      "supports": "requests that error against the rate limit service are allowed through and counted unless failure_mode_deny is set; over-limit requests get a 429 and optionally a Retry-After header; the x-envoy-ratelimited header",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 6585, \"Additional HTTP Status Codes\" (April 2012), section 4",
+      "url": "https://www.rfc-editor.org/rfc/rfc6585",
+      "accessed": "2026-11-22",
+      "supports": "429 Too Many Requests indicates the user has sent too many requests in a given amount of time; the response SHOULD explain the condition and MAY include Retry-After; the RFC does not define how users are identified or requests counted",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 9110, \"HTTP Semantics\" (June 2022), section 10.2.3",
+      "url": "https://www.rfc-editor.org/rfc/rfc9110.html",
+      "accessed": "2026-11-22",
+      "supports": "Retry-After indicates how long the user agent ought to wait before a follow-up request and is either an HTTP-date or a number of seconds",
+      "status": "verified"
+    },
+    {
+      "title": "IETF HTTPAPI working group, \"RateLimit header fields for HTTP\" (draft-ietf-httpapi-ratelimit-headers-12, 20 November 2026)",
+      "url": "https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/",
+      "accessed": "2026-11-22",
+      "supports": "the RateLimit-Policy and RateLimit header fields for advertising quota policies and current limits; status Active Internet-Draft, Standards Track, not yet an RFC",
+      "status": "verified"
+    },
+    {
+      "title": "GitHub Docs, \"Rate limits for the REST API\"",
+      "url": "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+      "accessed": "2026-11-22",
+      "supports": "the x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-used, x-ratelimit-reset and x-ratelimit-resource response headers; 403 or 429 when a limit is exceeded; retry-after on some secondary-limit responses",
+      "status": "verified"
+    }
+  ]
+}

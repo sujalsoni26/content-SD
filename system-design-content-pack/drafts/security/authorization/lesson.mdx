@@ -1,0 +1,79 @@
+**Authorisation** decides whether an already-authenticated caller may perform this action on this object. Authentication tells you the request comes from user 42 (see [Authentication](/learn/authentication)); it says nothing about whether user 42 may delete post 9812. That question is answered on every request, and the default answer is no.
+
+## Three ways to say who may do what
+
+| Model | A rule looks like | Instagram-style example | Where it strains |
+| --- | --- | --- | --- |
+| RBAC, role-based | Users have roles, roles have permissions | Moderators may remove any post | Role explosion: moderator for India, weekdays, reels only |
+| ABAC, attribute-based | Policy over attributes of subject, object, action and environment | A private post is visible if the viewer follows the author and is not blocked | Attributes must be fetched fresh per decision |
+| ReBAC, relationship-based | Permissions follow a graph of relationships | Members of a group may view a document shared with that group | Graph queries at scale; consistency of recent changes |
+
+RBAC fits coarse, organisational permissions. For application data OWASP recommends ABAC or ReBAC, because real rules talk about *this* object and *this* viewer, which roles cannot express without multiplying.
+
+ReBAC's best-known design is Google's **Zanzibar** (2019), which stores every permission as a tuple of object, relation and user, where the user may itself be a set: `doc:readme#viewer@group:eng#member` means members of group eng may view the readme, and namespace rules add inheritance such as folder viewers being document viewers. It serves Drive, YouTube and Calendar at trillions of tuples and millions of checks per second with a reported p95 under 10 ms.
+
+## Decision point and enforcement point
+
+The **policy enforcement point** (PEP) sits in the request path, gathers the facts and blocks or allows; the **policy decision point** (PDP) evaluates policy against those facts and returns a verdict. NIST's zero trust architecture uses the same split.
+
+<Mermaid caption="The enforcement point asks; the decision point answers. Policy and the data it needs live with the decision point, not scattered through request handlers." chart={`flowchart LR
+    client["Client"] -->|"request + token"| pep["Enforcement point: gateway or service middleware"]
+    pep -->|"subject, action, object, context"| pdp["Decision point: policy engine such as OPA"]
+    policy["Policies written in Rego"] --> pdp
+    data["Roles, tuples, attributes"] --> pdp
+    pdp -->|"allow or deny"| pep
+    pep -->|"allowed request"| svc["Resource"]
+`} />
+
+**Open Policy Agent** (OPA) is the common open-source decision point: it takes JSON input, evaluates policies written in its language **Rego**, and returns a decision, so policy changes need no code deploy and every rule is auditable in one place. It runs as a sidecar or library, so a decision is a local call.
+
+## Gateway versus service
+
+| Check | At the API gateway (coarse) | In the service (fine, data-aware) |
+| --- | --- | --- |
+| Is the token valid, unexpired and meant for this API? | Yes | Trusts the gateway |
+| Does the token carry the scope for this route? | Yes | No |
+| May this user touch this specific object? | Cannot know; it has not loaded the object | Yes, after loading it |
+| Which fields may this caller see or change? | No | Yes |
+
+The gateway (see [API gateway](/learn/api-gateway)) rejects the obviously wrong cheaply. Only the service that loads post 9812 knows who wrote it, so object-level and field-level checks live there. <mark>A design that authorises "at the gateway" and nowhere else has the next failure built in.</mark>
+
+## The commonest failure: broken object level authorisation
+
+`GET /api/orders/10023` returns your order. Change the number to 10024 and you get someone else's. This is **broken object level authorisation**, number one in the OWASP API Security Top 10 (2023) and described there as extremely common: the server authorised the *endpoint* but never asked whether you may see *that* order.
+
+The fix is procedural: every function that loads a record by a client-supplied identifier checks, after loading, that the caller may act on it. Random identifiers help but are not an authorisation check. Test by requesting another user's objects.
+
+## Isolating tenants
+
+In a multi-tenant system (see [Multi-tenancy](/learn/multi-tenancy)) the object-level check becomes a tenant check on every query. The tenant id comes from the token, never the URL or body; a shared repository layer adds the predicate so nobody forgets; and where you can, push the check into the database. PostgreSQL row-level security attaches a policy to the table, and once enabled a table with no matching policy returns no rows, so a missing rule fails closed.
+
+```sql
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON orders
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);
+```
+
+Table owners and superusers bypass these policies by default, so the application must connect as an ordinary role.
+
+<Callout type="analogy" title="The badge and the filing cabinet">
+
+Your badge gets you through the front gate and onto the floors your role allows: the gateway, coarse and fast. The cabinet on the fourth floor has its own lock, and whether your key fits depends on which files are inside: the service, deciding per object. Where it stops: a badge is checked once at the door; a service re-checks on every request.
+
+</Callout>
+
+## Trade-offs
+
+A central decision point gives consistent policy and one audit trail but adds a dependency; if it is unreachable, fail closed with a local cache of recent decisions. Roles inside the access token avoid the lookup but freeze until the token expires.
+
+<Callout type="interview" title="Name both enforcement points">
+
+"The gateway validates the token and the scope. The service loads the object and checks ownership or tenant on every request; policy comes from a central OPA ruleset, and a tenant predicate is enforced by row-level security as the last line."
+
+</Callout>
+
+<DeepDive title="Go deeper: the new enemy problem">
+
+Authorisation data is replicated like any other data (see [Replication](/learn/replication)), so a check can read a stale permission. Zanzibar calls the dangerous case the *new enemy* problem: Alice removes Bob from a folder's ACL, then adds new documents, and a check that neglects the order of the two changes lets Bob read them. Its answer is a consistency token, a *zookie*, issued when content is written and presented with later checks, so permissions older than the content are never used.
+
+</DeepDive>

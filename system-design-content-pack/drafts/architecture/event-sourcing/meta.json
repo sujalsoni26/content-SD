@@ -1,0 +1,70 @@
+{
+  "slug": "event-sourcing",
+  "title": "Event sourcing",
+  "moduleId": "architecture",
+  "level": "advanced",
+  "minutes": 9,
+  "problem": "A row overwritten in place cannot tell you why an order's total changed, what the cart looked like an hour ago, or who to believe when two systems disagree.",
+  "summary": "Event sourcing keeps every change as an immutable domain event and derives state by replay, with snapshots for speed and projections for reads. It brings history, audit and rebuildable read models, and hard problems in versioning, erasure and consistency.",
+  "catTip": "I do not remember being fed; I remember the sequence of events that ended in a full bowl. Replay it and you get the same bowl. Delete one event and the bowl is wrong, which is why nobody is allowed to.",
+  "recall": {
+    "q": "How does an event-sourced system know an entity's current state, and how does it keep that fast and the invariants intact?",
+    "a": "It replays the entity's stream of immutable events from the start, folding each into state. Snapshots store the state at a version so only later events are replayed, and each append carries the version the writer read, so a concurrent writer is rejected and retries. Reads come from projections rebuilt from the same events."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Overwriting rows destroys the history, so audits, 'what did the user see at the time' questions and bug reconstruction become guesswork, and a new report over old data cannot be built because the data no longer exists.",
+    "tradeoffs": "Events are forever, so every schema change needs versioning or upcasting, erasure requests collide with immutability, reads from projections lag the writes, and set-based queries need a projection before they can be answered.",
+    "explainSimply": "A bank does not store your balance and scribble over it; it keeps every statement line and works the balance out from them. A mistake is fixed by adding a reversal line, never by editing the past. Event sourcing runs a system the way a bank runs a statement.",
+    "hint": "Think about how a bank statement gets to a balance, how it corrects a mistake, and why the opening balance at the top saves time."
+  },
+  "meow": "Not a bowl, a list of feedings. Replay the list, get the bowl. Nobody edits the list.",
+  "quiz": [
+    {
+      "prompt": "An event-sourced order aggregate has 200,000 events and every command now takes seconds to load. What is the standard fix?",
+      "options": [
+        "Delete the oldest events once the order has been delivered",
+        "Store periodic snapshots of the aggregate's state and replay only the events after the latest snapshot",
+        "Move the events to a Kafka topic with log compaction enabled",
+        "Switch the aggregate to a CRUD table and keep the events as application logs"
+      ],
+      "answer": 1,
+      "explanation": "Snapshots are the standard optimisation and lose nothing, since they can be rebuilt from the events. Compaction is the tempting distractor, but it keeps only the latest record per key and would destroy the history that is the whole point."
+    },
+    {
+      "prompt": "Why is Kafka on its own a poor fit as the event store for aggregates?",
+      "options": [
+        "It cannot store events durably",
+        "It has no expected-version check on append and no efficient way to read one aggregate's events, and its default retention expires data",
+        "It allows only one consumer per topic",
+        "It cannot preserve the order of events"
+      ],
+      "answer": 1,
+      "explanation": "Kafka is durable and ordered within a partition and fans out to many consumer groups, which is why it is excellent for moving events. What an event store needs beyond that is per-stream reads and optimistic concurrency on append, which Kafka does not offer."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A customer invokes their right to erasure, but their data sits inside immutable events. Name two approaches and the trade-off of each.",
+      "a": "Crypto-shredding: encrypt personal fields with a per-person key and destroy the key; history stays intact but key management becomes critical. Keep personal data out of events in a separate mutable store that events reference; erasure is simple but events are no longer self-contained. Rewriting streams works but breaks immutability and can leave aggregates inconsistent."
+    },
+    {
+      "q": "OrderPlaced version 1 stored the address as one string; version 2 needs structured fields and a million version-1 events exist. What do you do?",
+      "a": "Never edit the stored events. Register an upcaster that converts version 1 to version 2 on read by parsing the string, so domain code only ever sees version 2, and keep a version number on every event type. For changes too deep to upcast, copy and transform into a new store and switch over."
+    }
+  ],
+  "glossary": [
+    { "term": "GDPR", "full": "General Data Protection Regulation", "note": "EU data-protection law; its Article 17 right to erasure is the main reason immutable event logs need crypto-shredding or a separate store for personal data." }
+  ],
+  "sources": [
+    { "title": "Martin Fowler, \"Event Sourcing\" (12 December 2005)", "url": "https://martinfowler.com/eaaDev/EventSourcing.html", "accessed": "2026-11-22", "supports": "definition; the shipping example; complete rebuild by replaying the log; storing application state as a faster alternative to replay (snapshots); reversal easier for difference events than absolute ones; gateways around external systems during replay", "status": "verified" },
+    { "title": "Martin Fowler, \"What do you mean by 'Event-Driven'?\" (7 February 2017)", "url": "https://martinfowler.com/articles/201701-event-driven.html", "accessed": "2026-11-22", "supports": "the event store as the principal source of truth; replay problems with outside systems; dealing with changes in event schemas over time", "status": "verified" },
+    { "title": "AxonIQ, \"Event Versioning\" (Axon Framework Reference 4.12)", "url": "https://docs.axoniq.io/axon-framework-reference/4.12/events/event-versioning", "accessed": "2026-11-22", "supports": "definition of upcasting as transforming an event from its original structure to its new structure on read; revision numbers on event types; stored events are never rewritten so 'the complete event history remains intact'", "status": "verified" },
+    { "title": "Greg Young, Versioning in an Event Sourced System (Leanpub)", "url": "https://leanpub.com/esversioning/read", "accessed": "2026-11-22", "supports": "weak schema, copy-and-replace and copy-transform as versioning strategies; only the table of contents could be read on the access date", "status": "reference" },
+    { "title": "Michiel Rook, \"Forget me please? Event sourcing and the GDPR\" (5 November 2017)", "url": "https://www.michielrook.nl/2017/11/forget-me-please-event-sourcing-gdpr/", "accessed": "2026-11-22", "supports": "the conflict between Article 17 erasure and immutable events; options of deleting or rewriting streams and per-person encryption with key destruction; projections must be rebuilt after the store changes", "status": "verified" },
+    { "title": "Oskar Dudycz, \"Event Streaming is not Event Sourcing!\" (1 December 2021)", "url": "https://event-driven.io/en/event_streaming_is_not_event_sourcing/", "accessed": "2026-11-22", "supports": "streaming platforms 'designed to move things from one place to another, not to be used as durable databases'; Kafka lacks per-stream reads and optimistic concurrency checks; publish from the event store onward to Kafka", "status": "verified" },
+    { "title": "Apache Kafka 4.0 broker configuration reference", "url": "https://kafka.apache.org/40/generated/kafka_config.html", "accessed": "2026-11-22", "supports": "log.retention.hours default 168; log.cleanup.policy default delete with compact as the alternative; log.retention.ms of -1 means no time limit", "status": "verified" },
+    { "title": "Kurrent, \"Appending events\" (KurrentDB Node client docs v1.3)", "url": "https://docs.kurrent.io/clients/node/v1.3/appending-events", "accessed": "2026-11-22", "supports": "appends to a named stream with an expected stream state (any, no stream, stream exists, or a specific revision); a second writer with a stale revision fails with a concurrency conflict", "status": "verified" },
+    { "title": "Microsoft patterns & practices, \"Reference 2: Introducing the Command Query Responsibility Segregation Pattern\" (2012, archived)", "url": "https://learn.microsoft.com/en-us/previous-versions/msp-n-p/jj591573(v=pandp.10)", "accessed": "2026-11-22", "supports": "Udi Dahan's caution that most people using CQRS and event sourcing should not have, behind the advice to confine the pattern to one bounded context", "status": "verified" }
+  ]
+}

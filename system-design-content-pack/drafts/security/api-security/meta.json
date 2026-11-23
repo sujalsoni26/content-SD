@@ -1,0 +1,140 @@
+{
+  "slug": "api-security",
+  "title": "API security",
+  "moduleId": "security",
+  "level": "intermediate",
+  "minutes": 9,
+  "problem": "An API is a public surface where any client can send any bytes, change any id, replay any request and point your server at any URL.",
+  "summary": "API security is a chain of checks from edge to database: allow-list validation, parameterised queries, SameSite cookies and CSRF tokens, CORS that permits only your origins, keys and scoped tokens, rate limits and idempotency keys, and HMAC-signed, timestamped webhooks.",
+  "catTip": "Every parcel through my cat flap gets the same treatment: is it addressed to me, is it the right shape, have I seen this one before, and did the courier sign for it today? Only then do I sniff it.",
+  "recall": {
+    "q": "Your webhook receiver checks the HMAC signature but ignores the timestamp in the header. What attack remains, and what two things close it?",
+    "a": "Replay: a captured, validly signed request can be resent later. Include the timestamp in the signed string and reject requests outside a tolerance window (Stripe's default is five minutes), and deduplicate by event id for replays inside the window."
+  },
+  "archNodes": [
+    "gateway"
+  ],
+  "guide": {
+    "breaks": "Without these checks a changed id returns another user's data, a quote in a form field rewrites your SQL, a hostile web page makes a logged-in browser change settings, and a captured webhook is replayed until someone notices.",
+    "tradeoffs": "Every check adds latency and rejected edge cases, strict validation breaks old clients, tight limits frustrate heavy legitimate users, and signatures and idempotency stores are more state to run.",
+    "explainSimply": "Think of a post room that checks every parcel: is the address real, is it the right shape and weight, has the same parcel arrived before, and did the courier sign the delivery slip with today's date? None of the checks is clever; the protection comes from doing all of them to every parcel.",
+    "hint": "Which part of the request proves when it was sent, and what happens if that part is missing?"
+  },
+  "meow": "Right address? Right shape? Seen it before? Signed and dated? Then, and only then, sniff.",
+  "quiz": [
+    {
+      "prompt": "An API echoes the request's Origin header back in Access-Control-Allow-Origin for every request and calls itself secure. What does CORS actually protect against, and what is wrong here?",
+      "options": [
+        "CORS blocks requests from non-browser clients, so reflecting the origin is fine",
+        "CORS only controls which origins' scripts may read responses in a browser; reflecting every origin lets any site read authenticated responses, and it never stopped curl or servers",
+        "CORS prevents SQL injection by validating the Origin header",
+        "CORS replaces CSRF tokens because the browser checks the origin"
+      ],
+      "answer": 1,
+      "explanation": "CORS is a browser-enforced permission to read cross-origin responses, not authentication or a server-side filter. Reflecting every origin grants that permission to everyone, which OWASP lists under security misconfiguration."
+    },
+    {
+      "prompt": "Which single change stops a quote character in an email field from altering a SQL query's meaning?",
+      "options": [
+        "Escaping quotes in every input string before concatenating",
+        "Using parameterised queries so the SQL structure is sent separately from the bound values",
+        "Validating that the field contains an at sign",
+        "Encrypting the email column"
+      ],
+      "answer": 1,
+      "explanation": "Binding values keeps them data whatever characters they hold. Escaping is error-prone and OWASP discourages relying on it; validation and encryption do not change how the query is parsed."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A browser app authenticates with a session cookie. Name three CSRF defences and the one mechanism that does nothing for CSRF.",
+      "a": "SameSite=Lax or Strict on the cookie, a per-session anti-CSRF token (or signed double-submit cookie), and requiring a custom header on JSON requests. CORS does nothing for CSRF: it controls who may read responses, not who may send requests."
+    },
+    {
+      "q": "Distinguish an API key from a user access token, and say what a scope adds.",
+      "a": "An API key identifies the calling application or tenant for quotas, billing and attribution and is long-lived; a user token identifies a person and their consent and is short-lived. Scopes such as posts:read limit what the token may do at the gateway; object ownership is still checked in the service."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "CSRF",
+      "full": "Cross-Site Request Forgery",
+      "note": "A hostile page makes the victim's browser send a state-changing request with the victim's cookies; blunted by SameSite cookies and anti-CSRF tokens."
+    },
+    {
+      "term": "CORS",
+      "full": "Cross-Origin Resource Sharing",
+      "note": "Browser-enforced headers that let a server say which other origins may read its responses; not authentication and no barrier to non-browser clients."
+    },
+    {
+      "term": "OWASP",
+      "full": "Open Worldwide Application Security Project",
+      "note": "Publisher of the API Security Top 10 and the Cheat Sheet Series this module leans on."
+    }
+  ],
+  "sources": [
+    {
+      "title": "OWASP API Security Top 10 2023",
+      "url": "https://api-security.owasp.org/editions/2023/en/0x11-t10/",
+      "accessed": "2026-11-22",
+      "supports": "the ten entries and their names as listed in the table",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP API Security Top 10 2023: API1:2023 Broken Object Level Authorization",
+      "url": "https://api-security.owasp.org/editions/2023/en/0xa1-broken-object-level-authorization/",
+      "accessed": "2026-11-22",
+      "supports": "the id-manipulation attack and its prevalence",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP Cheat Sheet Series: Input Validation Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html",
+      "accessed": "2026-11-22",
+      "supports": "allow-list over deny-list, syntactic and semantic validation, server-side validation, size limits before parsing, validation not substituting for parameterisation or output encoding",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP Cheat Sheet Series: SQL Injection Prevention Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html",
+      "accessed": "2026-11-22",
+      "supports": "parameterised queries as the preferred defence, allow-lists for structural parts, manual escaping strongly discouraged, binding not deciding authorisation",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP Cheat Sheet Series: Cross-Site Request Forgery Prevention Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html",
+      "accessed": "2026-11-22",
+      "supports": "synchroniser tokens, the signed double-submit cookie, SameSite as defence in depth with Lax allowing top-level navigations, custom request headers for AJAX endpoints",
+      "status": "verified"
+    },
+    {
+      "title": "MDN Web Docs: Cross-Origin Resource Sharing (CORS)",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS",
+      "accessed": "2026-11-22",
+      "supports": "CORS as a header-based mechanism enforced by browsers, preflight OPTIONS requests, Access-Control-Allow-Origin and the wildcard restriction with credentials",
+      "status": "verified"
+    },
+    {
+      "title": "web.dev, SameSite cookies explained",
+      "url": "https://web.dev/articles/samesite-cookies-explained",
+      "accessed": "2026-11-22",
+      "supports": "Chrome treating cookies without SameSite as Lax, SameSite=None requiring Secure",
+      "status": "verified"
+    },
+    {
+      "title": "Stripe documentation: Receive Stripe events in your webhook endpoint (signature verification and replay attacks)",
+      "url": "https://docs.stripe.com/webhooks",
+      "accessed": "2026-11-22",
+      "supports": "HMAC-SHA256 over timestamp, dot and raw body; constant-time comparison; the default five-minute tolerance; duplicate deliveries handled by event id",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP Foundation: About",
+      "url": "https://owasp.org/about/",
+      "accessed": "2026-11-22",
+      "supports": "the expansion Open Worldwide Application Security Project",
+      "status": "verified"
+    }
+  ]
+}

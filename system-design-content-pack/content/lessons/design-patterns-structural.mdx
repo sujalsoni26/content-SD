@@ -1,0 +1,112 @@
+A **structural pattern** composes objects into a larger structure without the pieces knowing each other's concrete classes. Five matter most: Adapter, Decorator, Facade, Proxy and Composite. In a class diagram four of them look identical, a wrapper forwarding calls to the thing it holds, so the useful question is not what the wrapper does but why it exists.
+
+An OTP service calls an SMS vendor's client library directly and times every call:
+
+```java
+class OtpService {
+    private final VendorSmsClient vendor = new VendorSmsClient(API_KEY);
+    void sendOtp(String phone, String code) {
+        long start = System.nanoTime();
+        vendor.postMessage(Map.of("to", phone, "body", "Your code is " + code));   // the vendor's shape
+        Metrics.record("sms.latency", System.nanoTime() - start);                   // a concern that is not OTP
+    }
+}
+```
+
+The vendor's shape has leaked into business code, so switching vendors edits every caller; timing is mixed with sending, so it will be copied into the next sending method; and nothing can be unit tested without a network.
+
+## Adapter and Decorator: two wrappers, two reasons
+
+An **Adapter** converts an existing class's interface into the one your code wants: you define `SmsSender`, the shape *your* domain needs, and the adapter translates to the vendor's calls. A **Decorator** wraps an object behind the *same* interface and adds one responsibility, so decorators stack:
+
+```java
+interface SmsSender { void send(String phone, String text); }
+
+class VendorSmsAdapter implements SmsSender {                 // Adapter: their shape becomes ours
+    private final VendorSmsClient vendor;
+    VendorSmsAdapter(VendorSmsClient vendor) { this.vendor = vendor; }
+    public void send(String phone, String text) { vendor.postMessage(Map.of("to", phone, "body", text)); }
+}
+
+class TimedSmsSender implements SmsSender {                   // Decorator: same interface, one extra concern
+    private final SmsSender inner;
+    TimedSmsSender(SmsSender inner) { this.inner = inner; }
+    public void send(String phone, String text) {
+        long start = System.nanoTime();
+        try { inner.send(phone, text); } finally { Metrics.record("sms.latency", System.nanoTime() - start); }
+    }
+}
+// composition root: new TimedSmsSender(new RetryingSmsSender(new VendorSmsAdapter(client)))
+```
+
+`OtpService` now takes an `SmsSender` in its constructor and knows nothing about vendors or metrics (see [Interfaces, abstractions and dependency injection](/learn/interfaces-abstractions-di)). The JDK's I/O streams are the textbook Decorator: `new BufferedReader(new InputStreamReader(in))` stacks buffering on decoding without either class knowing about the other.
+
+## Proxy and Facade: control and simplification
+
+A **Proxy** also implements the same interface as the object it stands in for, but its purpose is to control access: lazy creation, caching, permission checks, or a network hop. A gRPC client stub is a remote proxy (see [gRPC](/learn/grpc)); `Collections.unmodifiableList` is a protection proxy that forwards reads and rejects writes; a reverse proxy is the network-level cousin (see [Proxy and reverse proxy](/learn/proxy)).
+
+A **Facade** gives a subsystem one simple entry point: `placeOrder(cart)` reserves stock, charges the card and sends the confirmation, and callers never learn there are three services behind it. An API gateway is a facade for a whole backend (see [API gateway](/learn/api-gateway)). The failure mode is that all logic quietly lands in the facade, and three years later it is the god class (see [Clean code and maintainability](/learn/clean-code)).
+
+## Telling them apart
+
+| Pattern | Intent | Interface of the wrapper | Who creates the wrapped object |
+| --- | --- | --- | --- |
+| Adapter | Fit an existing class to the caller's interface | Different; translates | Handed in; it already exists |
+| Decorator | Add a responsibility | The same; stackable | The caller, at the composition root |
+| Proxy | Control access: lazy, cached, remote, guarded | The same; normally one layer | Often the proxy itself, lazily or remotely |
+| Facade | Simplify a subsystem | New and smaller, over many objects | The facade owns or is given it |
+| Composite | Treat tree and leaf alike | The same for both | Parents hold their children |
+
+Gamma et al. put the first three in one line: an adapter gives its subject a different interface, a proxy the same interface, a decorator an enhanced one. Intent is the tiebreaker: a wrapper that adds retry is a decorator; the identical wrapper that stops unauthenticated callers is a proxy.
+
+<Callout type="analogy" title="Travel plug, phone case, receptionist">
+
+An Adapter is a travel plug: it changes the shape of the socket and nothing else. A Decorator is a phone case: the phone works as before, it has gained protection, and a screen guard can go on top. A Proxy is a receptionist who decides whether and when you reach the manager. Where the analogy fails: in code all three are a class holding a reference to another, so you tell them apart by asking why, not by looking.
+
+</Callout>
+
+## Composite: tree-shaped domains
+
+Some domains are trees: files and directories, panels containing widgets, menu categories containing dishes and sub-categories. A **Composite** gives leaf and group the same interface: a directory's size is the sum of its children's sizes, and the caller does not care which kind of node it holds.
+
+<Mermaid caption="Composite: Directory and File share one interface, and a Directory holds children of that interface, including other directories." chart={`classDiagram
+    class FsEntry {
+        <<interface>>
+        +name() String
+        +size() long
+    }
+    class File {
+        -long bytes
+        +size() long
+    }
+    class Directory {
+        -List children
+        +add(FsEntry entry)
+        +size() long
+    }
+    File ..|> FsEntry
+    Directory ..|> FsEntry
+    Directory o-- FsEntry : children
+`} />
+
+`Directory.size()` sums `child.size()`, and nesting comes free because a child may itself be a directory. The trade-off is that the shared interface must make sense for both: `add(child)` on a `File` has to throw or be absent, a dilemma the GoF book discusses. If leaves and groups share almost no operations, you have two types, not a composite.
+
+<Callout type="warning" title="Wrapper soup">
+
+Each layer is cheap; seven are not. Stack traces grow, debugging means stepping through forwarding methods, and `instanceof` and `equals` on the outermost object no longer see the real one. Worse, an object's calls to its own methods bypass the wrapper, so a caching decorator never sees a self-call. Prefer a few well-named layers assembled in one place, usually by a factory from [Design patterns I](/learn/design-patterns-creational).
+
+</Callout>
+
+<Callout type="interview" title="Name intent, not shape">
+
+When you draw a wrapper, say which of the five it is and why, in one clause: "a decorator, so retry and metrics stay out of the vendor adapter and can be removed in tests". If you cannot name the intent, the interviewer will.
+
+</Callout>
+
+Applied in the case studies: a statistics wrapper around an [in-memory cache](/learn/lld-in-memory-cache), the formatters and sinks of the [logging framework](/learn/lld-logging-framework), and the single entry point a [ride booking](/learn/lld-ride-booking) flow offers over matching, pricing and payment.
+
+<DeepDive title="Go deeper: why framework proxies miss self-calls">
+
+Frameworks that add transactions, caching or retries by annotation usually do it with a generated proxy that runs the extra behaviour, then forwards to your object. The proxy only sees calls from outside, so a method that calls another annotated method on `this` bypasses it and the second annotation silently does nothing. The fix: move that method into a separate, injected class, so the call crosses an object boundary and meets the proxy.
+
+</DeepDive>

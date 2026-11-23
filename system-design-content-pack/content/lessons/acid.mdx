@@ -1,0 +1,67 @@
+A **transaction** makes several operations one unit: <mark>all commit or all roll back</mark>. Moving ₹500 from A to B must never debit A without crediting B.
+
+```sql
+BEGIN;
+UPDATE accounts SET balance = balance - 500 WHERE id = 'A';
+UPDATE accounts SET balance = balance + 500 WHERE id = 'B';
+COMMIT;
+```
+
+| Letter | Guarantee | In the ₹500 example |
+| --- | --- | --- |
+| **A**tomicity | All or nothing | A crash after the debit rolls the debit back |
+| **C**onsistency | Rules and constraints always hold (balance ≥ 0, unique email, valid foreign keys) | A can't go negative |
+| **I**solation | Concurrent transactions don't interfere | Two withdrawals can't both read the old balance |
+| **D**urability | Committed data survives crashes (it is on disk or in a log) | After COMMIT, a power cut doesn't undo the transfer |
+
+**Durability** is built on a **write-ahead log (WAL)**. Before the database says "committed", it appends the change to a sequential log and forces that log to disk. The data pages are updated later, at leisure, and after a crash the database replays the log to repair them. One disk flush per commit is the price, which is why commit latency, not CPU, often caps a single database's write rate. The log's mechanics are in [Write-ahead logging and crash recovery](/learn/wal); how databases isolate transactions without blocking readers is in [MVCC and isolation levels](/learn/mvcc-isolation).
+
+## Isolation: the lost update
+
+Two withdrawals hit the same account at the same moment:
+
+<Mermaid caption="A lost update: both transactions read 1,000, both write 500, and one withdrawal vanishes from the books." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant A as Transaction A
+    participant DB as Account row
+    participant B as Transaction B
+    A->>DB: read balance (1,000)
+    B->>DB: read balance (1,000)
+    A->>DB: write balance = 500
+    B->>DB: write balance = 500
+    Note over DB: Two withdrawals of 500, yet the balance shows 500
+`} />
+
+Three fixes, cheapest first:
+
+- **Atomic update:** `UPDATE accounts SET balance = balance - 500 WHERE id = 'A' AND balance >= 500`, then check that one row changed. The database does the read and the write as one step.
+- **Explicit lock:** `SELECT … FOR UPDATE` before reading, so the second transaction waits for the first.
+- **Serializable isolation**, which detects the conflict and aborts one transaction; the application retries it.
+
+**Isolation levels**, from *read committed* through *repeatable read* to *serializable*, trade speed for safety.
+
+<Callout type="warning" title="Two different Cs">
+
+ACID's C is not CAP's C (see [CAP and PACELC](/learn/cap)). ACID's C means "rules respected"; CAP's C means "every read sees the latest write".
+
+</Callout>
+
+These guarantees cost performance, and they get much harder once data spans several machines.
+
+<DeepDive title="Go deeper: what each isolation level prevents">
+
+| Level | Dirty read | Non-repeatable read | Phantom read |
+| --- | --- | --- | --- |
+| Read committed | Prevented | Possible | Possible |
+| Repeatable read | Prevented | Prevented | Possible (per the SQL standard) |
+| Serializable | Prevented | Prevented | Prevented |
+
+A **dirty read** sees another transaction's uncommitted change. A **non-repeatable read** reads the same row twice and gets different values. A **phantom** reruns a query and finds new rows. PostgreSQL defaults to read committed, MySQL InnoDB to repeatable read, and real engines often prevent more than the standard requires.
+
+</DeepDive>

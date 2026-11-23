@@ -1,0 +1,70 @@
+{
+  "slug": "disaster-recovery",
+  "title": "Disaster recovery and backups",
+  "moduleId": "operations",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "The region hosting the primary database is gone, or a migration has just deleted the orders table in every replica, and the team discovers the backups have never been restored.",
+  "summary": "Disaster recovery covers what high availability cannot: a lost region or lost data. Set RPO and RTO per tier, pick one of four strategies, keep backups you have actually restored, and rehearse the failover before you need it.",
+  "catTip": "I keep a second bed in another house, pre-warmed. If the lights go out here, I walk over: the walk is my RTO, and the treats I left behind are my RPO. I rehearse the walk every month, treats in paw.",
+  "recall": {
+    "q": "Name the four DR strategies in order of cost, and say what each keeps running in the recovery region.",
+    "a": "Backup and restore (nothing running; copies of data and images, rebuilt on demand; RPO hours, RTO up to a day), pilot light (data replicated live, compute switched off; RPO minutes, RTO tens of minutes), warm standby (a scaled-down working copy; RPO seconds, RTO minutes), and multi-site active/active (full copies serving traffic; RPO and RTO near zero)."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a tiered plan a regional outage becomes an improvised rebuild, asynchronous replication quietly loses the last seconds of payments, and a backup that was never restored turns out to be unreadable on the worst day.",
+    "tradeoffs": "Each step down in RTO and RPO means more standing infrastructure in a second region, synchronous replication adds write latency, residency rules can forbid the obvious recovery region, and rehearsals cost real engineering time.",
+    "explainSimply": "Losing one server is like a flat tyre: the spare gets you going. A disaster is losing the whole car, so you decide in advance how much you can afford to lose and how long you can wait, and keep anything from a saved copy of your route to a second car already running. Then you practise the swap before you need it.",
+    "hint": "Two numbers decide everything: how much data you can lose, and how long you can be down."
+  },
+  "meow": "Second bed, other house, pre-warmed. Lost treats are RPO, the walk is RTO. Rehearsed monthly.",
+  "quiz": [
+    {
+      "prompt": "A payments company in India needs an RTO of minutes and an RPO of seconds for its ledger. Which plan fits?",
+      "options": [
+        "Backup and restore to a Singapore region, since it is the cheapest option that leaves the country",
+        "Warm standby in a second Indian region with continuous replication, because payment data must stay in India and the objectives rule out rebuilding on demand",
+        "Multi-site active/active across Mumbai and Frankfurt for the lowest possible RTO",
+        "Nightly snapshots kept in the same region, restored when needed"
+      ],
+      "answer": 1,
+      "explanation": "An RPO of seconds needs live replication and an RTO of minutes needs running compute, which is warm standby, and the RBI's 2018 directive keeps payment-system data in India, so the second region must be Indian. Active/active across Frankfurt is the strongest distractor: it meets the objectives but moves the data out of the country."
+    },
+    {
+      "prompt": "A team replicates its database continuously to a second region and concludes it no longer needs backups. What is wrong with that?",
+      "options": [
+        "Nothing, because continuous replication gives a lower RPO than any backup",
+        "Replication copies corruption and deletions as faithfully as good data, so only a point-in-time backup can return to the moment before the damage",
+        "Cross-region replicas cannot be promoted to primary",
+        "Backups are required only for compliance, not for recovery"
+      ],
+      "answer": 1,
+      "explanation": "A dropped table or a bad migration arrives in the replica within a second, so replication protects against losing a region, not against losing data. The low-RPO argument is the strongest distractor: it is true for a regional outage and irrelevant for a data disaster."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Your database replicates asynchronously to the recovery region with a lag of about four seconds. What is your effective RPO, and what would push it to zero?",
+      "a": "About four seconds: everything committed in the primary but not yet shipped is lost on failover. Synchronous replication, where each commit waits for the remote acknowledgement, pushes RPO to zero at the cost of write latency and of coupling the primary's availability to the link."
+    },
+    {
+      "q": "Pilot light versus warm standby: what is the one-sentence difference, and how does it show in RTO?",
+      "a": "Pilot light keeps the data live but the compute switched off, so failover must start and scale servers (RTO in tens of minutes); warm standby runs a scaled-down working copy that only has to scale up (RTO in minutes)."
+    }
+  ],
+  "glossary": [
+    { "term": "DR", "full": "Disaster Recovery", "note": "The plan and machinery for restoring service after an event high availability cannot absorb, such as losing a region or the data itself, measured by RPO and RTO." }
+  ],
+  "sources": [
+    { "title": "AWS whitepaper, \"Disaster Recovery of Workloads on AWS: Disaster recovery options in the cloud\"", "url": "https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html", "accessed": "2026-11-22", "supports": "the four strategies and their definitions; pilot light versus warm standby readiness; manual initiation with automated steps; Route 53 health-check failover and Global Accelerator anycast avoiding DNS caching; Aurora global database replication typically under a second and promotion in under a minute; data plane versus control plane; replication does not protect against corruption", "status": "verified" },
+    { "title": "AWS Well-Architected Framework, REL13-BP02 \"Use defined recovery strategies to meet the recovery objectives\"", "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/rel13-bp02.html", "accessed": "2026-11-22", "supports": "RPO in hours and RTO up to a day for backup and restore; RPO in minutes and RTO in tens of minutes for pilot light; RPO in seconds and RTO in minutes for warm standby; RPO and RTO toward zero for active-active; residency rules can rule out a second region; replication copies corruption so point-in-time backups are still needed; failback by resynchronising the primary", "status": "verified" },
+    { "title": "AWS Well-Architected Framework, REL09-BP04 \"Perform periodic recovery of the data to verify backup integrity and processes\"", "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/rel09-bp04.html", "accessed": "2026-11-22", "supports": "restore on a schedule into an isolated environment, validate with checksums and row counts, measure restore time against the RTO; anti-patterns of never querying restored data or assuming a backup exists", "status": "verified" },
+    { "title": "AWS Well-Architected Framework, REL13-BP03 \"Test disaster recovery implementation to validate the implementation\"", "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/rel13-bp03.html", "accessed": "2026-11-22", "supports": "exercise failover regularly including in production; confirm RTO and RPO on each test; anti-patterns of never exercising failover and of untested secondary data stores", "status": "verified" },
+    { "title": "AWS Well-Architected Framework, REL12-BP05 \"Conduct game days regularly\"", "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/rel12-bp05.html", "accessed": "2026-11-22", "supports": "a game day is a scheduled exercise in which the team responds to a simulated failure in a production-like environment with the same people and procedures; lessons feed back into runbooks", "status": "verified" },
+    { "title": "PostgreSQL documentation, \"Continuous Archiving and Point-in-Time Recovery (PITR)\"", "url": "https://www.postgresql.org/docs/current/continuous-archiving.html", "accessed": "2026-11-22", "supports": "base backup plus archived WAL replayed to a chosen recovery target (time, named restore point or transaction id); the base backup need not be consistent; WAL segments normally 16 MB", "status": "verified" },
+    { "title": "Amazon Route 53 Developer Guide, \"Values specific for failover records\"", "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resource-record-sets-values-failover.html", "accessed": "2026-11-22", "supports": "specify a TTL of 60 seconds or less for records associated with a health check so clients respond quickly to changes in health status", "status": "verified" },
+    { "title": "Reserve Bank of India, circular RBI/2017-18/153 \"Storage of Payment System Data\" (6 April 2018)", "url": "https://rbi.org.in/scripts/NotificationUser.aspx?Id=11244&Mode=0", "accessed": "2026-11-22", "supports": "the entire data relating to payment systems operated by system providers must be stored in a system only in India, with the foreign leg of a transaction excepted", "status": "verified" },
+    { "title": "GDPR Article 44, general principle for transfers", "url": "https://gdpr-info.eu/art-44-gdpr/", "accessed": "2026-11-22", "supports": "transfers of personal data to a third country take place only if the conditions of Chapter V are met", "status": "verified" }
+  ]
+}

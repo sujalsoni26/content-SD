@@ -1,0 +1,111 @@
+**Threat modelling** is analysing a representation of a system to find what can go wrong before an attacker does, and deciding what to do about it. The Threat Modeling Manifesto puts it as four questions: what are we working on, what can go wrong, what are we going to do about it, and did we do a good enough job. This lesson applies the method to the course's Instagram-like app.
+
+## What are we working on: the data-flow diagram
+
+Start with a **data-flow diagram** (DFD): external entities, processes, data stores, the flows between them, and **trust boundaries** drawn as zones where the level of trust changes (see [Security fundamentals](/learn/security-fundamentals)). The flows that cross a boundary are the candidates for attack.
+
+<Mermaid caption="The course's Instagram-like app as a DFD with four boundaries: B1 internet to edge, B2 edge to services, B3 services to data, B4 our system to a third party." chart={`flowchart LR
+    subgraph internet["Internet"]
+        app["Mobile and web clients"]
+        bad["Attacker"]
+    end
+    subgraph edge["Edge: B1 crossed"]
+        cdn["CDN"]
+        gw["API gateway"]
+    end
+    subgraph svc["Services: B2 crossed"]
+        feed["Feed service"]
+        post["Post service"]
+        chat["Chat service"]
+        workers["Workers"]
+    end
+    subgraph data["Data: B3 crossed"]
+        db[("Database")]
+        cache[("Cache")]
+        queue[("Queue")]
+        storage[("Object storage")]
+    end
+    subgraph third["Third parties: B4 crossed"]
+        push["Push notification provider"]
+    end
+    app --> cdn
+    app --> gw
+    bad --> gw
+    gw --> feed
+    gw --> post
+    gw --> chat
+    feed --> cache
+    feed --> db
+    post --> db
+    post --> queue
+    queue --> workers
+    workers --> storage
+    chat --> push
+`} />
+
+## What can go wrong: STRIDE at each boundary
+
+**STRIDE** is Microsoft's mnemonic for six threat categories, each the violation of one property.
+
+| Threat | Means | Property violated |
+| --- | --- | --- |
+| Spoofing | Using another identity's credentials | Authentication |
+| Tampering | Modifying data, stored or in flight | Integrity |
+| Repudiation | Denying an action with no way to prove otherwise | Non-repudiation |
+| Information disclosure | Exposing data to those not meant to see it | Confidentiality |
+| Denial of service | Denying service to legitimate users | Availability |
+| Elevation of privilege | An unprivileged user gaining privileged access | Authorisation |
+
+Two boundaries from the diagram:
+
+| STRIDE | B1: internet to gateway | B3: services to data |
+| --- | --- | --- |
+| Spoofing | Stolen session cookie; guessed password | Any process with the shared database password is the post service |
+| Tampering | Modified request body; replayed webhook | A worker writing to another tenant's rows |
+| Repudiation | A user denies deleting a post; no request log | Every service is the same database user, so nobody did it |
+| Information disclosure | Changing an id on the messages endpoint | A backup copied off a snapshot |
+| Denial of service | HTTP flood; a 100 MB upload | One tenant's hot query starving the pool |
+| Elevation of privilege | A regular user calling the admin route | Injection into a service connected as superuser |
+
+Each mitigation has its own lesson: MFA and session rotation ([Authentication](/learn/authentication)); object-level checks and row-level security ([Authorisation](/learn/authorization)); parameterised queries and signed webhooks ([API security](/learn/api-security)); mTLS identities and dynamic credentials, so that knowing the password stops being an identity ([Secrets management](/learn/secrets-management)); per-tenant keys for the backup ([Encryption](/learn/encryption)); request ids and audit logs ([Logging](/learn/logging)); quotas and bulkheads for the noisy tenant ([Bulkheads and graceful degradation](/learn/bulkheads-degradation)).
+
+## Abuse cases
+
+STRIDE finds technical threats. **Abuse cases** find the ones that use the product exactly as built: "as a reseller, I script five hundred accounts to reserve IPL final tickets the second they open". Write them as stories with the business, rank by likelihood and impact, and turn the accepted ones into requirements with acceptance tests in the same backlog as features. OWASP's API6, unrestricted access to sensitive business flows, is this category in Top 10 form.
+
+## What are we going to do: zero trust and segmentation
+
+Classical designs trusted the private network: once inside, a request was believed. **Zero trust**, as NIST SP 800-207 frames it, treats the network as compromised and aims for least-privilege, per-request access decisions. Its seven tenets, paraphrased: everything that holds data or computes is a resource; all communication is secured regardless of network location; access is granted per session with least privilege; policy is dynamic and weighs identity, device and observed state; the enterprise monitors every asset's security posture; authentication and authorisation are enforced before every access and re-evaluated; telemetry is collected to improve policy.
+
+For our app: mTLS identities between services, authorisation on internal calls and not only at the gateway, and no service that trusts a caller for its IP address. **Segmentation** still cuts the blast radius: edge, application and data tiers in separate subnets, a database that accepts connections only from the application tier, per-service network policies in the cluster. <mark>Zero trust stops you relying on segmentation; it does not stop you using it.</mark>
+
+## Denial of service in layers
+
+Defend availability at the layer with the capacity to absorb the attack.
+
+| Layer | Attack | Defence |
+| --- | --- | --- |
+| Network and transport | Volumetric floods, UDP reflection, SYN floods | Anycast CDN or edge network: one address announced from many sites, so attack traffic is absorbed near its sources (see [CDN internals](/learn/cdn-internals)) |
+| Application protocol | HTTP floods, cache-busting query strings, slow requests | WAF rules, caching, per-key and per-IP rate limits (see [Rate limiting](/learn/rate-limiting)) |
+| Service | Expensive endpoints saturated | Load shedding and backpressure so the database survives (see [Backpressure and load shedding](/learn/backpressure)); autoscaling with a cost ceiling |
+| Business | Bots exhausting a flow | Flow-level quotas, proof of humanity, the abuse cases above |
+
+Terabit floods are stopped only where there is terabit capacity: the edge, not your cluster.
+
+<Callout type="analogy" title="Walking the house with a burglar's eyes">
+
+A home security survey walks every door and window (the DFD) and asks at each: could someone pretend to be the postman, swap the parcel, deny they came, see in, block the door, or reach the safe from the hallway? The six questions are STRIDE; the walk is the model. Where it stops: a system changes weekly, so the model must be revisited on every change.
+
+</Callout>
+
+<Callout type="interview" title="Boundaries first, then STRIDE, then layers">
+
+"Here are my trust boundaries. At the internet boundary: spoofing, flooding and object-level disclosure, mitigated by MFA, edge rate limiting and per-object checks. At the data boundary: shared credentials and injection, mitigated by dynamic credentials, least-privilege grants and parameterised queries. DDoS: edge, then gateway, then load shedding."
+
+</Callout>
+
+<DeepDive title="Go deeper: where STRIDE came from and where it strains">
+
+STRIDE was written down at Microsoft in 1999 by Loren Kohnfelder and Praerit Garg in an internal paper, "The Threats to Our Products", and Microsoft's Security Development Lifecycle still uses it. Its categories overlap (spoofing usually leads to disclosure and elevation) and it ignores privacy and business abuse, hence the pairing with abuse cases. Adam Shostack's *Threat Modeling: Designing for Security* (2014) is the standard long-form treatment.
+
+</DeepDive>

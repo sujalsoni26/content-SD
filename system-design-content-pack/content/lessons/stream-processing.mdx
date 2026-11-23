@@ -1,0 +1,89 @@
+**Stream processing** computes over data that never ends. Instead of a job over last night's file, a processor keeps running: it consumes events as they arrive, holds state about what it has seen (counts, open sessions, the latest price per product) and emits results continuously. Two things make it harder than batch: time has two meanings, and state must survive crashes. The guarantees underneath are those of [Delivery semantics and exactly-once](/learn/delivery-semantics).
+
+## Two clocks
+
+**Event time** is when something happened, stamped by the device or service that produced it. **Processing time** is the wall clock of the machine doing the computing. They drift apart whenever events are delayed: a ride-booking app buffers GPS pings while the phone has no signal and uploads them minutes later. Count "rides started per minute" by processing time and the offline minutes show zero, then a spike. Count by event time and the answer is right, but you must decide how long to wait for stragglers.
+
+## Watermarks and late data
+
+A **watermark** is the processor's running estimate of how far event time has advanced. In Flink's definition, a watermark with value t declares that event time has reached t: no more elements with a timestamp at or below t are expected. An operator fed by several streams takes the minimum of its inputs' watermarks, so the slowest input holds everyone back. Watermarks are heuristics, typically "the largest timestamp seen minus a bounded delay such as 10 s", and the delay is the trade-off: short, and more events arrive **late**, after the watermark has passed their window; long, and every result waits. Flink drops late elements by default (allowed lateness is 0), can hold a window open for a configured lateness and re-emit corrected results, or can send late data to a side output so you at least count them.
+
+<Callout type="analogy" title="Postmarks and letterboxes">
+
+Event time is the postmark on a letter; processing time is the day it lands in your letterbox. Count birthday cards by arrival day and a postal strike piles a week of birthdays onto one Monday. A watermark is the sorting office saying "nothing postmarked before Tuesday is still in the van", which lets you close Tuesday's count. Where it breaks: no sorting office promises that, and neither can a watermark; the letters that break the guess are your late data.
+
+</Callout>
+
+## Windows
+
+| Window | Definition | Example |
+| --- | --- | --- |
+| Tumbling | Fixed size, no overlap; each event belongs to exactly one window | Orders per minute on a sales dashboard |
+| Sliding | Fixed size, advancing by a slide smaller than the size, so windows overlap | Failed logins in the last 5 minutes, evaluated every minute, for an alert |
+| Session | No fixed size; one window per key that closes after a gap of inactivity | A shopper's browsing session on Flipkart, ending after 30 minutes idle |
+| Global | One window for everything; results need a custom trigger | A running total since the job started |
+
+## State and checkpoints
+
+Almost every useful operator is **stateful**: a count holds a number, a join buffers rows, a session holds its open windows. Flink keeps that state local to the operator, in memory or in an embedded RocksDB, and makes it survive failures with **checkpoints**. The sources periodically inject barriers that flow with the records; when a barrier reaches an operator it snapshots its state, and a completed checkpoint is the source offsets plus every operator's state as of that barrier. After a failure the job restores the latest completed checkpoint and rewinds the sources to its offsets, so every later record is replayed into state that has never seen it: exactly-once for state. The algorithm, asynchronous barrier snapshotting, descends from Chandy and Lamport's distributed snapshots; operators with several inputs align barriers, pausing a fast input until the slow one catches up (unaligned checkpoints snapshot in-flight records instead of waiting). End to end, a sink either writes idempotently or joins a two-phase commit (pre-commit at the barrier, commit when the checkpoint completes), which is how Flink's Kafka sink is exactly-once.
+
+<Mermaid caption="One checkpoint, simplified to one operator. Barriers travel with the records, each operator snapshots when the barrier arrives, and a transactional sink pre-commits at the barrier but commits only when the JobManager confirms the whole checkpoint." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant J as JobManager
+    participant S as Kafka source
+    participant O as Window operator
+    participant K as Kafka sink
+    J->>S: Trigger checkpoint 7
+    Note over S: Record offset 1042, emit barrier
+    S->>O: Records, then barrier 7
+    Note over O: Snapshot window state
+    O->>K: Records, then barrier 7
+    Note over K: Pre-commit: transaction left open
+    K-->>J: Checkpoint 7 acknowledged
+    J-->>K: Checkpoint 7 complete
+    Note over K: Commit the Kafka transaction
+`} />
+
+## Joining a stream with a table
+
+Enriching a stream of orders with each product's current price is a **stream-table join**. A table is the latest value per key and can be rebuilt from a changelog: the stream-table duality Kafka Streams names KStream and KTable. The subtle part is *which version* of the row to use. Flink's event-time temporal join matches each order with the price as of the order's timestamp, using a versioned table; a processing-time temporal join or a lookup join against an external database takes whatever is latest, cheaper and sometimes wrong. The classic bug is an out-of-order update on the table side, which Kafka Streams does not handle by default; versioned state stores exist for it.
+
+## Kafka Streams or Flink
+
+<Comparison>
+
+<ComparisonItem title="Kafka Streams">
+
+A Java library inside your own service; nothing extra to run. Reads and writes Kafka only. Parallelism is the number of input partitions; scale by starting more instances. State in RocksDB backed by compacted changelog topics, with optional standby replicas; exactly-once through Kafka transactions. Fits Kafka-to-Kafka pipelines owned by a team that already runs services.
+
+</ComparisonItem>
+
+<ComparisonItem title="Apache Flink">
+
+A distributed engine: a JobManager coordinates, TaskManagers run the operators, on Kubernetes, YARN or standalone. Connectors for Kafka, Kinesis, Pulsar, files, JDBC and more; SQL beside the DataStream API. State checkpointed with barriers; exactly-once sinks via two-phase commit. Fits large stateful jobs, many sources and sinks and heavy event-time analytics, at the cost of running a cluster.
+
+</ComparisonItem>
+
+</Comparison>
+
+## Backpressure in a pipeline
+
+A slow operator must slow its upstream, or buffers grow until something dies. Kafka-based pipelines get this almost free: consumers pull, so a slow stage shows up as consumer lag rather than memory pressure. Inside Flink every network channel has a bounded pool of buffers and a task with no free output buffer is backpressured; since Flink 1.5 credit-based flow control has the receiver announce how many buffers it can take, so one slow channel no longer blocks the TCP connection it shares with healthy ones. The web UI shows each operator's time split between busy, backpressured and idle, the first place to look when a job falls behind; the general mechanisms are in [Backpressure and load shedding](/learn/backpressure).
+
+<Callout type="interview" title="Name the clock, then the late data">
+
+Say which time you window by and what happens to stragglers: "one-minute tumbling windows on event time, watermark five seconds behind the latest event, late events to a side output that corrects the dashboard". Then say what state the job holds and how it survives a crash; "we count per minute" is heard far more often than "here is what happens when a count is wrong".
+
+</Callout>
+
+<DeepDive title="Go deeper: lambda versus kappa">
+
+In Nathan Marz's **lambda architecture** every event feeds two systems: a batch layer that recomputes exact results over the whole history and a speed layer that produces fast, approximate ones, merged at query time. Jay Kreps's 2014 critique: you then maintain the same logic in two complex distributed systems. His **kappa architecture** keeps the full log in Kafka and, when the logic changes, starts a second instance of the stream job from the beginning of the retained log and, once it has caught up, switches readers to its output table. It needs long enough retention and a processor that replays faster than real time.
+
+</DeepDive>

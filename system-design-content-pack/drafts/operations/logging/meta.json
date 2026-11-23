@@ -1,0 +1,65 @@
+{
+  "slug": "logging",
+  "title": "Logging at scale",
+  "moduleId": "operations",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "Free-text log lines from fifty services cannot be searched by request, cost more to store than the database they describe, and quietly leak card numbers and tokens.",
+  "summary": "Write structured JSON events with levels and a correlation id, ship them through an agent and a broker to a searchable store, control cost with sampling, dynamic levels and retention tiers, and redact personal data at the source.",
+  "catTip": "My diary used to say 'ate something, felt odd'. Now every entry has fields: time, bowl, food, outcome. Searching for outcome equals hairball takes a second. I keep three days close by and a year in the attic.",
+  "recall": {
+    "q": "What makes a log line structured, and which one field should every line carry in a distributed system?",
+    "a": "A structured line is a record with named fields (timestamp, level, event name, attributes) instead of a sentence, so it can be filtered and aggregated without regular expressions. Every line should carry the correlation id, in practice the trace id, so one request's lines can be pulled from every service it touched."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without structure, ids and a budget, an incident means grepping fifty services' prose for a user's name, the log bill outgrows the database, and a token someone logged for debugging sits in cold storage for a year.",
+    "tradeoffs": "Structured logging needs discipline about field names, sampling means some INFO lines are gone when you want them, and redaction at the source can hide the very value you needed to debug a case.",
+    "explainSimply": "A log is a diary of what the system did. Writing each entry as a form with labelled boxes rather than a sentence lets you search a million entries in a second. Stamp every entry with the id of the customer's request, keep recent entries close at hand and old ones in a cheap archive, and never write down passwords or card numbers.",
+    "hint": "Think of a receipt with labelled fields rather than a story, stamped with one order number that follows the request everywhere."
+  },
+  "meow": "Meow in JSON, with a request id. Hairball events kept a year; purr events sampled.",
+  "quiz": [
+    {
+      "prompt": "Which change most reduces the cost of a log pipeline without losing the ability to debug incidents?",
+      "options": [
+        "Switch from JSON to free text, since the field names take up bytes",
+        "Keep every WARN and ERROR line, sample repetitive INFO lines at the agent, and tier retention from a hot index to cold object storage",
+        "Log at DEBUG everywhere so that nothing is missed when an incident happens",
+        "Delete all logs older than one day"
+      ],
+      "answer": 1,
+      "explanation": "Cost follows bytes ingested, indexed and retained, so sampling the repetitive lines and moving old data to cheap storage cuts it while keeping the lines that explain failures. Free text saves a few bytes but destroys searchability, which is the strongest distractor; DEBUG everywhere multiplies the bill, and one day of retention loses the week-old incident."
+    },
+    {
+      "prompt": "A payments service logs the full request body at INFO so that developers can debug failed captures. What is the main problem?",
+      "options": [
+        "INFO is the wrong level; request bodies belong at DEBUG",
+        "Card numbers, tokens and other personal data now sit in a store that is copied widely and kept for the whole retention period",
+        "JSON request bodies are too large to index efficiently",
+        "There is no problem as long as the log store is inside the company network"
+      ],
+      "answer": 1,
+      "explanation": "Logs leak for as long as they are retained and to everyone who can search them, so secrets and PII must be redacted at the source. The level is the strongest distractor: moving the body to DEBUG only hides the leak until someone switches DEBUG on."
+    }
+  ],
+  "cards": [
+    {
+      "q": "An incident spans five services. How does a correlation id help, and how does it relate to a trace id?",
+      "a": "Generated at the edge, passed in a header on every call and stamped on every log line, it lets one filter return the whole request's lines across all five services in order. With tracing in place the trace id from the traceparent header plays this role, so log lines join to trace spans."
+    }
+  ],
+  "glossary": [
+    { "term": "PII", "full": "Personally Identifiable Information", "note": "Any data that identifies a person directly or indirectly: names, id numbers, emails, phone numbers, location, online identifiers. Keep it out of logs or redact it at the source." }
+  ],
+  "sources": [
+    { "title": "OpenTelemetry specification, \"Logs Data Model\"", "url": "https://opentelemetry.io/docs/specs/otel/logs/data-model/", "accessed": "2026-11-22", "supports": "log record fields (Timestamp, SeverityText, SeverityNumber, Body, Attributes, Resource, TraceId, SpanId); severity numbers 1 to 24 mapping to TRACE, DEBUG, INFO, WARN, ERROR, FATAL; TraceId as defined by W3C Trace Context", "status": "verified" },
+    { "title": "RFC 5424, \"The Syslog Protocol\", section 6.2.1 (Table 2, message severities)", "url": "https://www.rfc-editor.org/rfc/rfc5424", "accessed": "2026-11-22", "supports": "the eight syslog severities from Emergency (0) to Debug (7)", "status": "verified" },
+    { "title": "W3C Recommendation, \"Trace Context\" (23 November 2021)", "url": "https://www.w3.org/TR/trace-context/", "accessed": "2026-11-22", "supports": "the traceparent header carries the trace id between services", "status": "verified" },
+    { "title": "The Twelve-Factor App, \"XI. Logs\"", "url": "https://12factor.net/logs", "accessed": "2026-11-22", "supports": "treat logs as event streams; the app writes unbuffered to stdout and never concerns itself with routing or storage; the execution environment collates and routes streams", "status": "verified" },
+    { "title": "Spring Boot Actuator REST API, \"Loggers\"", "url": "https://docs.spring.io/spring-boot/api/rest/actuator/loggers.html", "accessed": "2026-11-22", "supports": "changing a logger's level at runtime with a POST to /actuator/loggers/{name} carrying configuredLevel, and clearing it with an empty object", "status": "verified" },
+    { "title": "Elasticsearch Guide, \"Data tiers\"", "url": "https://www.elastic.co/guide/en/elasticsearch/reference/current/data-tiers.html", "accessed": "2026-11-22", "supports": "hot, warm, cold and frozen tiers, each less frequently accessed and cheaper, with frozen served from searchable snapshots", "status": "verified" },
+    { "title": "OWASP Cheat Sheet Series, \"Logging Cheat Sheet\" (Data to exclude)", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html", "accessed": "2026-11-22", "supports": "never log passwords, session identifiers, access tokens, connection strings, encryption keys, bank account or payment card holder data, or sensitive personal data", "status": "verified" },
+    { "title": "GDPR Article 4(1), definition of personal data", "url": "https://gdpr-info.eu/art-4-gdpr/", "accessed": "2026-11-22", "supports": "personal data is any information relating to an identified or identifiable natural person, including names, identification numbers, location data and online identifiers", "status": "verified" }
+  ]
+}

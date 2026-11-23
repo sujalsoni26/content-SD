@@ -1,0 +1,38 @@
+On 500M rows, `WHERE email = …` without an index is a **full table scan**: O(n). An **index**, usually a **B-tree**, keeps a column's values sorted with pointers to the rows, so a lookup takes <mark>O(log n) steps</mark>, like the index at the back of a book.
+
+```sql
+CREATE INDEX idx_users_email ON users(email);
+```
+
+<Interactive name="index-scan" />
+
+## Kinds of index
+
+- **Primary** index on the primary key (automatic).
+- **Secondary** indexes on other columns.
+- **Composite** indexes on several columns, where **order matters**: `(country, city)` helps `country` or `country + city`, not `city` alone.
+
+Reading a query plan and designing covering indexes: [Indexes and query execution](/learn/query-execution).
+
+<Callout type="analogy" title="The phone directory">
+
+A directory sorted by surname, then first name, helps you find "Sharma, Priya" fast. It's useless if you only know "Priya". That's why the leftmost column of a composite index matters.
+
+</Callout>
+
+## The cost
+
+- Extra **storage**.
+- **Slower writes**: every index updates on each insert, update or delete.
+
+<Callout type="idea" title="Rule of thumb">
+
+Index the columns your real queries **filter, join and sort on**, not everything.
+
+</Callout>
+
+<DeepDive title="Go deeper: why B-trees are so shallow">
+
+A B-tree node is a disk page holding hundreds of keys, so each level multiplies the reach by a few hundred. With about 100 keys per page, 500 million rows need only 4–5 levels, so a lookup is a handful of page reads, and the top levels usually sit in RAM. Use `EXPLAIN` to check whether a query uses an index or scans. Why some databases use log-structured trees instead of B-trees: [B-trees vs LSM trees](/learn/btree-vs-lsm).
+
+</DeepDive>

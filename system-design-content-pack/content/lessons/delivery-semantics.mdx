@@ -1,0 +1,87 @@
+**At-most-once**, **at-least-once** and **exactly-once**, introduced in [Message queues](/learn/message-queues), are not switches on the broker. They fall out of two choices: whether a producer retries after a lost acknowledgement, and whether a consumer records its progress *before* or *after* it does the work. Kafka's default is at-least-once. Everything stronger is built on top of it with the tools from [Idempotency](/learn/idempotency), applied at every hop of a pipeline of [partitions and consumer groups](/learn/partitions-consumer-groups).
+
+## Commit before, or commit after?
+
+A consumer reads a batch, does something with it (writes rows, calls an API, publishes downstream) and commits its offset. The order of the last two steps decides the guarantee:
+
+| Order | If the consumer crashes in between | Guarantee |
+| --- | --- | --- |
+| Read, commit, then process | The committed records are never processed | At-most-once |
+| Read, process, then commit | The processed records are processed again on restart | At-least-once |
+
+<Mermaid caption="Commit after processing. The work survived the crash, the commit did not, so the restarted consumer repeats the batch: at-least-once." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant K as Kafka (partition 3)
+    participant C as Consumer
+    participant D as Database
+    C->>K: Poll from offset 41
+    K-->>C: Records 41 to 45
+    C->>D: Insert payments 41 to 45
+    D-->>C: Done
+    Note over C: Crash before the offset commit
+    Note over K: Committed offset is still 41
+    C->>K: Restart, poll from offset 41
+    K-->>C: Records 41 to 45 again
+    C->>D: Insert payments 41 to 45 again
+    Note over D: Duplicates, unless the insert is idempotent
+`} />
+
+Auto-commit (`enable.auto.commit=true`, every 5 s by default) commits in the background whatever the last poll returned. Finish each batch before polling again and that is at-least-once; hand records to background threads and poll on, and offsets can be committed for unfinished work, at-most-once in disguise. Serious consumers turn it off and commit explicitly after the batch.
+
+## Producer retries and the idempotent producer
+
+The producer has the mirror problem. It sends a batch, the acknowledgement is lost, it retries, and the broker now holds the batch twice. The **idempotent producer** fixes exactly this: the broker assigns each producer an id, the producer numbers every batch per partition with a sequence number, and the broker discards a batch whose sequence it has already written. Since Kafka 3.0 it is on by default (`enable.idempotence=true`, which needs `acks=all`, retries and at most five in-flight requests; conflicting settings switch it off silently unless you enabled it explicitly, in which case the client refuses to start).
+
+What it does not cover is the thing people expect it to. The id belongs to one producer instance: if your application crashes after `send()` returned, restarts and sends the same business event again, that is a new producer id and a new sequence, a legitimate second record. Deduplicating *application* resends needs an event id or natural key the consumer can check.
+
+## Transactions: consume, transform, produce
+
+A stream processor reads from one topic, computes, writes to another and commits its input offset; a crash between the write and the commit replays the input and duplicates the output. Kafka **transactions** make the output records and the offset commit atomic: the producer, given a `transactional.id`, begins a transaction, sends its results, adds the consumed offsets with `sendOffsetsToTransaction`, and commits. A transaction coordinator on a broker tracks the state in an internal transaction log, replicated three times by default, which is why transactions need three brokers out of the box.
+
+Two details carry the guarantee. The `transactional.id` is stable across restarts, so when a new instance registers it the coordinator bumps an epoch and any older instance with the same id becomes a **zombie** whose writes are fenced, so a stalled process cannot commit after its replacement has. And consumers must read with `isolation.level=read_committed` (the default is `read_uncommitted`) to see only committed records, their reads stopping at the last stable offset while a transaction is open. Kafka Streams packages all of this as `processing.guarantee=exactly_once_v2` (brokers 2.5 or newer); its default is `at_least_once`.
+
+## Where exactly-once stops
+
+Inside Kafka, "exactly-once" means each input record's effect appears once in the output topics and state stores, even across failures. It says nothing about a payment API, an email or a row in PostgreSQL: a transaction can abort the Kafka side, not recall the email. Across arbitrary systems exactly-once *delivery* is impossible for the reason in [What makes a system distributed](/learn/distributed-fundamentals): the acknowledgement can be lost, so the sender never knows whether to send again. What you can have is exactly-once *effect*, if the sink cooperates:
+
+- **Idempotent writes.** Upsert by a natural key, a unique constraint on the event id, or a dedup table of seen ids. The second attempt changes nothing.
+- **Offsets stored with the output.** Write the result and the consumed offset in the same database transaction, and on restart seek to the stored offset instead of trusting Kafka's; Kafka itself keeps its position in the same log as the data.
+- **Two-phase commit with the sink.** Pre-commit at a checkpoint, commit when every participant has, as Flink's Kafka sink does (next lesson). Costly, and rare outside stream processors.
+
+## Effectively once, end to end
+
+The honest name for the whole chain is **effectively once**: at-least-once delivery everywhere plus deduplication at every boundary.
+
+| Hop | What goes wrong | Building block |
+| --- | --- | --- |
+| Service updates its database and publishes an event | One happens without the other | Transactional outbox: the event row in the same transaction, relayed afterwards |
+| Relay or producer sends to Kafka | Retry after a lost ack | Idempotent producer; the relay may still resend after a crash, so events carry an id |
+| Broker stores it | Leader dies before replication | acks=all with min.insync.replicas 2 |
+| Consumer processes | Crash before the commit | Commit after processing; dedup by event id or key |
+| Sink | The repeated write | Idempotent write, or the offset stored with the output |
+
+The outbox is the hop most designs forget (see the DeepDive in [Pub/sub](/learn/pubsub)): a service that commits an order and then fails to publish leaves downstream systems that never hear of it, and no consumer-side care can recover an event that was never written.
+
+<Callout type="analogy" title="Ticking the list before or after">
+
+You have a chore list and a pen. Tick each chore before doing it and fall asleep halfway: the untouched chore stays ticked and never gets done (at-most-once). Do the chore first, tick after, and fall asleep between the two: tomorrow you do it again (at-least-once). There is no third way to use the pen; the only route to "done exactly once" is making the repeat harmless, like noticing the bin is already empty. Where it breaks: a repeated chore is cheap, a repeated payment is not, so the check must be designed in, not hoped for.
+
+</Callout>
+
+<Callout type="interview" title="Never promise exactly-once delivery">
+
+Say "at-least-once delivery with idempotent consumers, so the effect is exactly once", and name where the dedup key comes from: an event id minted by the producer, or a natural key such as the order id. If asked about Kafka's exactly-once, scope it precisely: the idempotent producer removes retry duplicates within one producer session, transactions make Kafka-to-Kafka pipelines atomic, and neither reaches a database or an email.
+
+</Callout>
+
+<DeepDive title="Go deeper: why the acknowledgement is the problem">
+
+Delivery needs two messages, the data and the acknowledgement, and either can be lost. Lose the acknowledgement and the sender faces the two generals' choice: resend and risk a duplicate, or stop and risk a loss. No protocol escapes it, so every "exactly-once" system is at-least-once plus a receiver that recognises repeats, and recognising needs state (a sequence number, an idempotency key, a dedup table) that must itself survive crashes. Kafka's idempotent producer has exactly this shape: the broker remembers the last five batches per producer and partition, which is why `max.in.flight.requests.per.connection` cannot exceed five with idempotence on.
+
+</DeepDive>

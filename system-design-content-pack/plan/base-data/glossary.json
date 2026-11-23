@@ -1,0 +1,458 @@
+[
+ {
+  "term": "ACID",
+  "full": "Atomicity, Consistency, Isolation, Durability",
+  "note": "The four guarantees of a database transaction.",
+  "lessonSlug": "acid"
+ },
+ {
+  "term": "ACK",
+  "full": "Acknowledgment",
+  "note": "A receiver confirming it got the data.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "AOF",
+  "full": "Append-Only File",
+  "note": "Redis persistence: every write is logged to disk so data survives a restart.",
+  "lessonSlug": "url-shortener"
+ },
+ {
+  "term": "AP",
+  "full": "Available + Partition-tolerant",
+  "note": "During a partition, answer with possibly stale data.",
+  "lessonSlug": "cap"
+ },
+ {
+  "term": "API",
+  "full": "Application Programming Interface",
+  "note": "The contract between pieces of software.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "AWS",
+  "full": "Amazon Web Services",
+  "note": "Amazon's cloud platform.",
+  "lessonSlug": "scaling"
+ },
+ {
+  "term": "CAP",
+  "full": "Consistency, Availability, Partition tolerance",
+  "note": "During a network partition you must choose C or A.",
+  "lessonSlug": "cap"
+ },
+ {
+  "term": "CDN",
+  "full": "Content Delivery Network",
+  "note": "Edge servers near users that cache static files.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "CP",
+  "full": "Consistent + Partition-tolerant",
+  "note": "During a partition, refuse or delay answers that might be wrong.",
+  "lessonSlug": "cap"
+ },
+ {
+  "term": "CPU",
+  "full": "Central Processing Unit",
+  "note": "The processor that runs your code.",
+  "lessonSlug": "backpressure"
+ },
+ {
+  "term": "CSS",
+  "full": "Cascading Style Sheets",
+  "note": "The styling language of web pages; a typical static file.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "DAU",
+  "full": "Daily Active Users",
+  "note": "Unique users per day; the starting input for estimates.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "DB",
+  "full": "Database",
+  "note": "Where the data lives.",
+  "lessonSlug": "sql-nosql"
+ },
+ {
+  "term": "DDoS",
+  "full": "Distributed Denial of Service",
+  "note": "An attack that floods a service with traffic from many machines.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "DLQ",
+  "full": "Dead-Letter Queue",
+  "note": "Where messages that keep failing are parked for inspection.",
+  "lessonSlug": "message-queues"
+ },
+ {
+  "term": "DNS",
+  "full": "Domain Name System",
+  "note": "The internet's phone book: names to IP addresses.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "EDA",
+  "full": "Event-Driven Architecture",
+  "note": "Services emit and react to events instead of calling each other.",
+  "lessonSlug": "pubsub"
+ },
+ {
+  "term": "ELB",
+  "full": "Elastic Load Balancing",
+  "note": "AWS's managed load balancer.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "gRPC",
+  "full": "gRPC Remote Procedure Call",
+  "note": "Google's open-source RPC framework. The 'g' changes meaning each release.",
+  "lessonSlug": "grpc"
+ },
+ {
+  "term": "HA",
+  "full": "High Availability",
+  "note": "Surviving failures without users noticing.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "HTTP",
+  "full": "HyperText Transfer Protocol",
+  "note": "The message format of the web: requests and responses.",
+  "lessonSlug": "http"
+ },
+ {
+  "term": "HTTPS",
+  "full": "HTTP Secure",
+  "note": "HTTP over TLS: encrypted, tamper-proof, authenticated.",
+  "lessonSlug": "http"
+ },
+ {
+  "term": "I/O",
+  "full": "Input/Output",
+  "note": "Reading and writing to disk or network.",
+  "lessonSlug": "latency"
+ },
+ {
+  "term": "IP",
+  "full": "Internet Protocol",
+  "note": "Addresses and routes packets between machines.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "IPv4",
+  "full": "Internet Protocol version 4",
+  "note": "32-bit addresses like 203.0.113.10 (DNS A record).",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "IPv6",
+  "full": "Internet Protocol version 6",
+  "note": "128-bit addresses (DNS AAAA record).",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "ISP",
+  "full": "Internet Service Provider",
+  "note": "Your internet company; often runs your DNS resolver.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "JS",
+  "full": "JavaScript",
+  "note": "The programming language of the browser.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "JSON",
+  "full": "JavaScript Object Notation",
+  "note": "A text format for structured data, used by most REST APIs.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "KB",
+  "full": "Kilobyte",
+  "note": "About 10^3 bytes (1,024 exactly).",
+  "lessonSlug": "estimation-numbers"
+ },
+ {
+  "term": "L4",
+  "full": "Layer 4 (transport layer)",
+  "note": "Load balancing by IP and port; fast but content-blind.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "L7",
+  "full": "Layer 7 (application layer)",
+  "note": "Load balancing by HTTP path, headers and cookies.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "LB",
+  "full": "Load Balancer",
+  "note": "Spreads requests across a pool of servers.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "LFU",
+  "full": "Least Frequently Used",
+  "note": "Cache eviction: drop the entry used the fewest times.",
+  "lessonSlug": "caching"
+ },
+ {
+  "term": "LRU",
+  "full": "Least Recently Used",
+  "note": "Cache eviction: drop the entry untouched for the longest.",
+  "lessonSlug": "caching"
+ },
+ {
+  "term": "LSM",
+  "full": "Log-Structured Merge (tree)",
+  "note": "A storage design that turns random writes into fast sequential ones.",
+  "lessonSlug": "latency"
+ },
+ {
+  "term": "MAU",
+  "full": "Monthly Active Users",
+  "note": "Unique users per month. DAU is roughly 25–50% of MAU.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "MD5",
+  "full": "Message Digest 5",
+  "note": "An old 128-bit hash function.",
+  "lessonSlug": "url-shortener"
+ },
+ {
+  "term": "NewSQL",
+  "full": "Distributed SQL databases",
+  "note": "Relational databases that shard and replicate automatically (Spanner, CockroachDB, TiDB) while keeping SQL and transactions.",
+  "lessonSlug": "sql-nosql"
+ },
+ {
+  "term": "NoSQL",
+  "full": "Not only SQL",
+  "note": "A family of non-relational databases: key-value, document, wide-column, graph.",
+  "lessonSlug": "sql-nosql"
+ },
+ {
+  "term": "OS",
+  "full": "Operating System",
+  "note": "Windows, Linux, macOS, Android, iOS.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "PACELC",
+  "full": "if Partition: Availability or Consistency; Else: Latency or Consistency",
+  "note": "Daniel Abadi's extension of CAP for the everyday, healthy case.",
+  "lessonSlug": "cap"
+ },
+ {
+  "term": "PB",
+  "full": "Petabyte",
+  "note": "About 10^15 bytes.",
+  "lessonSlug": "estimation-numbers"
+ },
+ {
+  "term": "PoP",
+  "full": "Point of Presence",
+  "note": "A CDN edge location near users.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "PoPs",
+  "full": "Points of Presence",
+  "note": "CDN edge locations near users.",
+  "lessonSlug": "cdn"
+ },
+ {
+  "term": "QPS",
+  "full": "Queries Per Second",
+  "note": "Request rate. Also called RPS or TPS.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "QUIC",
+  "full": "QUIC (originally \"Quick UDP Internet Connections\")",
+  "note": "A transport built on UDP that powers HTTP/3.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "RAM",
+  "full": "Random Access Memory",
+  "note": "Fast, volatile main memory. About 1,000x faster than SSD for random reads.",
+  "lessonSlug": "latency"
+ },
+ {
+  "term": "REST",
+  "full": "Representational State Transfer",
+  "note": "An API style: resources with URLs, HTTP methods as verbs.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "RFC",
+  "full": "Request for Comments",
+  "note": "The numbered documents that define internet standards, such as RFC 9110 for HTTP.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "RPC",
+  "full": "Remote Procedure Call",
+  "note": "Calling a function on another machine as if it were local.",
+  "lessonSlug": "grpc"
+ },
+ {
+  "term": "RPO",
+  "full": "Recovery Point Objective",
+  "note": "How much data you can afford to lose in a failure.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "RPS",
+  "full": "Requests Per Second",
+  "note": "Same idea as QPS.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "RTO",
+  "full": "Recovery Time Objective",
+  "note": "How long you can afford to be down.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "S3",
+  "full": "Simple Storage Service",
+  "note": "Amazon's object storage.",
+  "lessonSlug": "object-storage"
+ },
+ {
+  "term": "SHA-256",
+  "full": "Secure Hash Algorithm, 256-bit",
+  "note": "A cryptographic hash function.",
+  "lessonSlug": "url-shortener"
+ },
+ {
+  "term": "SLA",
+  "full": "Service Level Agreement",
+  "note": "The contractual promise to customers, with penalties.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "SLI",
+  "full": "Service Level Indicator",
+  "note": "What you measure: uptime, p99 latency.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "SLO",
+  "full": "Service Level Objective",
+  "note": "Your internal target for an SLI.",
+  "lessonSlug": "availability"
+ },
+ {
+  "term": "SPOF",
+  "full": "Single Point of Failure",
+  "note": "One component whose failure takes everything down.",
+  "lessonSlug": "load-balancing"
+ },
+ {
+  "term": "SQL",
+  "full": "Structured Query Language",
+  "note": "The query language of relational databases.",
+  "lessonSlug": "sql-nosql"
+ },
+ {
+  "term": "SRE",
+  "full": "Site Reliability Engineering",
+  "note": "Google's discipline for running reliable production systems.",
+  "lessonSlug": "backpressure"
+ },
+ {
+  "term": "SSD",
+  "full": "Solid-State Drive",
+  "note": "Flash storage: faster than spinning disks, slower than RAM.",
+  "lessonSlug": "latency"
+ },
+ {
+  "term": "SSE",
+  "full": "Server-Sent Events",
+  "note": "A one-way server-to-client stream over HTTP.",
+  "lessonSlug": "websockets"
+ },
+ {
+  "term": "SYN",
+  "full": "Synchronize",
+  "note": "The first packet of the TCP handshake.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "TB",
+  "full": "Terabyte",
+  "note": "About 10^12 bytes.",
+  "lessonSlug": "estimation-numbers"
+ },
+ {
+  "term": "TCP",
+  "full": "Transmission Control Protocol",
+  "note": "Reliable, ordered delivery with a handshake.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "TLD",
+  "full": "Top-Level Domain",
+  "note": "The last part of a name: .com, .in, .org.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "TLS",
+  "full": "Transport Layer Security",
+  "note": "Encryption, integrity and server authentication for connections.",
+  "lessonSlug": "http"
+ },
+ {
+  "term": "TPS",
+  "full": "Transactions Per Second",
+  "note": "Same idea as QPS.",
+  "lessonSlug": "estimation-formulas"
+ },
+ {
+  "term": "TTL",
+  "full": "Time To Live",
+  "note": "How long a cached copy stays valid before it expires.",
+  "lessonSlug": "dns"
+ },
+ {
+  "term": "UDP",
+  "full": "User Datagram Protocol",
+  "note": "Fast, connectionless, no delivery guarantees.",
+  "lessonSlug": "tcp-udp"
+ },
+ {
+  "term": "URL",
+  "full": "Uniform Resource Locator",
+  "note": "A web address.",
+  "lessonSlug": "rest"
+ },
+ {
+  "term": "UUID",
+  "full": "Universally Unique Identifier",
+  "note": "A random 128-bit ID, practically never repeated.",
+  "lessonSlug": "idempotency"
+ },
+ {
+  "term": "VM",
+  "full": "Virtual Machine",
+  "note": "A software computer running on shared hardware; takes minutes to boot.",
+  "lessonSlug": "backpressure"
+ },
+ {
+  "term": "WAL",
+  "full": "Write-Ahead Log",
+  "note": "The sequential log a database flushes before confirming a commit; replayed after a crash.",
+  "lessonSlug": "acid"
+ }
+]

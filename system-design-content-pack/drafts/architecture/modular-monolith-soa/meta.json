@@ -1,0 +1,71 @@
+{
+  "slug": "modular-monolith-soa",
+  "title": "Monolith, modular monolith, SOA and microservices",
+  "moduleId": "architecture",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "A codebase with no internal boundaries cannot be split without a rewrite, and a split made along the wrong lines produces services that share tables and fail together.",
+  "summary": "A modular monolith keeps one deployment but enforces bounded contexts in code: one package per business capability, a small public interface, no shared tables. SOA's bus showed what happens when the middle gets smart; split only along boundaries already proven in the monolith.",
+  "catTip": "I nap in one house with many rooms. I use the doors. The day I needed my own house was the day the humans kept stepping on my tail, not the day I read about houses.",
+  "recall": {
+    "q": "What is a bounded context, and why is it the right unit for a module or a service?",
+    "a": "A bounded context is the boundary within which one model and one vocabulary apply, fixed in terms of team, code base and schema. Because the meaning of a term such as 'order' changes at that line, a module or service drawn along it can own its data and change without coordinating with the others."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without enforced module boundaries every feature reaches into every table, so a change anywhere breaks tests everywhere and the monolith can never be split except by rewriting it.",
+    "tradeoffs": "Hard boundaries cost indirection and duplicated data inside one process, and a premature split into services adds network failures and operations overhead without buying any independence.",
+    "explainSimply": "Think of a department store under one roof: shoes, groceries and electronics each keep their own stock and tills, and a shopper walks between them through the aisles. The store does not need to become three separate shops until the queues or the deliveries demand it. A modular monolith is that store; the departments are bounded contexts.",
+    "hint": "Think about the word 'order' as three different teams would define it, and where the definitions change."
+  },
+  "meow": "One box, many rooms, doors between them. Meow at the door, never through the wall.",
+  "quiz": [
+    {
+      "prompt": "A team splits an order monolith into an order service and an invoice service that both read and write the same orders table. Which statement is correct?",
+      "options": [
+        "They now have microservices, because the two services deploy separately",
+        "The shared table couples both services at schema and lock level, so the split bought operations overhead without independence",
+        "The shared table is fine as long as both services use the same ORM and migrations tool",
+        "The split is safe as long as the invoice service only reads from the table"
+      ],
+      "answer": 1,
+      "explanation": "Sharing tables means every schema change needs both teams and a long transaction in one service can block the other. A read-only consumer still breaks when the schema changes and can still be stalled by the writer's locks."
+    },
+    {
+      "prompt": "Which SOA-era idea did the microservices movement explicitly reject?",
+      "options": [
+        "Services with published contracts",
+        "Organising services around business capabilities",
+        "Placing routing, transformation and business rules in a central bus",
+        "Asynchronous messaging between services"
+      ],
+      "answer": 2,
+      "explanation": "'Smart endpoints and dumb pipes' keeps contracts, capability alignment and messaging but moves all logic out of the middleware into the services. Asynchronous messaging is the strongest distractor because ESBs carried messages too; what was rejected was the bus's intelligence, not messaging."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Your food-delivery monolith has an Ordering module and a Dispatch module. Dispatch needs the drop-off address. Name the right way and the wrong way for it to get it.",
+      "a": "Right: call Ordering's public interface, or consume an OrderPlaced event and keep its own copy of the fields it needs. Wrong: join Ordering's tables directly; that makes the two modules one schema, so neither can be extracted or changed on its own."
+    },
+    {
+      "q": "Give three signals that a module should become a separate service, and one bad reason.",
+      "a": "Team size (more people than can know the codebase, a deploy queue), independent scaling (one module needs far more instances or different hardware) and release coupling (one module's releases blocked by another's). Bad reason: it is the fashionable shape; one small team gains only network failures."
+    }
+  ],
+  "glossary": [
+    { "term": "SOA", "full": "Service-Oriented Architecture", "note": "2000s style in which enterprise applications were exposed as reusable services with contracts, usually integrated through a central bus." },
+    { "term": "ESB", "full": "Enterprise Service Bus", "note": "Central middleware that routed, transformed and orchestrated messages between SOA services; its accumulated smarts became the bottleneck." }
+  ],
+  "sources": [
+    { "title": "James Lewis and Martin Fowler, \"Microservices\" (martinfowler.com, 25 March 2014)", "url": "https://martinfowler.com/articles/microservices.html", "accessed": "2026-11-22", "supports": "'smart endpoints and dumb pipes'; the ESB as the main example of a smart pipe; the SOA comparison and the botched-SOA criticisms; organisation around business capabilities", "status": "verified" },
+    { "title": "Martin Fowler, \"BoundedContext\" (bliki, 15 January 2014)", "url": "https://martinfowler.com/bliki/BoundedContext.html", "accessed": "2026-11-22", "supports": "definition of bounded context, attribution to Eric Evans, the same word modelled differently in different contexts", "status": "verified" },
+    { "title": "Eric Evans, Domain-Driven Design: Tackling Complexity in the Heart of Software (Addison-Wesley, 2003), bounded context p. 335", "url": "https://www.domainlanguage.com/ddd/", "accessed": "2026-11-22", "supports": "bounded context set 'in terms of team organization, usage within specific parts of the application, and physical manifestations such as code bases and database schemas'", "status": "reference" },
+    { "title": "Microsoft patterns & practices, \"Reference 2: Introducing the Command Query Responsibility Segregation Pattern\" (2012, archived)", "url": "https://learn.microsoft.com/en-us/previous-versions/msp-n-p/jj591573(v=pandp.10)", "accessed": "2026-11-22", "supports": "verbatim quotation of Evans's bounded-context definition (p. 335) used to check the paraphrase above", "status": "verified" },
+    { "title": "Chris Richardson, \"Pattern: Decompose by business capability\" (microservices.io)", "url": "https://microservices.io/patterns/decomposition/decompose-by-business-capability.html", "accessed": "2026-11-22", "supports": "definition of business capability; stability of capabilities; 'two pizza' teams of 6 to 10", "status": "verified" },
+    { "title": "Chris Richardson, \"Pattern: Decompose by subdomain\" (microservices.io)", "url": "https://microservices.io/patterns/decomposition/decompose-by-subdomain.html", "accessed": "2026-11-22", "supports": "core, supporting and generic subdomains", "status": "verified" },
+    { "title": "Chris Richardson, \"Pattern: Shared database\" (microservices.io)", "url": "https://microservices.io/patterns/data/shared-database.html", "accessed": "2026-11-22", "supports": "development-time and runtime coupling of a shared database; one database may not fit all services' needs", "status": "verified" },
+    { "title": "Kirsten Westeinde, \"Deconstructing the Monolith: Designing Software that Maximizes Developer Productivity\" (Shopify Engineering, 21 February 2019)", "url": "https://shopify.engineering/deconstructing-monolith-designing-software-maximizes-developer-productivity", "accessed": "2026-11-22", "supports": "Shopify's modular monolith; about 6,000 classes reorganised by business domain; components own their data behind public interfaces; the Wedge tool flagging cross-component calls", "status": "verified" },
+    { "title": "Wikipedia, \"Enterprise service bus\"", "url": "https://en.wikipedia.org/wiki/Enterprise_service_bus", "accessed": "2026-11-22", "supports": "ESB functions (routing, transformation, protocol conversion, orchestration); term first published by Roy Schulte of Gartner in 2002; disadvantages: single point of failure, slower communication, configuration complexity, combinatorial testing", "status": "secondary" }
+  ]
+}

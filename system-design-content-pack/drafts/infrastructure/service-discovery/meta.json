@@ -1,0 +1,76 @@
+{
+  "slug": "service-discovery",
+  "title": "Service discovery and internal DNS",
+  "moduleId": "infrastructure",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "Service instances are created and destroyed all day, so any address a caller writes down is wrong within hours and requests go to machines that no longer exist.",
+  "summary": "A registry tracks which instances of a service are alive; either the client or a router consults it per request. Kubernetes Services, Consul, etcd and Eureka differ in who registers, how health is judged and how stale the answer can be.",
+  "catTip": "The humans keep moving my food bowl. I do not memorise the spot; I ask the dog, who always knows where it is now. Sometimes the dog is ten seconds behind. I sniff, I retry. Discovery is a cache of who is where.",
+  "recall": {
+    "q": "A caller in Kubernetes resolves pricing.payments.svc.cluster.local. What does the answer contain, and how does traffic then reach a healthy Pod?",
+    "a": "The ClusterIP, a stable virtual IP that never changes while Pods churn. kube-proxy on each node rewrites traffic for that IP to one of the Pod IPs listed in the Service's EndpointSlices, which contain only Pods currently passing their readiness probe."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Callers that hold fixed addresses keep sending requests to instances that were replaced or died, and every deployment or scale-down turns into a wave of connection errors.",
+    "tradeoffs": "The registry becomes a dependency of every request and its view is always slightly stale, so you tune heartbeat intervals between detecting failures quickly and wrongly evicting slow but healthy instances.",
+    "explainSimply": "Imagine phoning a hospital: you can keep the duty rota in your own phone and call a doctor directly, or dial the switchboard and let it put you through to whoever is on duty. The rota in your phone goes stale; the switchboard must never be engaged. Service discovery is choosing one of those two and keeping the rota fresh.",
+    "hint": "Think about which part of the answer stays fixed and which part changes with every rollout."
+  },
+  "meow": "Meow-where is the pricing service? Ask the registry, not your memory. Hiss at stale answers, retry on another paw.",
+  "quiz": [
+    {
+      "prompt": "Which statement correctly contrasts client-side and server-side discovery?",
+      "options": [
+        "Client-side discovery needs no registry because clients broadcast to all instances",
+        "Server-side discovery puts a router at a fixed address that consults the registry, trading an extra hop for simpler, language-agnostic clients",
+        "Server-side discovery is faster because the router caches addresses inside the client",
+        "Client-side discovery is what Kubernetes Services implement by default"
+      ],
+      "answer": 1,
+      "explanation": "Kubernetes Services are server-side discovery: the virtual IP is the fixed address and kube-proxy does the lookup, so the last option inverts the pattern. Client-side discovery still needs a registry; the client simply queries it and chooses an instance itself."
+    },
+    {
+      "prompt": "A Eureka-registered instance crashes without deregistering. With default settings, roughly how long might callers keep seeing it?",
+      "options": [
+        "It is removed instantly, because its TCP connection to the server drops",
+        "Up to about 30 seconds: the next missed heartbeat removes it",
+        "Up to about 2 minutes: the server waits 90 seconds without a heartbeat and clients refresh their cached registry every 30 seconds",
+        "Until an operator removes it by hand"
+      ],
+      "answer": 2,
+      "explanation": "The server evicts after 90 seconds without a renewal and client caches lag by up to another 30-second delta fetch, so the staleness window is roughly two minutes. Thirty seconds is the heartbeat interval, not the eviction time, which is the strongest distractor."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Why does a Kubernetes Service put a virtual IP in DNS instead of the Pod IPs?",
+      "a": "The ClusterIP never changes, so resolver caches cannot go stale; the fast-changing list of ready Pods lives in EndpointSlices, which the control plane updates immediately and kube-proxy applies on every node. Headless Services exist for the few clients that want Pod IPs directly."
+    },
+    {
+      "q": "Your registry health check calls the database behind each instance. Why can this make an incident worse?",
+      "a": "When the database slows, every instance fails the check at once, the registry removes them all and the service disappears entirely instead of degrading. Keep registry health checks about the instance itself and handle dependency failures with timeouts, retries and degraded responses."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Chris Richardson, microservices.io, Pattern: Client-side service discovery", "url": "https://microservices.io/patterns/client-side-discovery.html", "accessed": "2026-11-22", "supports": "the client-side pattern, its Eureka and Ribbon examples, and its benefits and drawbacks", "status": "verified" },
+    { "title": "Chris Richardson, microservices.io, Pattern: Server-side service discovery", "url": "https://microservices.io/patterns/server-side-discovery.html", "accessed": "2026-11-22", "supports": "the server-side pattern with AWS ELB and Kubernetes as examples, extra hop and a router to operate", "status": "verified" },
+    { "title": "HashiCorp Consul Docs, Consul architecture", "url": "https://developer.hashicorp.com/consul/docs/architecture", "accessed": "2026-11-22", "supports": "Consul servers use Raft for consensus; agents gossip via the Serf library", "status": "verified" },
+    { "title": "HashiCorp Consul Docs, Gossip protocol", "url": "https://developer.hashicorp.com/consul/docs/architecture/gossip", "accessed": "2026-11-22", "supports": "Serf gossip is used for membership and failure detection in LAN and WAN pools", "status": "verified" },
+    { "title": "HashiCorp Serf Docs, Gossip Protocol", "url": "https://github.com/hashicorp/serf/blob/master/docs/internals/gossip.html.markdown", "accessed": "2026-11-22", "supports": "Serf's gossip protocol is based on SWIM with adaptations; random probing, indirect probes and a suspicion state", "status": "verified" },
+    { "title": "HashiCorp Consul Docs, Standard DNS lookups", "url": "https://developer.hashicorp.com/consul/docs/services/discovery/dns-static-lookups", "accessed": "2026-11-22", "supports": "the service.consul lookup format and that instances failing health checks are omitted from results", "status": "verified" },
+    { "title": "etcd Docs, etcd3 API (Lease and Watch)", "url": "https://etcd.io/docs/v3.5/learning/api/", "accessed": "2026-11-22", "supports": "leases have a TTL kept alive by the client; on expiry all attached keys are deleted; the Watch API reports key changes", "status": "verified" },
+    { "title": "Netflix Eureka wiki, Understanding eureka client server communication", "url": "https://github.com/Netflix/eureka/wiki/Understanding-eureka-client-server-communication", "accessed": "2026-11-22", "supports": "heartbeats every 30 seconds, eviction after 90 seconds without renewal, registry delta fetch every 30 seconds", "status": "verified" },
+    { "title": "Netflix Eureka README", "url": "https://github.com/Netflix/eureka", "accessed": "2026-11-22", "supports": "Eureka is a REST-based service for discovery, load balancing and failover of middle-tier servers", "status": "verified" },
+    { "title": "Apache Cassandra Docs, Dynamo (Gossip)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html", "accessed": "2026-11-22", "supports": "every second each node gossips with a random peer; failure detection is a local decision by a phi accrual failure detector", "status": "verified" },
+    { "title": "Kubernetes Docs, DNS for Services and Pods", "url": "https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/", "accessed": "2026-11-22", "supports": "the my-svc.my-namespace.svc.cluster-domain pattern resolving to the cluster IP, headless Services resolving to Pod IPs, SRV records and the namespace search list", "status": "verified" },
+    { "title": "Kubernetes Docs, Customizing DNS Service", "url": "https://kubernetes.io/docs/tasks/administer-cluster/dns-custom-nameservers/", "accessed": "2026-11-22", "supports": "CoreDNS serves as cluster DNS and is exposed through a Service named kube-dns", "status": "verified" },
+    { "title": "Kubernetes Docs, Service", "url": "https://kubernetes.io/docs/concepts/services-networking/service/", "accessed": "2026-11-22", "supports": "ClusterIP is a stable virtual IP; headless Services (clusterIP: None) return Pod IPs; Endpoints API deprecated since v1.33", "status": "verified" },
+    { "title": "Kubernetes Docs, EndpointSlices", "url": "https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/", "accessed": "2026-11-22", "supports": "EndpointSlices track backend IPs, at most 100 per slice by default, created automatically for Services with a selector", "status": "verified" },
+    { "title": "Kubernetes Docs, Virtual IPs and Service Proxies", "url": "https://kubernetes.io/docs/reference/networking/virtual-ips/", "accessed": "2026-11-22", "supports": "kube-proxy on every node watches Services and EndpointSlices and redirects traffic for the cluster IP to an endpoint", "status": "verified" },
+    { "title": "Kubernetes Docs, Liveness, Readiness and Startup Probes", "url": "https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/", "accessed": "2026-11-22", "supports": "a failing readiness probe removes the Pod's IP from the EndpointSlices of matching Services", "status": "verified" },
+    { "title": "Das, Gupta, Motivala, SWIM: Scalable Weakly-consistent Infection-style Process Group Membership Protocol, DSN 2002", "url": "https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf", "accessed": "2026-11-22", "supports": "the gossip-based membership protocol family Serf is built on", "status": "reference" }
+  ]
+}

@@ -1,0 +1,48 @@
+**Availability** is the share of time the system works: `uptime ÷ (uptime + downtime)`. Each extra nine cuts the allowed downtime <mark>10×</mark> (a year has 8,760 hours):
+
+| Availability | Downtime per year | Downtime per day |
+| --- | --- | --- |
+| 99% | 3.65 days | 14.4 min |
+| 99.9% | 8.76 hours | 1.44 min |
+| 99.99% | 52.6 min | 8.6 s |
+| 99.999% | 5.26 min | 0.86 s |
+
+<Interactive name="nines" />
+
+- **Each nine costs far more engineering:** multi-region deployments, automated failover, no maintenance windows. Payments and critical gateways aim for four or five nines.
+- **Dependencies multiply:** two 99.9% services called in series give about 99.8%. Redundant copies in parallel raise availability.
+
+## SLI, SLO, SLA
+
+| Term | Meaning | Example |
+| --- | --- | --- |
+| SLI | What you measure | Uptime, p99 latency |
+| SLO | Your internal target | 99.95% of requests succeed each month |
+| SLA | The contractual promise to customers, with penalties | 99.9% or service credits are refunded |
+
+Choosing SLIs, setting targets and spending the error budget: [SLIs, SLOs and error budgets](/learn/slos-error-budgets).
+
+## High availability
+
+**High availability (HA)** means surviving failures without users noticing: no single point of failure, redundant servers behind load balancers, database replicas, several zones or regions, and **graceful degradation** (losing one of ten servers makes things slightly slower, not broken). **Failover** switches to a standby automatically, such as promoting a replica when the primary database dies (see [Database replication](/learn/replication)).
+
+## RPO and RTO
+
+<Diagram name="rpo-rto-timeline" caption="RPO looks back to the last good copy; RTO looks forward to recovery. Not to scale." />
+
+- **RPO (recovery point objective):** how much data you can afford to lose, counted back from the failure to the last good copy (30 s, 1 hour). Asynchronous replication and rare backups widen it; synchronous replication pushes it toward zero.
+- **RTO (recovery time objective):** how long you can afford to be down before service returns (5 minutes, 1 hour). Automated failover and warm standbys shrink it.
+
+Backups that actually restore, recovery tiers and losing a whole region: [Disaster recovery and backups](/learn/disaster-recovery).
+
+<Callout type="warning" title="Reality check">
+
+Even the biggest clouds rarely promise five nines; most service SLAs are 99.9–99.99%, and multi-hour cloud outages still happen.
+
+</Callout>
+
+<DeepDive title="Go deeper: error budgets">
+
+Google's SRE practice turns the SLO into a budget. A 99.9% SLO allows 0.1% failure: about 43 minutes in a 30-day month (30 × 1,440 min × 0.001). While budget remains, teams ship freely; once it is spent, releases slow down and reliability work comes first. It turns "how reliable should we be?" into a number both product and operations teams can plan around.
+
+</DeepDive>

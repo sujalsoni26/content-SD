@@ -1,0 +1,342 @@
+Browse a catalogue of a hundred million listings, add to a cart, check out, pay, and receive exactly one order for exactly one payment, with the stock still correct when a festival sale brings a week's traffic in an hour. The design is four services with four consistency rules: a **catalogue** that may be stale, an **inventory** that must never promise a unit twice, an **order** that stitches a purchase together as a saga, and a **payment** that talks to a provider you do not control and must never charge twice. Checkout is where they meet. The order is that of [How to work a case study](/learn/case-study-method).
+
+## Requirements
+
+- **Functional:** search and browse with filters; a product page with price, images and availability; a cart that survives the session and the device; checkout with a saved address and a payment method (cards, UPI, cash on delivery); order status, cancellation and refunds.
+- **Out of scope:** seller onboarding, delivery and logistics, returns, recommendations, reviews and fraud scoring beyond a hook in the saga; they return under *How it evolves*.
+- **Non-functional:**
+  - **Never confirm more units than exist**, because an oversold order becomes a cancellation, a refund and an apology, each costing more than the sale.
+  - **Exactly one order per payment and one payment per order**, because a double charge loses a customer and a free order loses money.
+  - **Catalogue reads under 300 ms at p99, available even when checkout is strained**, because browsing is the product most of the time and reads outnumber orders a thousand to one.
+  - **The cart is always writeable**, because a shopper who cannot add an item leaves.
+  - **Survive a festival sale at twenty times a normal day.**
+  - **Correct over fast at checkout:** a two-second checkout that is right beats a 200 ms one that oversells.
+
+## Estimation
+
+Assume 50M daily active shoppers on a normal day; 20 product-page views each, one search per four views, two 100 KB images per view; 10% of shoppers touch the cart, three updates each; 2% place an order, so 1M orders a day of 2.5 items; a catalogue of 100M listings at 5 KB of metadata and five images; an order with its items is 2 KB, kept seven years; a 3 s payment-provider round trip; a 10-minute reservation hold; peaks of three times the average on a normal day and twenty times on a festival-sale day; and a flash-sale drop of 10,000 phones with 2M shoppers pressing buy inside one minute. Two rules of thumb to measure before trusting: one Redis node sustains about 100k operations a second, and one PostgreSQL row sustains a few thousand serialized updates a second.
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Product-page views | 5 × 10⁷ × 20 ÷ 86,400, ×3 at peak | \~11.6k/s average, \~35k/s peak |
+| Festival-sale page views | 11.6k × 20 | \~230k/s |
+| Image egress on sale day | 230k × 2 × 100 KB | 46 GB/s ≈ 370 Gbps |
+| Searches | 11.6k ÷ 4, ×20 on sale | \~2.9k/s normal, \~58k/s sale |
+| Cart writes | 5 × 10⁷ × 10% × 3 ÷ 86,400, ×20 on sale | \~174/s normal, \~3.5k/s sale |
+| Orders | 10⁶ ÷ 86,400, ×3 peak, ×20 sale | \~12/s, \~35/s peak, \~230/s sale |
+| Payment calls in flight on sale day | 230/s × 3 s (Little's law) | \~700 concurrent |
+| Reservations open on sale day | 230/s × 600 s | \~140k holds |
+| Flash-sale buy attempts | 2M ÷ 60 s | \~33k/s against 10,000 units |
+| Catalogue metadata | 10⁸ × 5 KB | 500 GB |
+| Images | 10⁸ × 5 × 100 KB | 50 TB |
+| Search index | 10⁸ × 2 KB | 200 GB |
+| Orders stored | 10⁶ × 2 KB × 365 × 7 | \~5 TB |
+
+→ Two numbers dominate, and they are different problems: <mark>230k catalogue reads a second on sale day</mark>, a caching and CDN problem, and <mark>33k buy attempts a second against one row holding 10,000 units</mark>, a correctness problem that no sharding fixes because the contested thing is one number. Everything else is small: 230 orders a second and 5 TB in seven years fit one PostgreSQL primary with replicas. In [Three system shapes](/learn/system-shapes) terms: a read-heavy catalogue bolted to a correctness-heavy write path.
+
+## API
+
+| Endpoint | Request | Success | Errors |
+| --- | --- | --- | --- |
+| `GET /search?q=&category=&sort=` | – | 200 + hits (ids, price, availability flag) and facets | 429 rate limited |
+| `GET /products/{id}` | – | 200 + title, specs, image keys, price; cacheable for 60 s | 404 |
+| `GET /products/{id}/availability` | – | 200 + `{ "in_stock": true, "band": "few" }`; cacheable for 5 s | – |
+| `PUT /carts/{cart_id}/items/{sku}` | `{ "qty" }` | 200 + the whole cart | 409 over the per-item limit |
+| `POST /checkout` | `Idempotency-Key` header + `{ "cart_id", "address_id", "payment_method" }` | 202 + `{ "order_id", "state": "PENDING", "payment": { … } }` | 409 price changed, confirm again · 410 an item sold out · 422 empty cart |
+| `POST /payments/webhook` | provider event, signed | 200 after de-duplication, always | – |
+| `GET /orders/{id}` | – | 200 + state, items, timeline | 403 not this user's order · 404 |
+| `POST /orders/{id}/cancel` | – | 202 | 409 already dispatched |
+
+Availability is a **separate endpoint**, so the page can be cached for a minute while the number that changes every second is cached for five. `POST /checkout` returns **202 with a PENDING order**, because payment may take seconds (a card) or minutes (a UPI request approved in the shopper's bank app).
+
+## Data model
+
+```sql
+CREATE TABLE inventory (
+  sku            TEXT NOT NULL,
+  warehouse_id   INT  NOT NULL,
+  on_hand        INT  NOT NULL CHECK (on_hand >= 0),
+  reserved       INT  NOT NULL CHECK (reserved >= 0 AND reserved <= on_hand),
+  PRIMARY KEY (sku, warehouse_id)
+);
+
+CREATE TABLE reservations (
+  reservation_id BIGINT PRIMARY KEY,
+  order_id       BIGINT NOT NULL,
+  sku            TEXT   NOT NULL,
+  warehouse_id   INT    NOT NULL,
+  qty            INT    NOT NULL,
+  state          TEXT   NOT NULL,              -- HELD | COMMITTED | RELEASED
+  expires_at     TIMESTAMPTZ NOT NULL          -- HELD rows past this are released by a sweeper
+);
+
+CREATE TABLE orders (
+  order_id        BIGINT PRIMARY KEY,
+  user_id         BIGINT NOT NULL,
+  idempotency_key TEXT   NOT NULL UNIQUE,      -- one checkout click, one order
+  state           TEXT   NOT NULL,             -- PENDING | CONFIRMED | PAYMENT_FAILED | CANCELLED
+  total_paise     BIGINT NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE payments (
+  payment_id    BIGINT PRIMARY KEY,
+  order_id      BIGINT NOT NULL REFERENCES orders,
+  provider_ref  TEXT   UNIQUE,                 -- one provider charge, one payment row
+  state         TEXT   NOT NULL,               -- CREATED | AUTHORIZED | CAPTURED | FAILED | REFUNDED
+  amount_paise  BIGINT NOT NULL
+);
+
+CREATE TABLE outbox (
+  event_id      BIGINT PRIMARY KEY,
+  aggregate_id  BIGINT NOT NULL,
+  payload       JSONB  NOT NULL,
+  published_at  TIMESTAMPTZ                    -- NULL until the relay has sent it
+);
+
+-- catalogue: product documents (JSONB or a document store), images in object storage
+-- carts:     Redis hash cart:{cart_id} -> { sku: qty }, EXPIRE 30 days, refreshed on every write
+```
+
+Three constraints carry the requirements: `reserved <= on_hand` is the no-oversell rule, enforced where the race happens; `orders.idempotency_key UNIQUE` means a retried click cannot make a second order; `payments.provider_ref UNIQUE` means a provider charge is recorded once, however many webhooks announce it. Each service owns its tables and nothing joins across them, which is what lets them have different consistency rules.
+
+## High-level design
+
+<Mermaid caption="Four services with four stores. Reads go through the CDN and caches; the order service orchestrates the checkout saga across inventory and payment; events leave through an outbox into Kafka; on sale days a waiting room sits in front of the gateway." chart={`flowchart LR
+    U["Shoppers"]
+    CDN["CDN: images, product-page shell"]
+    WR["Virtual waiting room, sale days only"]
+    GW["API gateway: auth, rate limits"]
+    CAT["Catalogue service with cache-aside Redis"]
+    SR["Search service"]
+    CART["Cart service"]
+    ORD["Order service: checkout saga orchestrator"]
+    CDB["Catalogue DB"]
+    ES["Search index"]
+    RD["Redis: carts with TTL"]
+    INV["Inventory service and DB"]
+    PAY["Payment service: idempotency keys"]
+    PSP["Payment provider"]
+    ODB["Orders DB with outbox"]
+    K["Kafka: order events to email, warehouse, analytics"]
+    U --> CDN
+    U --> WR
+    WR --> GW
+    GW --> CAT
+    GW --> SR
+    GW --> CART
+    GW --> ORD
+    CAT --> CDB
+    SR --> ES
+    CDB -. "change data capture" .-> ES
+    CART --> RD
+    ORD --> INV
+    ORD --> PAY
+    PAY --> PSP
+    ORD --> ODB
+    ODB -. "outbox relay" .-> K
+`} />
+
+- **CDN and gateway:** images and the page shell are served from the edge so that 230k views a second cost the origin about one request per product per minute (see [CDN](/learn/cdn)); the gateway checks tokens and applies per-user and per-IP limits (see [Rate limiting](/learn/rate-limiting)).
+- **Virtual waiting room:** on for sale events only, it admits a bounded number of shoppers a minute and queues the rest, because the alternative is 230k requests a second finding the limit by timing out (deep dive 2).
+- **Catalogue service:** owns listings and prices, served cache-aside from Redis with a short TTL, because they change rarely and may be a minute stale (see [Caching](/learn/caching)).
+- **Search service:** a separate index fed by change data capture, because inverted-index queries and relational rows want different engines.
+- **Cart service:** a Redis hash per cart with a 30-day expiry, because a cart is written and read by one person.
+- **Order service:** the saga orchestrator; it creates the PENDING order, reserves, charges, confirms or compensates, and records every step so that a restart resumes rather than repeats (see [Sagas](/learn/sagas)).
+- **Inventory service:** owns `on_hand` and `reserved` per SKU per warehouse, with reserve, commit and release as single-row transactions, because the oversell rule lives where the row does.
+- **Payment service:** the only code that talks to the provider; one order maps to one provider charge under an idempotency key, because the provider's answer arrives twice, late or never.
+- **Outbox and Kafka:** every state change is written with the order and relayed to Kafka, so that warehouse, email and analytics learn of a confirmed order exactly as often as it happened (see [Pub/sub](/learn/pubsub) on the outbox).
+
+<Mermaid caption="The checkout saga. Reserve is compensatable, charging is the pivot, confirmation is retriable. On decline the reservation is released and the order stays open for another attempt with the same order id." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client
+    participant O as Order service
+    participant I as Inventory
+    participant P as Payment service
+    participant G as Payment provider
+    C->>O: POST /checkout, Idempotency-Key k1
+    Note over O: Insert order 77 PENDING, unique on k1
+    O->>I: reserve 1 of sku 9 for order 77, TTL 10 min
+    I-->>O: reserved, 9,999 left
+    O->>P: charge 24,999 for order 77, key order-77
+    P->>G: create charge, idempotency key order-77
+    alt approved
+        G-->>P: captured, ref pay_A1
+        P-->>O: paid
+        O->>I: commit reservation for order 77
+        Note over O: Order 77 CONFIRMED, event to outbox
+        O-->>C: order 77 confirmed
+    else declined or timed out
+        G-->>P: declined
+        P-->>O: failed
+        O->>I: release reservation for order 77
+        Note over O: Order 77 PAYMENT_FAILED, order id kept
+        O-->>C: try another payment method
+    end
+`} />
+
+## Storage and caching
+
+| Data | Where | Why |
+| --- | --- | --- |
+| Listings, prices, specs | Document rows (JSONB) in PostgreSQL, read replicas | 500 GB read-mostly; a document per product avoids a twenty-table join on every page |
+| Product page and images | CDN, `s-maxage=60` for the page shell and a year for versioned images | 230k/s on sale day never reaches the origin; `stale-while-revalidate` hides the refresh (see [CDN internals](/learn/cdn-internals)) |
+| Hot product rows | Redis cache-aside, TTL 60 s with jitter, single-flight rebuild | The sale's hundred hottest products expire together otherwise, and the stampede lands on the catalogue DB |
+| Availability flag | Redis, TTL 5 s, derived from inventory events | Read on every page, approximate by design; the truth lives in the inventory row |
+| Search index | Inverted index (Elasticsearch-style), fed by CDC | Elasticsearch refreshes an index every second by default, so a price or stock change is searchable within about a second: fresh enough for search, far too slow for checkout |
+| Carts | Redis hash per cart, `EXPIRE` 30 days refreshed on each write, AOF persistence and a replica | Always writeable, tiny, personal; Redis clears a timeout only when a key is replaced, so the TTL is re-set explicitly after each `HSET` |
+| Inventory | PostgreSQL, one row per (SKU, warehouse), never cached for decisions | "May I reserve one" needs the current row under a lock |
+| Orders, payments, outbox | PostgreSQL, one database so a step and its event commit together | 230/s and 5 TB fit one primary; partition by `user_id` when they do not |
+| Order events | Kafka, days of retention | Warehouse, email and analytics each read at their own pace |
+
+<mark>Nothing on the checkout path reads a cache to make a decision</mark>: the availability flag may say "in stock" a few seconds after the last unit went, and the reservation then fails honestly. The cache lies a little so that the database can tell the truth under load.
+
+## Scaling
+
+### The read side
+
+Product pages and images scale at the CDN and never touch the origin at 230k/s; the origin sees one revalidation per product per minute plus the long tail of rarely viewed products, which the cache-aside layer and read replicas absorb. The search index is sharded by document and replicated for throughput; 58k searches a second is a replica count, not a redesign.
+
+### The write side
+
+Orders partition by `user_id` when a single primary runs out, because every order read is "my orders". Inventory partitions by SKU, which spreads 100M SKUs beautifully and does nothing for the one SKU that 2M people want: a hot row is hot on whichever shard it lands (deep dive 2). Payment is limited by the provider, not by you: 700 calls in flight is a connection pool per provider, isolated as a [bulkhead](/learn/bulkheads-degradation) so that a slow provider cannot pin the threads confirming cash-on-delivery orders.
+
+## Consistency and availability
+
+Per feature, with the rule from [Consistency](/learn/consistency) and [CAP](/learn/cap): strong where money or stock changes hands, eventual everywhere a stale read costs nothing.
+
+| Data | Guarantee | Why |
+| --- | --- | --- |
+| Catalogue and price on the page | Eventual, up to a minute | Checkout re-prices from the catalogue DB and returns 409 if the shown price changed, so the page may lie but the charge cannot |
+| Search results | Eventual, about a second | A sold-out item in results is a click that ends in "sold out", not a wrong order |
+| Availability flag | Eventual, seconds | It gates nothing; the reservation does |
+| Cart | Always writeable, last writer wins per item | Two tabs editing one cart: the later quantity wins. Amazon's Dynamo paper describes the cart as the system that must accept writes through disk, network and data-centre failures and merges divergent versions, accepting that a deleted item may resurface |
+| Inventory reservation | Strong, per row, serialized through the row lock | The only place a unit is promised |
+| Order state | Strong per order; the saga state lives in the same database as the order | A restart must know exactly which step completed |
+| Payment | Strong, idempotent, reconciled | One provider charge, one payment row, whatever arrives twice |
+| Order history page | From a replica, seconds stale | A just-placed order shows a spinner for a second rather than a 500 |
+
+<Callout type="analogy" title="A shop with a ticket counter">
+
+The shelves (catalogue) can carry an old price sticker for a minute; the till (checkout) rings the real one and asks you to confirm if it moved. For the one item everyone wants, the shop hands out numbered tokens at the door (reservations with an expiry) and takes payment only from token holders, so nobody pays for a phone that is not there; wander off for ten minutes and the token goes back in the bowl. Where it breaks: here the bowl is a single database row that 33,000 hands reach for every second.
+
+</Callout>
+
+## Failure and recovery
+
+| Failure | What users see | How it heals |
+| --- | --- | --- |
+| Payment service times out after the provider charged | Nothing, if designed: the retry carries the same key | The provider recognises the idempotency key and returns the saved result; the payment row's unique `provider_ref` absorbs a late duplicate webhook (deep dive 1) |
+| Provider webhook lost | The order stays PENDING a few minutes longer | A reconciler fetches the status of every PENDING payment older than a few minutes; Razorpay's own guidance is to fetch when no webhook has arrived within fifteen minutes |
+| Order service crashes mid-saga | The order stays PENDING | The saga state is in the orders database; a recovery worker resumes from the last recorded step, and an abandoned reservation expires on its TTL regardless |
+| Payment marked failed, bank confirms later | The shopper may have paid for a cancelled order | Razorpay documents payments moving from failed to authorized up to three days later, so the order is kept open and the late payment is captured or refunded, never ignored |
+| Inventory row too hot | Checkout slows for one SKU, then for everyone sharing its pool | Gate the row behind an atomic counter and a queue, so the database sees winners only (deep dive 2) |
+| Search cluster down | Search returns an error | Category browsing from the catalogue cache keeps the shop open; search is the degraded feature, not the product page |
+| Redis cart node lost | Nothing, or a cart from a second ago | Replica promotion and AOF replay; the app also keeps the cart client-side and re-sends it |
+| Catalogue DB primary fails | Pages keep serving from CDN and cache | Replica promotion; the only writes are editorial and can wait |
+| Oversell discovered in the warehouse | A cancellation and refund for the last orders | The compensation of last resort: refund, apology credit and a human queue, as the sagas lesson describes for effects that cannot be undone |
+
+## Security
+
+- **Card data never enters the system:** the provider tokenises the card in the browser or app, and the payment service stores only the token and the provider's reference, because holding card numbers brings the platform into PCI DSS scope (see [Encryption](/learn/encryption)).
+- **Authentication and authorization:** shoppers hold tokens as in [OAuth 2.0 and JWT](/learn/oauth-jwt); every order read checks `user_id` against the token, because sequential order ids make another user's invoice one URL away (see [Authorization](/learn/authorization)).
+- **Price integrity:** the client sends `cart_id`, never prices; the server re-prices at checkout, because a tampered price in a request body is the oldest e-commerce exploit there is.
+- **Webhooks** are verified by signature and treated as hints that trigger a fetch of the real status, because an unsigned "payment captured" is a free order.
+- **Abuse the design invites:** bots and scalpers at flash sales (the waiting room, rate limits and random rather than first-come admission, see [API security](/learn/api-security)) and reservation hoarding (short TTLs and one open hold per shopper per SKU).
+
+## Observability
+
+Six numbers prove the shop is healthy (see [Metrics and monitoring](/learn/metrics-monitoring)): the **checkout funnel** by step in real time; **saga compensation rate** by cause; **payment authorisation rate per provider**; **oversell count**, which must read zero and pages when it does not; **open reservations and expiry rate**, the measure of hoarding; and **cache hit ratio and search index lag**. The trace to keep (see [Distributed tracing](/learn/tracing)) is `POST /checkout` with child spans for reserve, charge and confirm and a linked span for the webhook that arrives later, because a slow checkout must name which service and which provider was slow.
+
+## Trade-offs and bottlenecks
+
+<Comparison>
+
+<ComparisonItem title="Reserve, then pay (this design)">
+
+Stock is held before money moves, so a confirmed order always has its unit. The cost is that holds by shoppers who abandon checkout block real buyers for the TTL, and the hot row is contended at reservation time, exactly when the flash sale peaks.
+
+</ComparisonItem>
+
+<ComparisonItem title="Pay, then allocate">
+
+Take the payment, allocate stock asynchronously and refund if none is left. Nothing is held and a worker touches the hot row at a leisurely pace. The cost is a paid order that turns into "sorry, refunded in five to seven days", which for a scarce item is the outcome the requirements forbid.
+
+</ComparisonItem>
+
+</Comparison>
+
+The condition that decides: <mark>how scarce is the item and how expensive is the apology?</mark> Reserve first for the flash-sale phone; pay first for a bestseller with a warehouse full of them. Next to break, in order: the **hot SKU row** (deep dive 2); the **payment provider**, whose capacity and failures are not yours and must be bulkheaded and duplicated; **search index lag** when a sale changes 100,000 prices at once; and the **orders primary**, far later than anyone expects. Not taken: [two-phase commit](/learn/distributed-transactions) across order, inventory and payment, because a payment provider cannot "prepare" and locks held across a 3 s provider call would stall the inventory row for everyone; caching inventory for the reserve decision; and one shared database for all four services, which makes the consistency rules identical by accident.
+
+<Callout type="interview" title="Name the four services and the two numbers">
+
+"Catalogue, inventory, order and payment, each with its own store and consistency rule. Two numbers dominate: 230k reads a second on sale day, which the CDN and cache-aside take, and 33k buy attempts a second against one row with 10,000 units, which no shard fixes. So checkout is a saga: reserve with a ten-minute TTL, charge under an idempotency key equal to the order id, confirm; release on decline. Two unique constraints give exactly one order per click and one payment per provider charge, and the hot row sits behind an atomic counter and a queue so the database only ever sees winners." Then say what you refuse: two-phase commit with a payment provider.
+
+</Callout>
+
+## How it evolves
+
+At **10×** (500M shoppers, 10M orders a day) the order database partitions by `user_id`, inventory becomes multi-warehouse with an allocation step that picks the warehouse nearest the address before reserving, and the saga grows a fraud-check step before the pivot and a split-shipment branch after it. The read side barely changes: the CDN and cache carry 2.3M page views a second as they carried 230k, and [change data capture](/learn/cdc) feeds search, analytics and the warehouse from one log.
+
+At **100×** the platform is a marketplace with millions of sellers and the shape changes: inventory is the seller's claim, not the platform's count, and reconciling with sellers' systems becomes the hard problem. Payment grows into its own system, the subject of [Design a payment system](/learn/design-payment-system); the reservation problem recurs in sharper form in [Design a ticket booking system](/learn/design-ticket-booking), where every seat is a flash-sale SKU.
+
+## Deep dive 1: exactly one order per payment
+
+Three invariants: at most one charge per order, at most one order per charge, and a reservation behind every confirmed unit. Each is held by a different mechanism, and the saga's job is to line them up.
+
+<Interactive name="idempotency" />
+
+**One click, one order.** The client generates an `Idempotency-Key` when the checkout screen opens and reuses it on every retry; the order service inserts the order with that key under a unique constraint, so a double-tapped button or a retry after a lost response finds the existing order (see [Idempotency](/learn/idempotency)). The key is scoped to the user and stored with a hash of the request, so reuse with a different cart is rejected rather than served the old order.
+
+**One order, one charge.** The payment service sends the order id as the idempotency key to the provider, so that any retry of "charge order 77" is the same charge to the provider as well. Stripe's documentation describes the contract: the provider saves the status code and body of the first request under the key and returns the saved response to retries, errors if the same key arrives with different parameters, and prunes keys after at least 24 hours. Razorpay's model is one provider order per purchase, with attempts attached and fulfilment only when the order reaches paid. Either way, <mark>the retry must be indistinguishable from the original to everyone who sees it</mark>.
+
+**One charge, one order.** The provider's charge reference is stored in `payments.provider_ref UNIQUE`. The webhook announcing a capture may arrive twice, out of order with the synchronous response, or after the reconciler has already fetched the status; every path inserts the same reference and the constraint makes the second insert a no-op.
+
+| If it crashes here | What is at risk | What saves it |
+| --- | --- | --- |
+| After inserting the PENDING order, before reserving | An orphan order | The recovery worker resumes the saga from its recorded step; if the shopper never returns, a sweeper cancels PENDING orders after an hour |
+| After reserving, before charging | A held unit | The reservation TTL releases it; the resumed saga re-checks the hold before charging |
+| After the provider charged, before the response was recorded | A charge with no record | The retry with the same key returns the saved result; the reconciler fetches the provider's view of every PENDING payment older than a few minutes |
+| After recording the payment, before confirming | A paid order still PENDING | The step is retriable; confirmation runs until it succeeds |
+| Payment reported failed, bank authorises later | A refund owed, or an order to revive | The late `authorized` event is handled for up to three days: capture and confirm if stock is still held, refund if not |
+
+Razorpay documents that a payment with no bank response is marked failed after about ten minutes but may become authorized up to three days later, in under half a percent of live payments, and advises keeping the order open and fulfilling only on the captured or paid event. Half a percent of 1M orders a day is 5,000 shoppers whose money arrived late; a system that closed the order on the first failure would be refunding all of them by hand.
+
+## Deep dive 2: ten thousand phones and two million thumbs
+
+A flash sale is the hot-key problem with money attached: 33k buy attempts a second against one inventory row that takes a few thousand serialized updates a second and will reach zero in under a second anyway. Four steps, and the arithmetic says why each exists.
+
+<Interactive name="queue-leveling" />
+
+<Steps>
+
+1. **Admit fewer people than you can serve.** A virtual waiting room in front of the gateway admits a bounded number of new shoppers a minute and queues the rest with an honest wait estimate. Cloudflare's product exposes exactly these knobs: a total active users limit, a new users per minute threshold, a session duration after which an idle spot is freed, and first-in-first-out or random admission, random being the one it recommends for distributing a product more equitably. The simulation above shows the levelling; what a queue cannot do is create stock.
+2. **Gate the row with a counter.** Admitted shoppers' reservation attempts hit an atomic `DECRBY` on a Redis counter seeded with the 10,000 units, which one node serves at 100k operations a second. The 10,000 winners proceed to the database; the other 23,000 a second are told "sold out" without touching PostgreSQL. The counter is a gate, not the truth: it may over-admit by a few on a failover, and the row's `reserved <= on_hand` check catches those few.
+3. **Reserve with a TTL.** Each winner's reservation is a single-row transaction that increments `reserved` and inserts a HELD row expiring in ten minutes. Every abandoned hold is a phone a real buyer cannot have for ten minutes, which is why the TTL is short and a shopper may hold at most one.
+4. **Return the abandoned units.** A sweeper releases HELD rows past `expires_at`, decrements `reserved` and increments the counter, so that holds that never pay come back for sale within minutes.
+
+</Steps>
+
+Two alternatives for step 2, and the condition that decides. **Bucketed stock** splits 10,000 units into ten rows of 1,000, each a tenth as hot, at the cost of a shopper refused by an empty bucket while another still has units; it suits items that are hot but not scarce. **Pay first, allocate later** avoids the hot row entirely and is right for abundant items. For a scarce drop the counter gate wins because <mark>the database should only ever see the 10,000 requests that can succeed</mark>.
+
+The Indian festival sale is the live test. Flipkart's own retrospective of its 2015 Big Billion Days describes spreading the sale over five days instead of one, load-testing at five times the projected numbers for almost a month, and systems throttling just below the tested limits, with 99.997% of orders unaffected. Pick the peak factor from the business plan, test at that multiple with the waiting room on, and let the admission rate, not the database, be the thing that saturates.
+
+## Deep dive 3: the read side and the cart
+
+The read side carries a thousand times the traffic of checkout and has the easier job, provided it is allowed to be stale.
+
+**Split the product page.** The shell (title, specs, images, the price as of a minute ago) is cached at the CDN with `s-maxage=60` and `stale-while-revalidate`, and images carry versioned names cached for a year. The volatile parts (availability, the delivery estimate for the shopper's pin code, the cart badge) are fetched separately and cached for seconds or not at all. One cache key per product, with no cookies or user headers in it, because a personalised response in a shared cache is how one shopper sees another's cart.
+
+**Protect the hot hundred.** On sale day a few hundred products take most of the views, and their cache entries expire together unless told otherwise. Cache-aside with TTL jitter and single-flight rebuilds keeps the catalogue database at one rebuild per product per minute, and a price change deletes the entry rather than updating it, so two writers cannot leave an old price cached.
+
+**Keep search a second behind, on purpose.** The index is rebuilt from a change stream off the catalogue database, so a seller's price edit is searchable within a second or two, and its lag is a dashboard line, not an incident.
+
+**The cart is a key-value problem.** One Redis hash per cart, `cart:{cart_id} -> { sku: qty }`, with a 30-day expiry re-set on every write (Redis leaves a key's timeout untouched when a field is altered, so the service re-issues `EXPIRE` itself), AOF persistence and a replica. The anonymous cart is keyed by a cookie and merged by union into the account's cart at login, because a shopper who added three items on the phone and two on the laptop expects five. Carts are the textbook workload for an always-writeable store, the one Amazon built [Dynamo](/learn/design-key-value-store) for, and the merge rule is Dynamo's: an add is never lost, a removed item may come back, and the shopper fixes it with one tap.
+
+Degraded modes are decided in a quiet week, in order: suggestions off, then personalised rows replaced by bestsellers, then exact stock counts replaced by "in stock", then search replaced by category browsing, and payment and checkout last of all, because <mark>a shop that cannot search still sells, and a shop that cannot charge is closed</mark>.

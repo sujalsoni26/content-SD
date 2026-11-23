@@ -1,0 +1,55 @@
+{
+  "slug": "design-patterns-behavioural",
+  "title": "Design patterns III: behavioural",
+  "moduleId": "lld",
+  "level": "intermediate",
+  "minutes": 10,
+  "problem": "A pricing method grows a branch for every offer, an order class repeats switch(status) in five methods, and nobody can test one rule on its own.",
+  "summary": "Behavioural patterns put the part that varies behind an interface: Strategy for algorithms, State for lifecycles, Command for requests, Observer for notifications, Template Method for skeletons, Chain of Responsibility for handlers and Iterator for traversal.",
+  "catTip": "My day is a state machine: Asleep, Hungry, Fed, Zoomies. Each state knows what a poke does to it. Feed me while Asleep and the transition is undefined behaviour.",
+  "recall": {
+    "q": "An Order class has switch (status) at the top of pay(), cancel(), ship() and refund(). Which pattern applies, and what is the lighter alternative?",
+    "a": "State: each status becomes a class implementing one interface, the order delegates to its current state, and each state decides what every event does and which state comes next. For a small machine, an enum with a transition table does the same job with fewer classes."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without these patterns, algorithms, lifecycles and notifications are hard-coded as conditionals and direct calls, so every new rule edits working code and nothing can be tested alone.",
+    "tradeoffs": "Each pattern trades a conditional for more classes and indirection, and Observer adds hidden control flow whose ordering and failure behaviour are easy to get wrong.",
+    "explainSimply": "These patterns are about who does what, and who needs to know. Instead of one big recipe full of 'if this customer, do that', each rule becomes its own small card you can swap in. A restaurant order slip is one such card: it can be queued, handed on or cancelled.",
+    "hint": "Think about where the rules for one status live now, and where they would live if each status were a class."
+  },
+  "meow": "If hungry: meow. Else if human asleep: louder meow. That if-chain wants to be a Strategy, purr-ferably.",
+  "quiz": [
+    {
+      "prompt": "A delivery app lets the customer choose among several route-pricing algorithms, and the product team adds a new one every month. Which pattern keeps each algorithm testable on its own?",
+      "options": ["State", "Observer", "Strategy", "Template Method"],
+      "answer": 2,
+      "explanation": "Strategy puts each algorithm behind one interface and injects the chosen one, so each is tested alone and adding one edits no existing class. Template Method also varies an algorithm, but through subclass overrides of a shared skeleton, which couples every variant to the base class."
+    },
+    {
+      "prompt": "Which pattern lets you queue an operation, write it to a log and undo it later, without the queue knowing what the operation does?",
+      "options": ["Observer", "Command", "Chain of Responsibility", "Iterator"],
+      "answer": 1,
+      "explanation": "Command turns the request into an object with execute() and undo(), so a queue or history can hold it without understanding it. Chain of Responsibility also passes requests between objects, but to find a handler, not to store or reverse the request."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Strategy and State both delegate to an interface held in a field. What is the difference?",
+      "a": "In Strategy the caller chooses the algorithm and it usually stays fixed for the object's life. In State the current state object changes over time by returning the next state in response to events, and the object's behaviour follows."
+    },
+    {
+      "q": "Name three ways a naive synchronous Observer goes wrong in production.",
+      "a": "Notification order is implicit, so listeners silently depend on registration order. A listener that throws stops the listeners after it. Listeners that are never unregistered keep objects alive, which is a memory leak."
+    },
+    {
+      "q": "An expense needs approval by a team lead up to 10,000, a manager up to 1 lakh, otherwise a director. Which pattern, and what must the chain always have?",
+      "a": "Chain of Responsibility: each approver handles the request or passes it to the next. The chain needs a terminal handler so that a request cannot fall off the end unhandled."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994), ch. 5 Behavioral Patterns", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, Observer, Command, State, Template Method, Iterator and Chain of Responsibility", "status": "reference" },
+    { "title": "Java SE 21 API: java.util.Observable", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Observable.html", "accessed": "2026-11-22", "supports": "Observable deprecated since Java 9; the deprecation note cites a limited event model and unspecified notification order", "status": "verified" }
+  ]
+}

@@ -1,0 +1,110 @@
+A **behavioural pattern** decides how objects divide a piece of work and talk to each other, so that an algorithm, a sender and a receiver can change independently. Most of the seven here are one move made in different places: find a conditional or a hard-coded call and turn the part that varies into an object behind an interface, as in [Composition over inheritance](/learn/composition-over-inheritance).
+
+Before any of them, a checkout prices an order with a growing chain of offers:
+
+```java
+double price(Order o) {
+    double total = o.subtotal();
+    if (o.customer().isPrime()) total = total * 0.90;
+    else if (o.coupon().startsWith("FLAT")) total = total - 100;
+    else if (isFestivalSale()) total = total * 0.80;
+    return total;   // every new offer is another branch, tested together with all the others
+}
+```
+
+Every new offer edits this method, every branch is retested alongside every other, and no offer can be tested alone.
+
+## Strategy: the algorithm is an object
+
+A **Strategy** puts each interchangeable algorithm behind one interface and hands the caller the one to use:
+
+```java
+interface PricingStrategy { double apply(double subtotal); }
+record PercentOff(double percent) implements PricingStrategy {
+    public double apply(double s) { return s * (1 - percent / 100); }
+}
+record FlatOff(double amount) implements PricingStrategy {
+    public double apply(double s) { return Math.max(0, s - amount); }
+}
+class Checkout {
+    private final PricingStrategy pricing;
+    Checkout(PricingStrategy pricing) { this.pricing = pricing; }
+    double price(Order o) { return pricing.apply(o.subtotal()); }
+}
+```
+
+Each strategy is three lines and tested alone; deciding which applies moves to one place. With a single-method interface a lambda is a strategy too, which is why `Comparator` is the most-used Strategy you have never called by that name.
+
+## Command: the request is an object
+
+A **Command** turns a request into an object with an `execute()` method, so it can be queued, logged, retried or undone by code that does not know what it does:
+
+```java
+interface Command { void execute(); void undo(); }
+record MovePiece(Board board, Square from, Square to) implements Command {
+    public void execute() { board.move(from, to); }
+    public void undo() { board.move(to, from); }   // a capture would also need the taken piece restored
+}
+// the game keeps a Deque<Command> of executed moves; undo pops one and calls undo()
+```
+
+That is the undo stack in [Chess](/learn/lld-chess), the job in a [task scheduler](/learn/lld-task-scheduler), and, one level up, the message in a queue (see [Message queues](/learn/message-queues)).
+
+## State: the status field grows methods
+
+When five methods on an order each start with `switch (status)`, every new status edits five methods and the rules for one state are scattered across the class. The **State** pattern makes each state a class implementing one interface; the order delegates to its current state, which decides what is allowed and what comes next.
+
+<Mermaid caption="A food-delivery order as a state machine. Each box becomes a class; each arrow is a method that returns the next state." chart={`stateDiagram-v2
+    state "Out for delivery" as OutForDelivery
+    [*] --> Placed
+    Placed --> Confirmed: restaurant accepts
+    Placed --> Cancelled: customer cancels, no fee
+    Confirmed --> Preparing: kitchen starts
+    Confirmed --> Cancelled: customer cancels, fee applies
+    Preparing --> OutForDelivery: rider picks up
+    OutForDelivery --> Delivered: rider hands over
+    Delivered --> [*]
+    Cancelled --> [*]
+`} />
+
+`cancel()` on `Preparing` is refused; on `Placed` it returns `Cancelled` with no fee; on `Confirmed` it returns `Cancelled` and charges one. The rules for a state live in one class. The trade-off is a class per state, so for four states and two events an `enum` with a transition table is lighter and just as clear. Reach for State when behaviour per state is substantial, as in the [vending machine](/learn/lld-vending-machine) and the [elevator](/learn/lld-elevator).
+
+## Observer, Template Method, Chain, Iterator
+
+**Observer** lets an object announce that something happened to listeners it does not know about: `OrderPlaced` goes to inventory, notifications and analytics, and a fourth listener edits none of them. The cost is hidden control flow: notification order is implicit, a listener that throws can stop the others, and a listener nobody unregisters is a memory leak. The JDK's own `java.util.Observable` was deprecated in Java 9, partly for its unspecified notification order. In-process you write a small listener list; across services the idea is [pub/sub](/learn/pubsub).
+
+**Template Method** fixes an algorithm's skeleton in a base class and lets subclasses fill in steps: `generateReport()` calls `fetch()`, `format()` and `deliver()`, each overridable. It is Strategy by inheritance, with inheritance's problems; prefer it only when the steps genuinely share state through the base class.
+
+**Chain of Responsibility** passes a request along handlers until one takes it: an HTTP request through authentication, rate-limiting and logging filters, or an expense through approvers by amount. Each handler knows only the next. The failure case is a request that falls off the end unhandled, so the chain needs a terminal handler. The filters in the [logging framework](/learn/lld-logging-framework) and the rules in a [rate limiter](/learn/lld-rate-limiter) are chains.
+
+**Iterator** gives sequential access to a collection without exposing its structure. Every for-each loop over an `Iterable` uses one; you implement one yourself when a custom structure, such as the composite tree from [Design patterns II](/learn/design-patterns-structural), needs walking.
+
+## Which smell, which pattern
+
+| You notice | Pattern |
+| --- | --- |
+| A conditional chooses between interchangeable algorithms | Strategy |
+| A `switch` on a status field appears in several methods | State |
+| An object must notify others without knowing who they are | Observer |
+| An operation must be queued, logged, retried or undone | Command |
+| Classes share an algorithm's skeleton and differ in a step | Template Method |
+| One of several handlers should take a request, decided at run time | Chain of Responsibility |
+| Callers depend on how a structure is stored | Iterator |
+
+<Callout type="analogy" title="The order slip">
+
+A restaurant order slip is a Command: the request is written down, so it can be queued for the kitchen, kept as a record, handed to another cook, and cancelled. Where the analogy fails: cancelling a slip is free until cooking starts. In code, `undo()` must know how to reverse what `execute()` did, and when that is impossible, say a payment is already captured, the command needs a compensating action (see [Sagas](/learn/sagas)).
+
+</Callout>
+
+<Callout type="interview" title="Draw the lifecycle before the classes">
+
+When an entity has a status, draw its state machine first and name the events on the arrows. It exposes missing transitions ("can a delivered order be cancelled?") that a class diagram hides, and it becomes State classes or an enum table in minutes. Say which you chose, and why.
+
+</Callout>
+
+<DeepDive title="Go deeper: patterns that disappear into the language">
+
+Several behavioural patterns have become language features. Strategy with one method is a lambda. Iterator is a for-each loop. Observer with one listener is a callback, with many a reactive stream. Command is a `Runnable` when nobody needs to undo it. The names still tell a reviewer what role an object plays; the lesson is not to write a class hierarchy when a function will do, and to notice that a queue of `Runnable` tasks is Command whether or not anyone says so.
+
+</DeepDive>

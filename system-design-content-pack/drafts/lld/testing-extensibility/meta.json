@@ -1,0 +1,60 @@
+{
+  "slug": "testing-extensibility",
+  "title": "Unit testing and designing for extensibility",
+  "moduleId": "lld",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "A rate limiter reads the system clock and a global metrics singleton, so the test for its expiry has to sleep for sixty seconds.",
+  "summary": "Unit tests check one behaviour in isolation using test doubles (dummy, stub, fake, mock, spy). Testable design injects collaborators, time and randomness and keeps logic pure; the same seams let new behaviour arrive as new implementations and let APIs evolve additively.",
+  "catTip": "To test whether I meow at 6 a.m., inject a FakeClock and advance it. Do not wait until dawn. I am the fake: same interface as a real cat, far simpler.",
+  "recall": {
+    "q": "A class calls System.currentTimeMillis() to expire entries, and the test for expiry sleeps for a minute. What design change fixes this, and which kind of test double do you use?",
+    "a": "Inject a java.time.Clock through the constructor and read time from it. In the test pass a fake clock, a small working Clock subclass with an advance method, so the test moves time forward instantly. A fake gives real behaviour without infrastructure; a stub would only return canned instants."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Code that reaches for the real clock, real databases and global singletons can only be tested slowly and end to end, so bugs are found late and refactoring is feared.",
+    "tradeoffs": "Every seam is an interface and a double to maintain, and tests that mock every interaction become a second copy of the implementation that breaks on every refactor.",
+    "explainSimply": "A unit test tries one small part of a program on its own, with the slow or unpredictable bits swapped for stand-ins, the way a film uses a stunt double for a dangerous scene. Design that allows the swap also allows new features to be added without touching what already works.",
+    "hint": "Think about what the class reaches for on its own, and what it could be handed instead."
+  },
+  "meow": "Arrange: fake clock, empty bowl. Act: advance to 6 a.m. Assert: meow emitted exactly once. Test passes, purr.",
+  "quiz": [
+    {
+      "prompt": "In a test, an in-memory repository stores and returns orders with real behaviour but no database. Which test double is it?",
+      "options": ["Stub", "Mock", "Fake", "Dummy"],
+      "answer": 2,
+      "explanation": "A fake is a working, simplified implementation. A stub only returns canned answers for the calls the test scripts, and a mock verifies that expected calls were made; neither behaves like a real repository across many tests."
+    },
+    {
+      "prompt": "Code calls System.currentTimeMillis() inside its expiry logic, and the test for 'entries expire after 60 s' sleeps for 61 seconds. What is the best fix?",
+      "options": [
+        "Shorten the window to 1 ms in a test configuration",
+        "Inject a Clock through the constructor and advance a fake clock in the test",
+        "Use a static-mocking library to intercept System.currentTimeMillis()",
+        "Run the slow test only in the nightly build"
+      ],
+      "answer": 1,
+      "explanation": "Injecting the clock removes the hidden dependency, makes the test instant and deterministic, and matches the purpose java.time.Clock was designed for. Static mocking works, but leaves the design dependent on a global so that every future test pays the same price."
+    }
+  ],
+  "cards": [
+    {
+      "q": "What is the difference between a mock and a stub, in terms of what the test verifies?",
+      "a": "A stub supplies canned answers and the test then checks state (the order is paid). A mock is given expectations about which calls will happen and the test asks it to verify them, checking behaviour. Use mocks only when the interaction itself is the requirement."
+    },
+    {
+      "q": "How do you remove a public method from a widely used class without breaking callers overnight?",
+      "a": "Add the replacement first (an additive change), mark the old method @Deprecated with since and forRemoval and point at the replacement, give callers a release to migrate, then delete it. Never change the meaning of the existing method in place."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Gerard Meszaros, xUnit Test Patterns: Refactoring Test Code (Addison-Wesley, 2007), Test Double", "url": "http://xunitpatterns.com/Test%20Double.html", "accessed": "2026-11-22", "supports": "the names dummy, stub, fake, mock and spy and their definitions; the stunt-double origin of the term", "status": "reference" },
+    { "title": "Martin Fowler, Mocks Aren't Stubs (2007)", "url": "https://martinfowler.com/articles/mocksArentStubs.html", "accessed": "2026-11-22", "supports": "state verification versus behaviour verification; the popularisation of Meszaros' double names", "status": "reference" },
+    { "title": "Java SE 21 API: java.time.Clock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/Clock.html", "accessed": "2026-11-22", "supports": "Clock exists so alternate clocks can be plugged in, which simplifies testing; best practice is to pass a Clock into methods that need the current instant; fixed and offset clocks; instant() and millis()", "status": "verified" },
+    { "title": "Java SE 21 API: java.lang.Deprecated", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Deprecated.html", "accessed": "2026-11-22", "supports": "the since and forRemoval elements and their meaning", "status": "verified" },
+    { "title": "The Java Tutorials: Default Methods", "url": "https://docs.oracle.com/javase/tutorial/java/IandI/defaultmethods.html", "accessed": "2026-11-22", "supports": "default methods add functionality to interfaces while keeping binary compatibility with code written for older versions", "status": "verified" },
+    { "title": "JUnit 5 User Guide", "url": "https://junit.org/junit5/docs/current/user-guide/", "accessed": "2026-11-22", "supports": "the @Test annotation and assertTrue/assertFalse used in the example test", "status": "reference" }
+  ]
+}

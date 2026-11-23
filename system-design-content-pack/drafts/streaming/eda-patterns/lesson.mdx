@@ -1,0 +1,66 @@
+An **event** is an immutable record that something has already happened; a **command** is a request that someone do something. Most event-driven designs that go wrong have blurred the two, or have let the events, their schemas and their flow grow without an owner. [Pub/sub](/learn/pubsub) covered why services publish events and [Kafka: a distributed log](/learn/kafka-architecture) covered where they live; this lesson is about designing them.
+
+## Events or commands
+
+| | Event | Command |
+| --- | --- | --- |
+| Means | A fact: it happened | A request: please do this |
+| Name | Past tense: OrderPlaced, PaymentCaptured | Imperative: PlaceOrder, CapturePayment |
+| Audience | Anyone who cares, now or later | Exactly one handler |
+| Owner of the outcome | Each consumer owns its reaction | The sender expects a result or an error |
+| Coupling | The producer knows nothing of consumers | The sender knows the receiver and what it does |
+
+Both can travel over Kafka; what differs is intent. The failure Martin Fowler calls the *passive-aggressive command* is an event published by a service that is in fact waiting for one particular consumer to act, and is broken if it does not. If you need something done, send a command and handle its failure; if you are announcing a fact, publish an event and let consumers decide. Confluent's pattern catalogue puts it bluntly: a command is tightly coupled to an audience of one.
+
+## Thin or fat
+
+Fowler names two shapes. **Event notification** is thin: an id and a type (`OrderPlaced`, order 8841), and consumers call the order service back for details. Small and hard to get wrong, but every consumer's correctness now depends on the producer being up, and a popular event becomes a burst of callbacks. **Event-carried state transfer** is fat: the event carries what consumers need (items, amounts, customer id, delivery address), so they keep their own copy and never call back. Fowler lists the gains as resilience, lower latency and less load on the source, and the cost as many copies that are only eventually consistent. A working rule: carry what consumers need to *react*, always include the ids they would need to ask for more, and keep personal data to what each consumer is entitled to.
+
+Whatever the body, give every event an envelope. The CloudEvents specification requires `id`, `source`, `type` and `specversion`, makes `time` and `subject` optional, and requires `source` plus `id` to be unique per event, which hands consumers a deduplication key for free.
+
+<Mermaid caption="One fact, three reactions. With a thin event, Notifications must call back for the address, so its correctness depends on the order service being up; a fat event carries the address and removes the dotted call." chart={`flowchart LR
+    O["Order service"] -->|"OrderPlaced"| T["Topic orders"]
+    T --> I["Inventory: reserve stock"]
+    T --> N["Notifications: email the customer"]
+    T --> A["Analytics: update sales"]
+    N -.->|"thin event: fetch the details"| O
+`} />
+
+## Evolving schemas with a registry
+
+Events outlive the code that wrote them: a topic retained for seven days holds seven days of old shapes, and a compacted topic holds years. A **schema registry** (Confluent's is the common one, with Avro, Protobuf and JSON Schema) stores each version of a subject's schema under an id, and the serialiser prefixes every record with one version byte and the four-byte schema id, so a consumer fetches exactly the schema that wrote the bytes. More importantly, the registry refuses an incompatible new version:
+
+| Mode | Who reads what | Allowed changes | Upgrade first |
+| --- | --- | --- | --- |
+| BACKWARD (the default) | Consumers on the new schema read old data | Delete fields; add optional fields with defaults | Consumers |
+| FORWARD | Consumers on the old schema read new data | Add fields; delete optional fields | Producers |
+| FULL | Both directions | Add or delete optional fields only | Either |
+| NONE | No check | Anything | Nobody is protected |
+
+Each mode has a transitive variant that checks against every earlier version rather than only the latest. BACKWARD is the default because a consumer with the newest schema can then rewind to the beginning of the topic and read everything. The rules that follow: never rename or retype a field (that is a delete plus an add, and the old data still exists); add fields as optional with defaults; deprecate before removing; and when a change is unavoidably breaking, publish a new subject or topic (`orders-v2`) beside the old one and move consumers across.
+
+## Choreography and its pitfalls
+
+With **choreography** each service reacts to events and publishes its own; nobody holds the workflow. Fowler's warning is that it is very easy to build nicely decoupled systems this way without noticing that you have lost sight of the larger-scale flow, which now exists only in the running system. The pitfalls are predictable: hidden coupling (Notifications quietly relies on Inventory having reserved stock first), cycles and event storms when services react to each other's reactions, sequential steps that are awkward to express as reactions, and no owner when a flow stalls half-way, because no component has a complete view of an in-flight operation. Add an **orchestrator** when the flow has ordered steps, compensation on failure or a deadline somebody is accountable for; that is the saga in [Sagas and compensating actions](/learn/sagas), and its price is a central component to run and keep from becoming a bottleneck.
+
+## Seeing the flow
+
+Because the flow is implicit, observability is not optional. Propagate a correlation id and the trace context in record headers: OpenTelemetry's messaging conventions attach the producer's creation context to each message so the consumer's span can link back to it, giving one trace across services and topics (see [Distributed tracing](/learn/tracing)). Alert on consumer lag per group, send poison events to a dead-letter topic rather than blocking a partition, and treat the registry as the catalogue of what events exist. Consumers must still be idempotent, as in [Idempotency](/learn/idempotency): at-least-once delivery is the baseline, and the envelope's `id` is the key.
+
+<Callout type="analogy" title="A noticeboard and a memo">
+
+"We have moved to the third floor" pinned on the company noticeboard is an event: anyone may read it, nobody has to, and facilities, IT and the post room each decide what to do. "Please move desk 14 by Friday", addressed to facilities, is a command with one recipient and an expectation. Pinning "desk 14 must be moved by Friday" to the board and fuming when nobody acts is the passive-aggressive command. Where it breaks: a noticeboard is cleared weekly, while a log keeps every notice for its retention, which is why last month's notices must still be readable.
+
+</Callout>
+
+<Callout type="interview" title="Fact, registry, owner">
+
+Say three things: events are past-tense facts owned by the service that emits them; schemas evolve through a registry in BACKWARD mode with additive, optional changes; and name the point at which you would swap choreography for an orchestrator (ordered steps with compensation). Then mention correlation ids, because the next question is "how do you debug it?".
+
+</Callout>
+
+<DeepDive title="Go deeper: a breaking change without a flag day">
+
+A breaking change over a live stream has a shape. Publish both versions for a while, either to `orders` and `orders-v2` or with a version field and an upcaster on read. Move consumers one group at a time, each proving it reads both. Keep the old topic until its retention has passed so late replays still work, then stop the old producer. The whole dance exists because you cannot rewrite records already in the log; the registry's compatibility checks are what make the dance rarely necessary.
+
+</DeepDive>

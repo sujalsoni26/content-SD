@@ -1,0 +1,68 @@
+{
+  "slug": "lld-movie-ticket-booking",
+  "title": "LLD: Movie ticket booking",
+  "moduleId": "lld-practice",
+  "level": "intermediate",
+  "minutes": 13,
+  "problem": "Two fans pick seat E7 for the same show in the same second, both are told to pay, and one of them arrives to find a stranger in it.",
+  "summary": "Model availability per show, not per seat, and make the seat hold an all-or-nothing claim with a TTL that is enforced at read time. A booking state machine, idempotent confirm and a version column or row lock keep every seat sold exactly once.",
+  "catTip": "I hold the warm spot on the server for exactly ten minutes. If the human does not pay in chin scratches by then, the spot goes to the next cat. Two cats, one seat, never.",
+  "recall": {
+    "q": "What is the key design decision in a movie ticket booking system, and what hangs off it?",
+    "a": "Keep availability on a per-show ShowSeat and make the seat hold an all-or-nothing claim with a TTL that is enforced at read time (an expired hold counts as free) and only tidied by a sweeper. The booking state machine (held, payment pending, paid, confirmed), paying idempotently on the booking id with that id as the gateway's idempotency key, and a version column or SELECT FOR UPDATE in seat order all hang off that hold."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without an atomic, expiring hold two buyers pay for one seat or abandoned carts keep seats unsellable, and a retried payment callback books or charges twice.",
+    "tradeoffs": "A hold takes inventory off the market for its TTL, every anti-double-booking mechanism costs a lock or a retry, and the state machine and idempotency keys add bookkeeping to every write.",
+    "explainSimply": "It works like putting your hand on the last box of sweets at a counter: while your hand is there nobody else can take it, but if you have not paid within ten minutes the shopkeeper lifts your hand off. Your name goes on the receipt, so paying twice by mistake still buys the box once.",
+    "hint": "Think about what must stay true of a seat between the moment a user picks it and the moment the payment arrives, and who enforces it."
+  },
+  "meow": "Meow holds E7. Ten minutes. Pay or the hold expires. Two cats cannot sit on one seat, the inventory said so, purr-sistently.",
+  "quiz": [
+    {
+      "prompt": "Two users submit a hold for seat E7 of the same show within the same millisecond. The seat row has a version column and each request runs UPDATE ... WHERE version = the version it read. What happens?",
+      "options": [
+        "Both holds succeed and the conflict is caught later, when the second user pays",
+        "The first UPDATE to commit increments the version, the second updates zero rows, and that user's whole hold is rolled back and reported as unavailable",
+        "The database detects a deadlock and aborts both transactions",
+        "The second request blocks until the first user's ten-minute hold expires"
+      ],
+      "answer": 1,
+      "explanation": "An optimistic write succeeds only if the row still carries the version the request read, so exactly one of the two matches and the other sees zero rows updated. Blocking for the whole hold is the tempting distractor, but even a pessimistic row lock is held for a transaction lasting milliseconds, never for the ten-minute hold."
+    },
+    {
+      "prompt": "A hold expires at 20:10:00 and the payment gateway's success callback arrives at 20:10:05. Which design keeps the system from taking money for a seat it may no longer be able to deliver?",
+      "options": [
+        "Charge first and hold the seats afterwards, since the payment is the real commitment",
+        "Run the expiry sweeper less often so that holds rarely lapse during payment",
+        "Check the hold before calling the gateway, move the booking to payment pending and extend the hold for the payment window, so it cannot lapse mid-payment",
+        "Make the hold permanent once the user opens the payment page"
+      ],
+      "answer": 2,
+      "explanation": "Checking and extending the hold before the charge means the seat is still the buyer's when the money moves, and a decline simply returns the booking to held. Charging first is the strongest distractor because it sounds safe for revenue, but it guarantees a refund every time the seat has gone, and sweeper frequency is irrelevant when expiry is checked at read time."
+    }
+  ],
+  "cards": [
+    {
+      "q": "The seat map shows E7 free to two users, both click, and the second write must lose. Which responsibility owns this and by what mechanism?",
+      "a": "SeatInventory.hold, which is all-or-nothing for the requested seats: under one lock per show in a single process, and in the database as a conditional UPDATE with a version column or SELECT ... FOR UPDATE NOWAIT in ascending seat order. A unique constraint on (show, seat) for booked seats is the backstop no application bug can bypass."
+    }
+  ],
+  "glossary": [
+    { "term": "JPA", "full": "Jakarta Persistence API", "note": "The Java standard for mapping objects to relational tables; a field marked @Version gives optimistic locking, and PESSIMISTIC_WRITE maps to a row lock." }
+  ],
+  "sources": [
+    { "title": "Java SE 21 API: java.util.concurrent.locks.ReentrantLock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/locks/ReentrantLock.html", "accessed": "2026-11-22", "supports": "the lock() then try/finally unlock() idiom; reentrancy; tryLock with a timeout", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ConcurrentHashMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html", "accessed": "2026-11-22", "supports": "computeIfAbsent and putIfAbsent are performed atomically; retrieval operations do not block; the computation should be short", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ScheduledExecutorService", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html", "accessed": "2026-11-22", "supports": "schedule returns a ScheduledFuture that can be used to cancel the task; scheduleWithFixedDelay runs a task periodically until cancelled", "status": "verified" },
+    { "title": "PostgreSQL documentation: Explicit Locking, 13.3.2 Row-Level Locks and 13.3.4 Deadlocks", "url": "https://www.postgresql.org/docs/current/explicit-locking.html", "accessed": "2026-11-22", "supports": "FOR UPDATE blocks other transactions from updating, deleting or locking the rows until the transaction ends; PostgreSQL detects deadlocks and aborts one transaction; acquiring locks in a consistent order is the recommended defence", "status": "verified" },
+    { "title": "PostgreSQL documentation: SELECT, The Locking Clause", "url": "https://www.postgresql.org/docs/current/sql-select.html", "accessed": "2026-11-22", "supports": "with NOWAIT the statement reports an error rather than waiting if a selected row cannot be locked immediately; SKIP LOCKED skips such rows", "status": "verified" },
+    { "title": "Jakarta Persistence 3.1 specification, 3.4 Locking and Concurrency (3.4.2 Version Attributes, 3.4.4 Lock Modes, 3.4.5 OptimisticLockException)", "url": "https://jakarta.ee/specifications/persistence/3.1/jakarta-persistence-spec-3.1", "accessed": "2026-11-22", "supports": "the version attribute is used by the provider to perform optimistic locking and is updated on write; OptimisticLockException may be deferred to flush or commit and always marks the transaction for rollback; a pessimistic lock prevents other transactions from modifying or deleting the row until the holding transaction ends and PESSIMISTIC_WRITE serialises updating transactions", "status": "verified" },
+    { "title": "Jakarta Persistence 3.1 API: jakarta.persistence.Version", "url": "https://jakarta.ee/specifications/persistence/3.1/apidocs/jakarta.persistence/jakarta/persistence/Version.html", "accessed": "2026-11-22", "supports": "@Version specifies the field that serves as the entity's optimistic lock value; one version attribute per class", "status": "verified" },
+    { "title": "Jakarta Persistence 3.1 API: jakarta.persistence.OptimisticLockException", "url": "https://jakarta.ee/specifications/persistence/3.1/apidocs/jakarta.persistence/jakarta/persistence/OptimisticLockException.html", "accessed": "2026-11-22", "supports": "thrown by the provider on an optimistic locking conflict, as part of an API call, a flush or at commit; the active transaction is marked for rollback", "status": "verified" },
+    { "title": "Redis documentation: SET command (NX, EX and the simple lock pattern)", "url": "https://redis.io/docs/latest/commands/set/", "accessed": "2026-11-22", "supports": "SET key value NX EX seconds sets the key only if absent and expires it; the documentation presents it as a simple lock, recommends a random token released by a compare-and-delete script, and points to Redlock for stronger guarantees", "status": "verified" },
+    { "title": "Stripe API reference: Idempotent requests", "url": "https://docs.stripe.com/api/idempotent_requests", "accessed": "2026-11-22", "supports": "the gateway saves the first response for an idempotency key and replays it for retries; parameters must match the original request; keys may be pruned after at least 24 hours", "status": "verified" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994), ch. 5 Behavioral Patterns", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of State, Strategy and Observer", "status": "reference" }
+  ]
+}

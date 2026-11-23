@@ -1,0 +1,92 @@
+A **distributed lock** lets one process at a time act on a shared resource when the processes run on different machines: one worker per video to transcode. Inside one process a mutex does this; across machines the lock lives in a separate service, and every message to or from it can be late, lost or stale (see [What makes a system distributed](/learn/distributed-fundamentals)).
+
+## A lock in one Redis command
+
+The Redis documentation's single-instance recipe:
+
+```text
+SET lock:video:4821 7f3a9c2e-unique-token NX PX 30000
+```
+
+`NX` sets the key only if it does not exist, so exactly one of several racing clients gets `OK`. `PX 30000` expires the key after 30 seconds, so a crashed holder cannot block everyone forever. The value is a random token unique to this attempt, used to release safely: a plain `DEL` could delete a lock that has since passed to someone else, so the release compares before deleting, atomically:
+
+```text
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+```
+
+Two things still go wrong.
+
+<Mermaid caption="The TTL is a guess about how long the work takes. A paused holder does not know its lock has expired, and nothing stops its late write." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant A as Worker A
+    participant R as Redis
+    participant B as Worker B
+    participant S as Storage
+    A->>R: SET lock NX PX 30000
+    R-->>A: OK
+    Note over A: Garbage-collection pause, 40 s
+    Note over R: 30 s pass, the key expires
+    B->>R: SET lock NX PX 30000
+    R-->>B: OK
+    B->>S: write result for video 4821
+    Note over A: Pause ends, still believes it holds the lock
+    A->>S: write result for video 4821
+    Note over S: Two holders, two writes
+`} />
+
+The token prevents the second failure: an expired holder running `DEL` would remove worker B's lock and let a third worker in, whereas compare-and-delete finds a different token and does nothing. Nothing in the recipe prevents the first.
+
+## Every lock with a timeout is a lease
+
+The expiry makes the lock safe against crashes and unsafe against slowness. A holder cannot tell that its lease has run out: a garbage-collection pause, a paused VM or a delayed packet look like nothing from the inside, and checking the clock just before writing only narrows the window. <mark>A lock alone cannot protect a resource from a holder that does not know it has lost the lock; the resource has to check too.</mark>
+
+The check is a **fencing token**: the lock service hands out a number that only increases, every write carries it, and the storage rejects any token lower than the highest it has seen. Above, A would carry token 33 and B token 34, so A's late write is refused. Tokens are the subject of [Leader election, split-brain and fencing](/learn/leader-election); here it is enough that a lock without one is a lock for *efficiency*, not for *correctness*.
+
+<Callout type="analogy" title="A study room booked for thirty minutes">
+
+Your name on the door is the lock, and the booking slip expires at the half hour so a no-show cannot block the room all day. Fall asleep over your books and the booking lapses while you are still inside; the next student walks in and two of you are "using" the room. The fencing token is the booking number the librarian checks before accepting anything you hand in: a slip from an expired booking is refused however sure you are that the room is yours. Where the analogy stops: a librarian can see you asleep in the room, whereas the lock service only sees that your heartbeat stopped, and cannot tell a paused holder from a dead one.
+
+</Callout>
+
+## Redlock and the argument about it
+
+One Redis node is a single point of failure, and asynchronous replication does not help: a lock on the primary can vanish when a replica without it is promoted. **Redlock**, the algorithm in the Redis documentation, runs the same `SET NX PX` against N independent masters, five in the reference description, and holds the lock only if a majority (three of five) succeeded within the TTL; the remaining validity is the TTL minus the acquisition time and an allowance for clock drift. On failure it unlocks every node and retries after a random delay. With Redis's default once-a-second `fsync` a restarted node can also forget a lock it acknowledged; the documentation suggests `fsync` on every write or a restart delay longer than the TTL.
+
+In 2016 Martin Kleppmann argued that Redlock is neither a good efficiency lock nor a safe correctness lock: it issues no fencing tokens, and its safety rests on timing assumptions, including Redis expiring keys by wall-clock time, which an administrator or an NTP correction can move. Redis's author Salvatore Sanfilippo (antirez) replied that a holder paused *after* acquiring defeats every auto-expiring lock, not just Redlock; that Redlock needs clocks that tick at about the same rate, not clocks that agree; that delays *before* the lock is confirmed are caught by the validity check; and that the resource can check the random token much as a fencing token. He agreed Redis should expire keys on a monotonic clock. The documentation now links both and says: implement fencing tokens; a wall-clock shift can hand a lock to two processes. They disagree about how far to trust timing, and agree that the resource, not the lock, has the last word.
+
+## Locks on a consensus store
+
+Consensus-based coordination services (see [Consensus: Raft in one picture](/learn/consensus)) offer locks that survive node failures.
+
+| | ZooKeeper | etcd |
+| --- | --- | --- |
+| Acquire | Create an ephemeral, sequential child of the lock node; lowest sequence number wins | Create my key under the lock prefix, bound to my lease, if absent; lowest creation revision wins |
+| Wait | Watch only the next-lower child, so one release wakes one waiter | Wait for lower-revision keys to be deleted |
+| Release | Delete your node; an expired session does it for you | Delete your key; an expired lease does it for you |
+| Fencing token | The sequence number | The revision |
+
+Every acquire is a majority-agreed replicated write, so the price is latency; and the lock is still a lease that an expired session releases under a holder that is merely slow.
+
+## Remove the lock instead
+
+Most locks exist so that the *same* work does not happen twice; often something simpler gives that:
+
+- **Idempotency keys.** "At most once per key" needs only a store that remembers keys (see [Idempotency](/learn/idempotency)).
+- **Unique constraints.** Insert a claim row such as `(job, run_date)` under a unique index; the database picks exactly one winner (see [ACID transactions](/learn/acid)).
+- **Single-writer partitioning.** Route all operations on a key to one worker, as a partitioned log gives each partition one consumer (see [Partitions and consumer groups](/learn/partitions-consumer-groups)). The assignment is itself a lease.
+
+<Callout type="interview" title="Say what the lock is for">
+
+For efficiency, one Redis node with `SET NX PX` and compare-and-delete is fine. For correctness, take the lock from a consensus-backed store and pass its fencing token to the resource. First, ask whether an idempotency key or a unique constraint removes the lock altogether.
+
+</Callout>

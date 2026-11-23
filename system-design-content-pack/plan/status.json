@@ -1,0 +1,1102 @@
+{
+  "content/lessons/acid.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/availability.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/backpressure.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/big-idea.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/caching.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/cap.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/cdn.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/circuit-breaker.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/client-server.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/consistency.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/dns.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/estimation-examples.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/estimation-formulas.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/estimation-numbers.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/final-architecture.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/grpc.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/http.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/idempotency.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/indexing.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/latency.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/load-balancing.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/message-queues.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/microservices.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/normalization.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/object-storage.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/playbook.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/proxy.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/pubsub.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/rate-limiting.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/replication.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/rest.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/revision-map.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/scaling.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/sharding.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/sql-nosql.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/sync-async.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/system-shapes.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/tcp-udp.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/test-yourself.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/timeouts-retries.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/url-shortener.mdx": {
+    "status": "integration-ready",
+    "note": "Phase 2 edit; npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/websockets.mdx": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository",
+    "updated": "2026-11-22"
+  },
+  "data/curriculum.ts": {
+    "status": "integration-ready",
+    "note": "generated from the bundles by the merge; npm run check and npm run build passed on the scratch checkout",
+    "updated": "2026-11-22"
+  },
+  "data/quizzes.ts": {
+    "status": "integration-ready",
+    "note": "generated from the bundles by the merge; npm run check and npm run build passed on the scratch checkout",
+    "updated": "2026-11-22"
+  },
+  "data/recall.ts": {
+    "status": "integration-ready",
+    "note": "generated from the bundles by the merge; npm run check and npm run build passed on the scratch checkout",
+    "updated": "2026-11-22"
+  },
+  "data/glossary.json": {
+    "status": "integration-ready",
+    "note": "generated from the bundles by the merge; npm run check and npm run build passed on the scratch checkout",
+    "updated": "2026-11-22"
+  },
+  "types/curriculum.ts": {
+    "status": "integration-ready",
+    "note": "approved application change; npm run check and npm run build passed on the scratch checkout",
+    "updated": "2026-11-22"
+  },
+  "scripts/validate-content.mjs": {
+    "status": "integration-ready",
+    "note": "approved application change; npm run check and npm run build passed on the scratch checkout",
+    "updated": "2026-11-22"
+  },
+  "components/diagrams/interactive/recall-cards.tsx": {
+    "status": "integration-ready",
+    "note": "approved application change; npm run check and npm run build passed on the scratch checkout",
+    "updated": "2026-11-22"
+  },
+  "data/lesson-guides.ts": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository so far; grows in Phases 3–5",
+    "updated": "2026-11-22"
+  },
+  "data/cat-meows.ts": {
+    "status": "integration-ready",
+    "note": "byte-identical to repository so far; grows in Phases 3–5",
+    "updated": "2026-11-22"
+  },
+  "SOURCE_MANIFEST.md": {
+    "status": "complete",
+    "note": "regenerated from every bundle's sources by the merge",
+    "updated": "2026-11-22"
+  },
+  "research/phase2-core-lessons.md": {
+    "status": "complete",
+    "note": "phase2 core lessons; phase3-advanced-modules, phase4-hld, phase5-lld notes written",
+    "updated": "2026-11-22"
+  },
+  "plan/deferred-links.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "tools/apply.sh": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "REPOSITORY_AUDIT.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "EXISTING_CONTENT_INDEX.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "CONTENT_GAPS.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "SIMULATION_AUDIT.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "CURRICULUM_ROADMAP.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "CONTENT_INDEX.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "CONTENT_STATUS.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "plan/curriculum-plan.json": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "plan/build_plan.py": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "recommendations/APP_CHANGES.md": {
+    "status": "complete",
+    "note": "rows 1–13; three approved and delivered, the rest optional with fallbacks",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/distributed-fundamentals.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/case-study-method.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "INTEGRATION_NOTES.md": {
+    "status": "complete",
+    "note": "final integration notes: apply, what changes, hand edits, verification, open items",
+    "updated": "2026-11-22"
+  },
+  "plan/LLD_ADDENDUM.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "plan/CASE_STUDY_TEMPLATE.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "AUTHORING_BRIEF.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "specs/SIMULATION_SPEC_TEMPLATE.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "specs/simulations/cache-stampede.md": {
+    "status": "complete",
+    "note": "Phase 6 spec written early; specification complete on the 12-section template, implementation is APP_CHANGES row 8",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/api-gateway.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/cqrs.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/event-sourcing.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/modular-monolith-soa.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/serverless.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/service-mesh.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/strangler-fig.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/consensus.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/distributed-locks.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/distributed-transactions.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/leader-election.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/linearizability.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/quorums.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/sagas.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/time-and-ordering.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/btree-vs-lsm.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/mvcc-isolation.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/partitioning-internals.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/query-execution.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/replication-internals.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/storage-engines.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/wal.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/bulkheads-degradation.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/capacity-planning.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/disaster-recovery.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/failure-modes.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/logging.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/metrics-monitoring.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/slos-error-budgets.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/tracing.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/delivery-semantics.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/eda-patterns.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/kafka-architecture.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/partitions-consumer-groups.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/stream-processing.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/api-security.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/authentication.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/authorization.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/encryption.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/oauth-jwt.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/secrets-management.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/security-fundamentals.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/threat-modelling.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "specs/simulations/quorum-reads-writes.md": {
+    "status": "complete",
+    "note": "written after the target lesson was reviewed and merged; specification complete on the 12-section template, implementation is APP_CHANGES row 8",
+    "updated": "2026-11-22"
+  },
+  "specs/simulations/raft-election.md": {
+    "status": "complete",
+    "note": "written after the target lesson was reviewed and merged; specification complete on the 12-section template, implementation is APP_CHANGES row 8",
+    "updated": "2026-11-22"
+  },
+  "specs/simulations/distributed-lock.md": {
+    "status": "complete",
+    "note": "written after the target lesson was reviewed and merged; specification complete on the 12-section template, implementation is APP_CHANGES row 8",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/autoscaling.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/cdn-internals.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/containers.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/iac.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/kubernetes.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/multi-region.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/service-discovery.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "specs/simulations/kafka-partitions.md": {
+    "status": "complete",
+    "note": "written after partitions-consumer-groups was reviewed; specification complete on the 12-section template, implementation is APP_CHANGES row 8",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-key-value-store.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/class-relationships-uml.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/clean-code.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/composition-over-inheritance.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/concurrency-basics.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-patterns-behavioural.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-patterns-creational.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-patterns-structural.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/error-handling.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-intro.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/oop-pillars.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/testing-extensibility.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/solid.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/interfaces-abstractions-di.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "specs/simulations/btree-vs-lsm.md": {
+    "status": "complete",
+    "note": "written after btree-vs-lsm was reviewed; specification complete on the 12-section template, implementation is APP_CHANGES row 8",
+    "updated": "2026-11-22"
+  },
+  "specs/simulations/trace-waterfall.md": {
+    "status": "complete",
+    "note": "written after tracing was reviewed; specification complete on the 12-section template, implementation is APP_CHANGES row 8",
+    "updated": "2026-11-22"
+  },
+  "specs/simulations/jwt-inspector.md": {
+    "status": "complete",
+    "note": "written after oauth-jwt was reviewed; specification complete on the 12-section template, implementation is APP_CHANGES row 8",
+    "updated": "2026-11-22"
+  },
+  "specs/simulations/cdn-cache.md": {
+    "status": "complete",
+    "note": "written after cdn-internals was reviewed; specification complete on the 12-section template, implementation is APP_CHANGES row 8",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/vector-clock-example.md": {
+    "status": "superseded",
+    "note": "Mermaid sequenceDiagram in time-and-ordering.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/consistency-model-map.md": {
+    "status": "superseded",
+    "note": "Mermaid sequenceDiagram in linearizability.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/page-and-buffer-pool.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in storage-engines.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/lsm-levels.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in btree-vs-lsm.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/distributed-sql-architecture.md": {
+    "status": "superseded",
+    "note": "superseded by the Mermaid flowchart in distributed-sql.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/kafka-cluster.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart, sequenceDiagram in kafka-architecture.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/windows-and-watermarks.md": {
+    "status": "superseded",
+    "note": "Mermaid sequenceDiagram in stream-processing.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/failure-domains.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in failure-modes.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/bulkheads-and-cells.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in bulkheads-degradation.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/metrics-pipeline.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in metrics-monitoring.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/dr-tiers.md": {
+    "status": "superseded",
+    "note": "reuses registered static diagram rpo-rto-timeline in disaster-recovery.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/trust-boundaries.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in security-fundamentals.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/authz-enforcement-points.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in authorization.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/envelope-encryption.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in encryption.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/dfd-with-boundaries.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in threat-modelling.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/container-vs-vm.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in containers.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/kubernetes-objects.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in kubernetes.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/multi-region-active-active.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in multi-region.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/vpc-layout.md": {
+    "status": "superseded",
+    "note": "superseded by the Mermaid flowchart in cloud-networking.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/api-gateway-bff.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in api-gateway.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/service-mesh-sidecars.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in service-mesh.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/serverless-event-flow.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart in serverless.mdx",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/tenancy-models.md": {
+    "status": "superseded",
+    "note": "superseded by the Mermaid flowchart in multi-tenancy.mdx",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-notification-system.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-pastebin.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-rate-limiter.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/normalized-vs-denormalized.md": {
+    "status": "superseded",
+    "note": "Mermaid flowchart and a comparison table in normalization.mdx (Phase 2 improvement)",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-file-storage.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-instagram.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-parking-lot.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-vending-machine.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-elevator.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-library-management.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-movie-ticket-booking.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-splitwise.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-snake-and-ladder.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/advanced-revision.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-revision.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "README.md": {
+    "status": "complete",
+    "note": "package README: layout, pipeline, conventions, approved changes",
+    "updated": "2026-11-22"
+  },
+  "qa/TECHNICAL_QA.md": {
+    "status": "complete",
+    "note": "repo checks, Mermaid parse and render checks, progress compatibility, links, generation",
+    "updated": "2026-11-22"
+  },
+  "qa/EDUCATIONAL_QA.md": {
+    "status": "complete",
+    "note": "coverage, sequencing, structure and voice, accuracy, assessment, companion",
+    "updated": "2026-11-22"
+  },
+  "PHASE_REPORTS.md": {
+    "status": "complete",
+    "note": "one report per phase",
+    "updated": "2026-11-22"
+  },
+  "research/phase2-core-lessons.md (one file per phase)": {
+    "status": "complete",
+    "note": "phase2 core lessons; phase3-advanced-modules, phase4-hld, phase5-lld notes written",
+    "updated": "2026-11-22"
+  },
+  "research/phase3-advanced-modules.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "research/phase4-hld.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "research/phase5-lld.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "qa/METRICS.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "tools/mermaid-check.mjs": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "tools/render-check.mjs": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "plan/qa_metrics.py": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "specs/diagrams/README.md": {
+    "status": "complete",
+    "note": "",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-task-scheduler.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-ride-booking.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-food-ordering.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-chess.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-in-memory-cache.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-logging-framework.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/lld-rate-limiter.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-uber.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-ticket-booking.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-search-autocomplete.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/distributed-sql.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/cdc.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/brokers-compared.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-payment-system.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-whatsapp.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-youtube.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/incident-response.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/cloud-networking.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/multi-tenancy.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-netflix.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "content/lessons/design-ecommerce.mdx": {
+    "status": "integration-ready",
+    "note": "content review passed (accuracy, sources, voice, validator); npm run check, npm run build, Mermaid parse and render checks passed in Phase 7",
+    "updated": "2026-11-22"
+  },
+  "tools/full-check.sh": {
+    "status": "complete",
+    "note": "runs merge, documents, Mermaid parse, build and render check in one go",
+    "updated": "2026-11-22"
+  },
+  "plan/refresh_review_hashes.py": {
+    "status": "complete",
+    "note": "records or verifies review hashes of reviewed bundles",
+    "updated": "2026-11-22"
+  },
+  "plan/export_review.py": {
+    "status": "complete",
+    "note": "exports a lesson body plus a meta.json summary for review",
+    "updated": "2026-11-22"
+  }
+}

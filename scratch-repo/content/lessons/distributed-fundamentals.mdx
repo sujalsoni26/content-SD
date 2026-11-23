@@ -1,0 +1,103 @@
+A **distributed system** is several computers that share nothing but a network. They cannot look into each other's memory, they do not share a clock, and the only way they learn anything about one another is by sending messages that the network may lose, delay or deliver twice. Everything in this track follows from that one sentence.
+
+<Callout type="idea" title="What changed when you added the second machine">
+
+On one machine, a function call either returns or the whole process crashes. Across a network, a call can hang, succeed without telling you, or reach a machine that is alive but cut off. The code did not get harder; the *failures* did.
+
+</Callout>
+
+## The network lies
+
+Send a request to another machine and wait. Nothing comes back. Which of these happened?
+
+<Steps>
+
+1. The request was lost on the way.
+2. The request is still waiting in a queue somewhere.
+3. The remote machine crashed before it got the request.
+4. The remote machine got it, did the work, and crashed before replying.
+5. The remote machine did the work, replied, and the *reply* was lost.
+6. The remote machine is fine, just slow; the reply is on its way.
+
+</Steps>
+
+From where you sit, all six look identical: silence. A **timeout** is the moment you stop waiting and decide, but it is a guess, not a fact. In cases 4 and 5 the work happened; retrying blindly does it twice, which is why payments carry an idempotency key (see [Idempotency](/learn/idempotency)) and why [timeouts and retries](/learn/timeouts-retries) are designed together rather than bolted on.
+
+<Mermaid caption="A timeout tells you that no reply arrived in time. It does not tell you whether the work was done." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant A as Order service
+    participant P as Payment service
+    A->>P: charge(order 77, ₹500)
+    Note over P: Charged
+    P--xA: Reply lost
+    Note over A: Timeout: charged or not?
+    A->>P: charge(order 77, ₹500) again
+    Note over P: Second charge, unless the key is recognised
+`} />
+
+Messages can also arrive **out of order** (two packets took different routes) or **more than once** (a retry overtook the original). Reliable transports such as TCP hide reordering and duplication inside one connection (see [IP, TCP and UDP](/learn/tcp-udp)), but not across connections, retries or restarts. Your application sees them again one level up.
+
+## There is no "now"
+
+Each machine has its own clock, and clocks drift: a quartz oscillator gains or loses time at a rate that changes with temperature. Machines correct themselves against time servers (the Network Time Protocol, NTP), so two well-run servers typically disagree by milliseconds, badly run ones by seconds or more. A virtual machine that is paused for a garbage collection or a live migration simply stops counting for a while.
+
+So "which write happened last?" has no reliable answer if the only evidence is each machine's wall clock. A distributed system needs other ways to order events, which is the next lesson.
+
+## Partial failure
+
+A single server fails completely or not at all. A system of fifty servers almost always has *something* broken: one disk, one switch port, one process stuck in a retry loop. This is **partial failure**, and it is the defining difficulty of distributed systems. The rest of the system has to keep working, and it has to decide what to do about the broken part without being able to see it directly.
+
+| Failure mode | What it looks like | Example |
+| --- | --- | --- |
+| Crash-stop | A node stops and never comes back | A VM is terminated |
+| Crash-recovery | A node stops, then restarts with its disk intact but its memory gone | A process is OOM-killed and restarted |
+| Omission | Messages are dropped | A congested switch, a full socket buffer |
+| Timing | Messages arrive, but late | A GC pause, a slow disk, a saturated link |
+| Network partition | Two groups of healthy nodes cannot reach each other | A misconfigured router, a cut cable (see [CAP and PACELC](/learn/cap)) |
+| Grey failure | A node is alive and answers health checks but works badly | 50% packet loss on one network card |
+| Byzantine | A node lies or behaves arbitrarily | A bug or an attacker; most internal systems assume this does not happen |
+
+Detecting any of these means waiting for silence and then guessing. A **failure detector** sends heartbeats and declares a peer dead after too many are missed; the only tunable is how long to wait. Wait a short time and you declare slow nodes dead, causing needless failovers; wait a long time and users stare at errors while a genuinely dead node is still trusted. There is no setting that is right for both.
+
+<Callout type="analogy" title="Two generals who cannot meet">
+
+Two armies on opposite hills must attack at the same time to win. They can only communicate by messenger, and any messenger might be captured. General A sends "attack at dawn". If the messenger arrives, B knows the plan, but A does not know that B knows, so B sends a confirmation, which might also be captured, and now B does not know that A knows that B knows. No finite number of messengers lets both generals be *certain*. This is the Two Generals' Problem, and it is the reason every distributed protocol settles for "probably agreed, with a plan for when we were wrong" rather than certainty. Where the analogy stops: real systems do not need certainty, they need a protocol that converges and a way to repair mistakes.
+
+</Callout>
+
+## The fallacies of distributed computing
+
+In 1994 Peter Deutsch listed assumptions that programmers new to networks make, and James Gosling added the eighth. Each one quietly enters a design and later causes an outage.
+
+| Fallacy | What breaks when you assume it |
+| --- | --- |
+| The network is reliable | No timeouts, no retries, no idempotency; one dropped packet hangs a user |
+| Latency is zero | Chatty call chains; a page that makes 40 sequential service calls |
+| Bandwidth is infinite | Shipping whole objects when a field would do; logs that saturate the link |
+| The network is secure | Plain-text internal traffic, trust by IP address |
+| Topology does not change | Hard-coded addresses; nothing re-resolves when a server moves |
+| There is one administrator | Nobody owns the firewall rule that just changed |
+| Transport cost is zero | Serialization and encryption CPU ignored in capacity plans |
+| The network is homogeneous | Assuming every hop speaks the same protocol version |
+
+<Callout type="interview" title="Say what you assume about failure">
+
+When you add a second service to a design, say which failures you handle and which you do not: "I set a timeout and retry with backoff, writes carry an idempotency key, and if the dependency is down for more than a minute the breaker opens and we show the cached value." A design that never mentions failure is assumed to have never thought about it.
+
+</Callout>
+
+## What you can and cannot have
+
+The rest of this track is a tour of what can be built on top of this unreliable foundation and what it costs: agreeing on an order of events (clocks), tolerating lost replicas (quorums), electing one node to decide (consensus), holding a lock across machines, and committing a change on two databases at once. Each one trades latency, availability or complexity for a guarantee. None of them removes the uncertainty described here; they contain it.
+
+<DeepDive title="Go deeper: why the theory says consensus cannot be guaranteed">
+
+In 1985 Fischer, Lynch and Paterson proved that in a system where messages can be arbitrarily delayed, no algorithm can guarantee that nodes reach agreement if even one of them may crash. The intuition is the one above: a crashed node and a slow node look the same, so any algorithm that waits for the slow node might wait forever, and any algorithm that gives up on it might be giving up on a node that was about to answer. Real systems such as Raft and ZooKeeper sidestep the proof by using timeouts and randomisation: they do not *guarantee* progress in every adversarial schedule, but they make it overwhelmingly likely in practice. That is why consensus protocols are described in terms of leaders, heartbeats and election timeouts rather than certainties.
+
+</DeepDive>

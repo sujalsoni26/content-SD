@@ -1,0 +1,285 @@
+Post a photo, follow people, open the app and see their latest posts, like and comment. This is the system the core course grew one box at a time, and [The final architecture](/learn/final-architecture) is its skeleton; this case study puts Instagram-sized numbers into every box and shows where the skeleton bends. It leans on [Caching](/learn/caching), [Sharding](/learn/sharding) and [Pub/sub](/learn/pubsub), in the order of [How to work a case study](/learn/case-study-method).
+
+## Requirements
+
+- **Functional:** post a photo with a caption; follow and unfollow; a home feed of posts from followed accounts, newest first; like and comment; a profile grid of a user's own posts.
+- **Out of scope:** notifications ([their own case study](/learn/design-notification-system)), stories and video ([Design YouTube](/learn/design-youtube)), direct messages ([Design WhatsApp](/learn/design-whatsapp)), search and hashtags, ads, and ranking, which returns under *How it evolves*.
+- **Non-functional:**
+  - **Feed in under 500 ms at p99**, because it is the first screen and the one users judge the app by.
+  - **A post is never lost** once the app says "posted", because a photo is irreplaceable, even though it may take a few seconds to reach followers.
+  - **Availability over consistency for the feed and counters**, because a like count that is a few seconds stale harms nobody (see [CAP](/learn/cap)).
+  - **Uploads that survive mobile networks**, because most posts come from phones.
+  - **Read-heavy by a wide margin**, so the write path may do extra work to make reads cheap.
+
+## Estimation
+
+Assume 500M DAU; 2 posts per user per day on average (an average that hides most users posting rarely and a few posting constantly); 50 feed views per user per day, each showing 10 posts; a 200 KB uploaded photo stored with three renditions totalling about 250 KB more, so 450 KB per post; each feed view loads one 60 KB rendition per post; 200 followers per user on average; 10 likes per post; peaks of three times the average.
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Posts per day | 5 × 10⁸ × 2 | 10⁹ |
+| Write QPS (posts) | 10⁹ ÷ 10⁵ | 10k (peak \~30k) |
+| Feed views per day | 5 × 10⁸ × 50 | 2.5 × 10¹⁰ |
+| Feed read QPS | 2.5 × 10¹⁰ ÷ 10⁵ | 250k (peak \~750k) |
+| Post hydrations/s | 250k views × 10 posts | 2.5M post reads/s |
+| Media ingress | 10k × 200 KB | 2 GB/s ≈ 16 Gbps |
+| Media stored per day | 10⁹ × 450 KB | 450 TB |
+| Media per year, 3 copies | 450 TB × 365 × 3 | ≈ 490 PB (≈ 165 PB before replication) |
+| Media egress | 250k views × 10 × 60 KB | 150 GB/s ≈ 1.2 Tbps |
+| Likes per second | 10⁹ × 10 ÷ 10⁵ | 100k (peak \~300k) |
+| Feed inserts if fan-out on write | 10k posts × 200 followers | 2M inserts/s |
+| Feed cache | 5 × 10⁸ users × 500 entries × 16 B | 4 TB of RAM, about 8 TB with overhead |
+
+→ Two numbers dominate, which is unusual: <mark>1.2 Tbps of media egress</mark>, which is a CDN problem, and <mark>2.5M post reads a second</mark> behind 250k feed views, which is a caching problem. The 200× fan-out multiplier is the design decision (deep dive 1). In the terms of [Three system shapes](/learn/system-shapes) the feed is read-heavy with tiny objects and the media is bandwidth-heavy, and the two halves barely touch.
+
+## API
+
+| Endpoint | Request | Success | Errors |
+| --- | --- | --- | --- |
+| `POST /media/uploads` | `{ "content_type", "size" }` | 200 + `{ "media_id", "upload_url" }` (pre-signed, 15 min) | 413 over 20 MB · 415 not an image |
+| `PUT upload_url` | raw bytes, straight to object storage | 200 | 403 expired |
+| `POST /posts` | `{ "media_id", "caption" }` | 201 + `{ "post_id" }` | 409 media not uploaded · 429 |
+| `GET /feed?cursor=` | – | 200 + `{ "posts": [...], "next_cursor" }` | 401 |
+| `POST /users/{id}/follow` | – | 204 (idempotent) | 404 · 403 private account, request pending |
+| `PUT /posts/{id}/like` · `DELETE` | – | 204 (idempotent) | 404 |
+| `POST /posts/{id}/comments` | `{ "text" }` | 201 | 413 over 2,200 characters |
+| `GET /users/{id}/posts?cursor=` | – | 200 + `{ "posts": [...], "next_cursor" }` | 403 private |
+
+Cursors are post IDs, not page numbers, because IDs are time-ordered (next section) and a page number shifts every time a new post arrives. Like and follow are idempotent so that a double tap or a retried request changes nothing (see [Idempotency](/learn/idempotency)).
+
+## Data model
+
+```sql
+-- Sharded by user: a user's row, posts, comments on their posts and the list of
+-- who they follow live on the same logical shard.
+CREATE TABLE users (
+  id              BIGINT PRIMARY KEY,
+  username        TEXT UNIQUE NOT NULL,
+  is_private      BOOLEAN NOT NULL DEFAULT FALSE,
+  follower_count  BIGINT NOT NULL DEFAULT 0,    -- denormalized counters
+  following_count BIGINT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE posts (
+  id            BIGINT PRIMARY KEY,   -- 41 bits of ms since epoch | 13 bits shard | 10 bits sequence
+  user_id       BIGINT NOT NULL,
+  media_id      BIGINT NOT NULL,      -- object key prefix; renditions hang off it
+  caption       TEXT,
+  like_count    BIGINT NOT NULL DEFAULT 0,
+  comment_count BIGINT NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX posts_by_user ON posts (user_id, id DESC);   -- the profile grid
+
+CREATE TABLE follows   (follower_id BIGINT, followee_id BIGINT, PRIMARY KEY (follower_id, followee_id));
+CREATE TABLE followers (followee_id BIGINT, follower_id BIGINT, PRIMARY KEY (followee_id, follower_id));
+-- the same fact twice, on two shards: "whom I follow" on mine, "who follows me" on theirs
+
+CREATE TABLE likes    (post_id BIGINT, user_id BIGINT, PRIMARY KEY (post_id, user_id));
+CREATE TABLE comments (id BIGINT PRIMARY KEY, post_id BIGINT NOT NULL, user_id BIGINT NOT NULL,
+                       text TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL);
+```
+
+```text
+Feed cache (Redis), one list per user, newest first, capped at 500 entries:
+  feed:{user_id} -> [post_id, post_id, ...]        LPUSH on fan-out, LTRIM 0 499
+Counters (Redis):
+  likes:{post_id} -> integer                       INCR / DECR, flushed to posts.like_count
+```
+
+**Post IDs** follow the scheme Instagram published: a 64-bit number with 41 bits of milliseconds since a custom epoch, 13 bits naming one of several thousand logical shards, and 10 bits of per-shard sequence, so 1,024 IDs per shard per millisecond. The ID therefore sorts by time (feeds and cursors need no timestamp) and names its shard (any service routes a post without a lookup). The two follow tables are the same fact denormalized onto both shards (see [Normalization and denormalization](/learn/normalization)), because "whom do I follow" is read when building a feed and "who follows me" is read when fanning a post out, and neither may cross shards.
+
+## High-level design
+
+<Interactive name="architecture-map" />
+
+The map above is the course's final architecture. The boxes below are the same boxes with Instagram's numbers in them; the one addition is the fan-out service between the post service and the feed cache.
+
+<Mermaid caption="Media and metadata take different roads; the feed is built on write by the fan-out service and read from Redis lists." chart={`flowchart LR
+    C["Clients"] --> CDN["CDN: renditions"]
+    C --> GW["API gateway"]
+    C -- "pre-signed PUT" --> OS["Object storage: originals and renditions"]
+    GW --> PS["Post service"]
+    GW --> FS["Feed service"]
+    GW --> LS["Like and comment service"]
+    PS --> PDB["Posts and users DB, sharded PostgreSQL"]
+    PS -- "PostCreated" --> Q["Queue / topic"]
+    Q --> MW["Media workers: 3 renditions"]
+    MW --> OS
+    Q --> FO["Fan-out service"]
+    FO --> FC["Feed cache: Redis lists"]
+    FS --> FC
+    FS --> PC["Post cache"]
+    LS --> CNT["Counters: Redis"]
+    CDN -. "miss" .-> OS
+`} />
+
+- **Post service** writes the post row and publishes `PostCreated` through an outbox, so that a post is durable before any follower hears of it and no post is saved without its event (see [Pub/sub](/learn/pubsub)).
+- **Media workers** consume the event, re-encode the original into three renditions and write them to object storage, because a user should not wait two seconds for resizing (see [Sync vs async](/learn/sync-async)).
+- **Fan-out service** reads the author's `followers` list and pushes the post ID onto each follower's feed list, because paying 200 cheap writes once is cheaper than paying 200 reads on every feed view (deep dive 1).
+- **Feed service** reads 10 IDs from the user's list, hydrates them from the post cache, and returns CDN URLs, so that the hottest read in the system touches two caches and no database.
+- **Like and comment service** writes the row to the post's shard and bumps a Redis counter, so that a viral post does not serialize 3,000 row updates a second on one row (deep dive 3).
+- **CDN** serves every rendition, because 1.2 Tbps cannot leave the origin (deep dive 2).
+
+<Mermaid caption="Post to feed: the client uploads to storage directly, the post service saves and publishes, workers resize and fan out, and a follower's next feed read finds the ID already in their list." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant U as Poster
+    participant P as Post service
+    participant S as Object storage
+    participant Q as Queue
+    participant F as Fan-out service
+    participant R as Redis feed lists
+    participant V as Follower via feed service
+    U->>P: POST /media/uploads
+    P-->>U: media_id + pre-signed URL
+    U->>S: PUT photo (200 KB)
+    U->>P: POST /posts (media_id, caption)
+    Note over P: Insert post row + outbox row in one transaction
+    P-->>U: 201 post_id
+    P->>Q: PostCreated
+    Q->>F: PostCreated
+    Note over F: 200 followers, skip celebrities and inactive users
+    F->>R: LPUSH feed:follower post_id, LTRIM 0 499 (x200)
+    V->>R: LRANGE feed:me 0 9
+    R-->>V: 10 post ids
+    Note over V: hydrate from post cache, return CDN URLs
+`} />
+
+## Storage and caching
+
+| Data | Store | Why |
+| --- | --- | --- |
+| Originals and renditions | Object storage, CDN in front | 490 PB a year and 1.2 Tbps of reads; immutable URLs cache for a year (see [CDN](/learn/cdn)) |
+| Users, posts, follows, likes, comments | PostgreSQL in thousands of logical shards on far fewer servers | Relational per-user queries, unique usernames, and a scheme Instagram itself ran |
+| Home feed | Redis lists, one per user, capped at 500 | `LPUSH` plus `LTRIM` is constant time and keeps every list bounded, so 4 TB of RAM holds every active user's feed |
+| Post objects for hydration | Cache-aside cache keyed `post:{id}` | 2.5M post reads a second; at a 99% hit rate the shards see 25k, at 90% they see 250k, so the hit rate is a requirement |
+| Like and comment counters | Redis `INCR`, flushed to the row | A hot post's 3,000 likes a second would serialize on one row lock |
+| Sessions, rate-limit buckets | Redis | Small, hot, loss-tolerant |
+
+The feed cache is deliberately *only* IDs: 16 bytes per entry is what makes 500 entries for 500M users fit in RAM, and a deleted post is fixed in the post cache, not in 200 feeds. Twitter described the same choices for its home timelines: Redis lists of IDs capped at 800 entries, bounded by RAM.
+
+## Scaling
+
+**Users and posts** shard by user ID into thousands of logical shards mapped onto far fewer physical servers, so moving a logical shard never re-hashes a row; a post's ID names its shard, so comments and likes land there without a lookup. **The feed cache** shards by user across a Redis cluster. **Fan-out** is a consumer group partitioned by author, so a celebrity's post blocks one partition rather than all of them, and the hybrid rule in deep dive 1 keeps even that short. **Media workers** scale on queue depth (see [Autoscaling](/learn/autoscaling)): at an assumed 50 ms of CPU per rendition, 10k posts × 3 renditions a second keeps 1,500 cores busy, 4,500 at peak. **The graph** is the quiet danger: `followers` for a 300M-follower account is a 300M-row list on one shard, read in pages by the fan-out service and moved, past a threshold, to a store built for wide rows.
+
+## Consistency and availability
+
+| Feature | Model | Why |
+| --- | --- | --- |
+| Your own post | Read-your-writes | The post service pushes the ID onto the author's own feed list synchronously, so it appears at once (see [Consistency](/learn/consistency)) |
+| Followers' feeds | Eventual, seconds | Fan-out is asynchronous; a late post is harmless, a lost one is not, so the queue is durable |
+| Follow and unfollow | Strong on the graph tables | Both rows are written in one transaction when the shards coincide, by an outbox otherwise; the feed may show an unfollowed account for seconds and is filtered at read time |
+| Like counts | Eventual, approximate | Redis counters flushed every few seconds; an occasional recount repairs drift |
+| Media | Durable before referenced | `POST /posts` fails with 409 until the upload is complete |
+
+The feed is the textbook **AP** feature: during a partition the feed service serves the cached list even if the post shards are unreachable, and the fan-out queue holds posts until the other side returns.
+
+<Callout type="analogy" title="Home delivery or the newsstand">
+
+Fan-out on write is delivering every newspaper to every subscriber's door before dawn: the morning read is instant, but the delivery fleet scales with subscribers. Fan-out on read is everyone walking to a newsstand and assembling their own paper from 200 publishers: nothing to deliver, but a slow morning. The hybrid delivers the small papers and keeps the national dailies at the stand, because one national paper would need a fleet of its own. Where it breaks: a newspaper is finished when printed, while a post's like count keeps changing, which is why the feed carries only IDs.
+
+</Callout>
+
+## Failure and recovery
+
+| Failure | What users see | How it heals |
+| --- | --- | --- |
+| Fan-out worker dies mid-post | Some followers get the post seconds late | At-least-once redelivery (see [Message queues](/learn/message-queues)); the feed service drops duplicate IDs on read |
+| A Redis feed node is lost | Those users' feeds load slowly once | The feed service falls back to fan-out on read for that user and rebuilds the list |
+| Media worker backlog | A post shows the original, scaled by the client | Renditions arrive later; the client re-fetches by immutable URL; workers autoscale on queue depth |
+| Post shard primary fails | Posting fails for those users for seconds | Replica promoted; the client retries; reads continue from replicas and caches |
+| A celebrity posts | Fan-out partition busy for minutes if pushed | Hybrid rule: accounts over the follower threshold are merged at read time (deep dive 1) |
+| A post goes viral | Post cache key and counter become hot | Replicate the hot key, coalesce rebuilds, shard the counter (deep dive 3) |
+| CDN misses storm the origin | Slow image loads for a region | Origin shield and long TTLs (see [CDN architecture in depth](/learn/cdn-internals)) |
+
+## Security
+
+- **Authentication:** OAuth tokens per device (see [OAuth 2 and JWT](/learn/oauth-jwt)).
+- **Authorization:** private accounts are the hard case: every read path, feed, profile grid and likes, must check the follow relationship, and the media URLs of private accounts must be unguessable or signed, because a CDN serves anyone who has the URL (see [Authorization](/learn/authorization)).
+- **Uploads:** sniff the content type, cap at 20 MB, and re-encode every image, which also strips the EXIF metadata that carries the photo's GPS location.
+- **Abuse the design invites:** cheap likes and follows are exactly what bots want, so rate limits per account and per device (see [Rate limiting](/learn/rate-limiting)) sit at the gateway, and follow and like endpoints are the first to get them.
+
+## Observability
+
+Six numbers (see [Metrics and monitoring](/learn/metrics-monitoring)): **feed p99**, the promise; **feed freshness**, the time from `POST /posts` to the ID appearing in a follower's list, p50 and p99, which is the fan-out tier's health; **fan-out lag** in queued posts; **post cache hit rate**, because every point lost is 25k extra reads a second on the shards; **CDN hit rate and origin egress**, the bandwidth bill; and **counter drift**, Redis against the row at recount. The trace to keep (see [Distributed tracing](/learn/tracing)) follows one post through the outbox, the queue, the fan-out and a follower's `GET /feed`.
+
+## Trade-offs and bottlenecks
+
+Next to break, in order: the **post cache** at 2.5M reads a second, where a few hot posts can saturate single cache nodes (deep dive 3); **fan-out for large accounts**, which is why the threshold exists; the **follower list** of the largest accounts, which outgrows a relational row set; and the **media bill**, which is why renditions, not originals, are ever served.
+
+Alternatives not taken: a graph database for follows (adjacency rows plus a cache cover follow, unfollow and list, and nothing here needs a path query); fan-out on read alone (50M post-list reads a second); media in the database (see [Object storage](/learn/object-storage)); a feed cache of whole posts rather than IDs (ten times the RAM and a consistency problem on every like).
+
+<Callout type="interview" title="Name the two dominant numbers, then the threshold">
+
+"A terabit of egress, so renditions in object storage behind a CDN; two and a half million post reads a second, so an ID-only feed cache in Redis lists plus a post cache. The feed is fan-out on write for ordinary accounts and merged at read time for accounts over a follower threshold, because one celebrity post would otherwise consume the whole fan-out tier for minutes." Then say where the threshold comes from: the fan-out budget you are willing to spend on one post.
+
+</Callout>
+
+## How it evolves
+
+At **10×** the feed stops being chronological. Instagram announced in March 2016 that its feed would be ordered by what it believed each person cared about most, citing that people missed on average 70 percent of their feed. A ranking service sits between the feed list and the response: it fetches a few hundred candidate IDs instead of ten, scores them (recency, relationship, engagement) and returns the top ten. Ranking adds a box, not a rebuild. The fan-out results also move from Redis alone into a durable wide-row store, so that a lost cache node is an inconvenience rather than a rebuild; Instagram has said it began using Cassandra in 2012 for use cases including the feed.
+
+At **100×** the bytes are video and the pipeline from [Design YouTube](/learn/design-youtube) replaces the resizing workers; the graph and the feed are the same shape, only in more regions, with media replicated by the CDN and posts replicated by the database.
+
+## Deep dive 1: the feed fan-out decision
+
+<Comparison>
+
+<ComparisonItem title="Fan-out on write (push)">
+
+At post time, push the ID onto every follower's list. Cost at this scale: 10k posts/s × 200 followers = **2M list inserts a second**, roughly 20 to 40 Redis nodes' worth, plus 4 to 8 TB of RAM. A feed read is one `LRANGE`. The write cost is proportional to followers: an account with 50M followers makes one post cost 50M inserts, 25 seconds of the *entire* fan-out capacity, and every other post waits behind it.
+
+</ComparisonItem>
+
+<ComparisonItem title="Fan-out on read (pull)">
+
+At read time, fetch the latest posts of all 200 followees and merge. Nothing happens at post time. Cost: 250k feed views/s × 200 followees = **50M post-list reads a second**, 25 times the push cost, and each read is a scatter-gather across 200 shards whose latency is the slowest one's. A celebrity costs nothing extra; an inactive user costs nothing at all.
+
+</ComparisonItem>
+
+</Comparison>
+
+The condition that decides is the ratio of reads to followers, and here it decides for push: reads outnumber posts 25 to 1 and the average follower count is modest. Two groups break the average and get special treatment:
+
+- **Large accounts.** Set a threshold, say 100k followers: a post from an account under it fans out in at most 100k inserts, about 50 ms of cluster capacity. Posts from accounts over it are not pushed at all. When a follower loads their feed, the feed service merges their pushed list with the latest posts of the few large accounts they follow (assume five), fetched from the post cache: 250k × 5 = 1.25M extra cache reads a second, cheap next to the 2.5M hydrations already happening. Twitter described the same move in 2012, keeping an 800-entry Redis timeline per user and merging the highest-follower accounts in at read time after fan-out for a 31M-follower account had taken minutes.
+- **Inactive users.** Do not push to anyone who has not opened the app in 30 days. If most registered users are inactive, this halves the fan-out or better; a returning user's first feed load is built by pull and the list is rebuilt from there.
+
+| Design | Write cost | Read cost | Celebrity post | Verdict |
+| --- | --- | --- | --- | --- |
+| Push | 2M inserts/s | 1 list read | 50M inserts, blocks the tier | Right for the average, wrong for the tail |
+| Pull | None | 50M reads/s, scatter-gather | Free | Right for the tail, 25× too expensive for the average |
+| Hybrid, 100k threshold | ≤ 2M inserts/s, celebrities excluded | 1 list read + \~5 cache reads | Merged at read, zero inserts | **Chosen** |
+
+<mark>The threshold is a budget</mark>: the largest fan-out you accept for one post. Say it as a number in an interview and explain where it comes from.
+
+## Deep dive 2: the media pipeline and the CDN
+
+<Steps>
+
+1. **Sign, don't proxy.** `POST /media/uploads` returns a pre-signed URL valid for 15 minutes; the phone uploads 200 KB straight to object storage, so 16 Gbps of ingress never touches the API tier (see [Object storage](/learn/object-storage)).
+2. **Post, then publish.** `POST /posts` writes the row and an outbox row in one transaction; a relay publishes `PostCreated`, so the event exists if and only if the post does.
+3. **Resize asynchronously.** Workers fetch the original, re-encode three renditions (strip EXIF on the way) and write them under immutable keys such as `media/{id}/640.jpg`. At 50 ms each, 30k encodes a second keep 1,500 cores busy; the queue absorbs the evening peak and the workers drain it (see [Message queues](/learn/message-queues)).
+4. **Serve from the edge.** Clients always ask the CDN. The first request for a rendition misses and pulls from the origin; everyone after is served from the edge. Keys are immutable, so the TTL is a year and there is nothing to invalidate.
+5. **Shield the origin.** A viral post misses at hundreds of edges in the same second; an origin shield collapses those into one fetch, and until renditions exist the client scales the original locally.
+
+</Steps>
+
+The numbers decide the shape. Egress is 150 GB/s; if the CDN serves 95% of it (an assumption to measure), the origin still sends 7.5 GB/s, and every point of hit rate is worth 1.5 GB/s. Storage is 490 PB a year with three copies, of which the original is 200 KB of every 450 KB stored and is almost never read once renditions exist, so originals move to a colder storage class after 30 days and the renditions, served millions of times, stay hot. <mark>The CDN is not an optimisation here; it is the only place a terabit can come from</mark>.
+
+## Deep dive 3: like counts and hot posts
+
+A post from a 100M-follower account can collect 10M likes in an hour: about 2,800 a second, on one post. Three things go wrong on the obvious design, and each has a known fix.
+
+**The row lock.** `UPDATE posts SET like_count = like_count + 1` on one row 2,800 times a second serializes every like on one lock and makes the shard's other users wait. So the like is written as a row in `likes` (the primary key makes a double tap a no-op) and the count is `INCR likes:{post_id}` in Redis, which handles that rate on one node without blinking. A flusher writes dirty counters into `posts.like_count` every few seconds; the row is a denormalized copy kept honest by the counter, and an occasional recount from `likes` repairs drift (see [Normalization and denormalization](/learn/normalization)).
+
+**The hot key.** The same post is hydrated by a large share of the 2.5M post reads a second, so one cache node holds the hottest key in the system. Replicate that key across several nodes and let clients pick one at random, or keep a tiny in-process cache for the top few hundred posts, refreshed every second; both are the hot-key fixes from [Caching](/learn/caching).
+
+**The stampede.** When the hot post's cache entry expires, thousands of feed requests miss at once and all go to the shard. The stampede section of [Caching](/learn/caching) gives the three tools: let one request rebuild while the rest wait or serve the stale copy, jitter the TTLs so hot keys do not expire together, and refresh the hottest keys before they expire.
+
+If one counter key ever exceeds a single Redis node, split it: `likes:{post_id}:{0..15}`, increment one shard at random and sum sixteen keys on read, the same salting move as [Partitioning and rebalancing](/learn/partitioning-internals) uses for hot partitions. Counts become approximate for a few seconds; the consistency table above already said that is fine. <mark>A like is cheap only because the count is allowed to lag</mark>; the moment a product wants exact counts, the row lock returns and so does the bill.

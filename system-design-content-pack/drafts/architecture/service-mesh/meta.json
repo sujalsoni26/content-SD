@@ -1,0 +1,69 @@
+{
+  "slug": "service-mesh",
+  "title": "Service mesh",
+  "moduleId": "architecture",
+  "level": "advanced",
+  "minutes": 8,
+  "problem": "Forty services in five languages each implement TLS, retries, timeouts and metrics differently, and nobody can say which internal calls are actually encrypted.",
+  "summary": "A service mesh runs a proxy beside every service and configures them from a control plane, so mTLS, retries, timeouts, circuit breaking, canary routing and telemetry leave application code. It costs two proxy hops per call, memory per pod and a control plane to run.",
+  "catTip": "Every room now has a doorkeeper who checks collars, logs visitors and redials if the line drops. I never see them, which is the point, until I wonder why the hallway got longer.",
+  "recall": {
+    "q": "What does a service mesh move out of application code, and what does it cost?",
+    "a": "Mutual TLS with managed certificates, retries, timeouts, circuit breaking, weighted canary routing and telemetry move into sidecar proxies (the data plane) configured by a control plane. The cost is two extra proxy hops on every call, CPU and memory per pod, and a control plane to operate and upgrade."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a mesh, encryption, retry and timeout behaviour is reimplemented in every language and drifts, so one team's aggressive retries and another's missing timeouts combine into cascading failures that nobody can see end to end.",
+    "tradeoffs": "Every service-to-service call now passes through two proxies, every pod carries a proxy's memory, and a control plane must be run, upgraded and debugged alongside the applications.",
+    "explainSimply": "Instead of teaching every employee to check IDs, keep records and redial dropped calls, the building puts a trained receptionist at every office door and runs them all from one head office. The employees just do their jobs. The price is a desk at every door and a slightly longer walk for each visit.",
+    "hint": "List what every service used to do about the network itself, then ask where that work went and what the new component in the path costs."
+  },
+  "meow": "Doorkeeper at every room, trained by head office. Collar checked, visit logged, call redialled. Hallway a whisker longer.",
+  "quiz": [
+    {
+      "prompt": "A team installs Istio with default settings and reports that all traffic between services is now encrypted. What is wrong with the claim?",
+      "options": [
+        "Nothing; Istio enforces mutual TLS everywhere as soon as sidecars are injected",
+        "Mesh-wide peer authentication defaults to PERMISSIVE, which accepts plain text as well as mTLS, so STRICT must be set before the claim holds",
+        "Istio cannot provide mutual TLS without changes to application code",
+        "Mutual TLS is only available in ambient mode, not with sidecars"
+      ],
+      "answer": 1,
+      "explanation": "PERMISSIVE exists so workloads can be migrated gradually; it still accepts unencrypted connections. The first option is the natural assumption and the strongest distractor, but encryption on the wire requires STRICT; the mesh needs no application code changes, and sidecar mode supports mTLS."
+    },
+    {
+      "prompt": "Which of these is a genuine cost of a sidecar-based service mesh?",
+      "options": [
+        "Services must be rewritten in the proxy's implementation language",
+        "Every service-to-service call traverses two proxies, adding latency and per-pod CPU and memory",
+        "Retries can no longer be configured anywhere",
+        "Services lose the ability to speak gRPC between each other"
+      ],
+      "answer": 1,
+      "explanation": "The proxies are out of process, so the application language is irrelevant and gRPC passes through fine; retries move into configuration rather than disappearing. The real costs are the extra hops, the resources per pod and the control plane."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A payments call fails intermittently. Both the application's HTTP client and the mesh are configured to retry. What happens, and what should you do?",
+      "a": "Retries multiply: three application attempts times three mesh attempts is up to nine requests per user action, a retry storm on a service that is already struggling. Retry in one layer only (usually the mesh, with a per-try timeout) and make the operation idempotent."
+    },
+    {
+      "q": "Contrast Istio's sidecar mode with its ambient mode.",
+      "a": "Sidecar: an Envoy proxy in every pod handles both Layer 4 and Layer 7; upgrades restart pods and memory scales with pod count. Ambient (GA in Istio 1.24): a per-node ztunnel does mTLS, Layer 4 policy and telemetry, and optional per-namespace Envoy waypoints add Layer 7 features only where needed; no injection, no pod restarts."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Istio, \"Architecture\" (docs)", "url": "https://istio.io/latest/docs/ops/deployment/architecture/", "accessed": "2026-11-22", "supports": "Envoy sidecars as the data plane; istiod as the control plane for discovery, configuration and certificates; Envoy features including circuit breakers, health checks, percentage-based traffic splits and metrics", "status": "verified" },
+    { "title": "Istio, \"Security\" (concepts)", "url": "https://istio.io/latest/docs/concepts/security/", "accessed": "2026-11-22", "supports": "mutual TLS performed by the sidecars with certificates issued by istiod's CA; no service code changes required; PeerAuthentication PERMISSIVE by default, STRICT to require mTLS", "status": "verified" },
+    { "title": "Istio, \"Traffic Management\" (concepts)", "url": "https://istio.io/latest/docs/concepts/traffic-management/", "accessed": "2026-11-22", "supports": "weighted routing in a VirtualService for canaries; HTTP timeout disabled by default; default of two retries; retries and perTryTimeout configuration; connection-pool limits in a DestinationRule", "status": "verified" },
+    { "title": "Istio, \"Circuit Breaking\" (task)", "url": "https://istio.io/latest/docs/tasks/traffic-management/circuit-breaking/", "accessed": "2026-11-22", "supports": "outlierDetection with consecutive5xxErrors, interval, baseEjectionTime and maxEjectionPercent; excess requests fail with 503 when the proxy opens the circuit", "status": "verified" },
+    { "title": "Istio, \"Observability\" (concepts)", "url": "https://istio.io/latest/docs/concepts/observability/", "accessed": "2026-11-22", "supports": "metrics, distributed traces and access logs generated by the proxies without burdening service developers; applications must forward trace context headers", "status": "verified" },
+    { "title": "Istio, \"Ambient Mode Overview\" (docs)", "url": "https://istio.io/latest/docs/ambient/overview/", "accessed": "2026-11-22", "supports": "ztunnel as a per-node Layer 4 proxy for mTLS, L4 authorisation and telemetry; waypoint proxies as optional per-namespace Envoy deployments for Layer 7; pods need no sidecars", "status": "verified" },
+    { "title": "Istio, \"Fast, Secure, and Simple: Istio's Ambient Mode Reaches General Availability in v1.24\" (blog, 7 November 2024)", "url": "https://istio.io/latest/blog/2024/ambient-reaches-ga/", "accessed": "2026-11-22", "supports": "ambient mode GA in 1.24; sidecar pain points including large CPU and memory requirements per workload and pod restarts on upgrade; 'sidecars are not going away'", "status": "verified" },
+    { "title": "Linkerd, \"Architecture\" (reference)", "url": "https://linkerd.io/2/reference/architecture/", "accessed": "2026-11-22", "supports": "control plane components (destination, identity, proxy injector); linkerd2-proxy as an ultralight micro-proxy written in Rust; proxies handle mTLS, retries, timeouts, circuit breakers and Prometheus metrics", "status": "verified" },
+    { "title": "William Morgan, \"Why Linkerd doesn't use Envoy\" (Linkerd blog, 3 December 2020)", "url": "https://linkerd.io/2020/12/03/why-linkerd-doesnt-use-envoy/", "accessed": "2026-11-22", "supports": "Envoy as general-purpose (about 172 KLOC C++) versus linkerd2-proxy as single-purpose (about 30 KLOC Rust); Linkerd's own memory benchmark and the author's caveat about fairness", "status": "verified" },
+    { "title": "Envoy, \"What is Envoy\" (docs)", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/what_is_envoy", "accessed": "2026-11-22", "supports": "out-of-process architecture: runs beside each application, works with any language, upgradeable without touching application libraries; retries, circuit breaking, outlier detection, observability", "status": "verified" }
+  ]
+}

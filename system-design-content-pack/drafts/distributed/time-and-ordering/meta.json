@@ -1,0 +1,75 @@
+{
+  "slug": "time-and-ordering",
+  "title": "Clocks, time and ordering",
+  "moduleId": "distributed",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "Two replicas accept writes to the same key a few milliseconds apart, their clocks disagree by more, and whichever ordering the system picks by timestamp quietly throws one write away.",
+  "summary": "Wall clocks drift, jump and keep running while a process is paused, so they cannot order events across machines. Logical clocks (Lamport, vector, hybrid) order by causality instead, and Spanner's TrueTime makes physical time usable by bounding its error and waiting it out.",
+  "catTip": "I nap on the rack and wake with no idea how long I was out. The servers around me have the same problem: a paused process trusts a clock that kept moving without it. Count messages, not minutes.",
+  "recall": {
+    "q": "Two events on different machines carry Lamport timestamps 3 and 5. What can you conclude about their order, and what would a vector clock add?",
+    "a": "Only that the event stamped 5 did not happen before the one stamped 3; the two may be causally related or concurrent. A vector clock keeps one counter per node, so comparing the vectors tells you whether one happened before the other or whether they are concurrent and need conflict resolution."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Timestamps from different machines disagree by milliseconds or more, and a process paused by garbage collection wakes up trusting a stale clock, so systems that order writes or expire leases by wall-clock time silently lose data or run two leaders at once.",
+    "tradeoffs": "Logical clocks add metadata to every message and only give a partial order, while trusting physical time means paying for synchronised clock hardware and waiting out the remaining uncertainty on every commit, as Spanner does.",
+    "explainSimply": "Imagine friends in different cities keeping one shared diary, each using their own slightly wrong wristwatch. You cannot tell from the watch times who wrote first. If each friend numbers their entries and notes the highest number they have heard from the others, you can work out who knew what when, without trusting any watch.",
+    "hint": "Think about what a Lamport timestamp promises when a happens before b, and what it cannot promise in the other direction."
+  },
+  "meow": "Meow 1 before meow 2? Only if you counted them. The wall clock was napping in a different time zone.",
+  "quiz": [
+    {
+      "prompt": "Two replicas accept concurrent updates to the same key and resolve them with last-write-wins on wall-clock timestamps. Replica A's clock runs 40 ms ahead of replica B's. What happens to a write that B accepts 10 ms after one that A accepted?",
+      "options": [
+        "It wins, because it really happened later",
+        "It is silently discarded, because A's write carries the higher timestamp",
+        "Both writes are kept as siblings for the application to merge",
+        "It is rejected with a clock-skew error"
+      ],
+      "answer": 1,
+      "explanation": "LWW compares timestamps, not real order, so A's earlier write carries the higher stamp and B's later write is dropped without any error. Siblings are what version vectors produce; LWW never keeps both."
+    },
+    {
+      "prompt": "What does a vector clock let you detect that a Lamport clock cannot?",
+      "options": [
+        "That two events are concurrent, with neither happening before the other",
+        "The wall-clock time at which an event occurred",
+        "Which of two causally related events happened first",
+        "That a message was delivered more than once"
+      ],
+      "answer": 0,
+      "explanation": "With one counter per node, a vector clock shows when neither event's vector dominates the other, which means they were concurrent. Both clock types already order causally related events, and neither says anything about wall-clock time."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A service computes request latency as end minus start using System.currentTimeMillis(). What can go wrong, and what should it use instead?",
+      "a": "The wall clock can be stepped backwards by NTP or a leap second, so the difference can be negative or wildly wrong; Cloudflare's DNS software panicked exactly this way on 1 January 2017. Measure durations with the monotonic clock (System.nanoTime, CLOCK_MONOTONIC), which only moves forward."
+    },
+    {
+      "q": "Why does Spanner wait before making a committed write visible, and roughly how long?",
+      "a": "TrueTime only gives an interval [earliest, latest] that contains the true time, so Spanner picks a commit timestamp and waits until that timestamp is definitely in the past (commit wait, expected about 2ε, a few milliseconds). That guarantees a transaction that commits before another starts gets the smaller timestamp."
+    }
+  ],
+  "glossary": [
+    { "term": "HLC", "full": "Hybrid Logical Clock", "note": "A timestamp that pairs a physical clock reading with a logical counter, so it tracks causality while staying close to real time (used by CockroachDB)." }
+  ],
+  "sources": [
+    { "title": "Leslie Lamport, \"Time, Clocks, and the Ordering of Events in a Distributed System\", Communications of the ACM 21(7), July 1978", "url": "https://lamport.azurewebsites.net/pubs/time-clocks.pdf", "accessed": "2026-11-22", "supports": "the happens-before relation as a partial order; implementation rules IR1 and IR2 for logical clocks", "status": "verified" },
+    { "title": "Corbett et al., \"Spanner: Google's Globally-Distributed Database\", OSDI 2012", "url": "https://static.googleusercontent.com/media/research.google.com/en//archive/spanner-osdi2012.pdf", "accessed": "2026-11-22", "supports": "TrueTime API (TT.now interval, TT.after); GPS and atomic clock references; ε sawtooth of 1–7 ms, about 4 ms, generally below 10 ms; 30 s poll interval and 200 µs/s applied drift; commit wait with expected wait at least 2ε; external consistency", "status": "verified" },
+    { "title": "Google Cloud Spanner documentation, \"TrueTime and external consistency\"", "url": "https://docs.cloud.google.com/spanner/docs/true-time-external-consistency", "accessed": "2026-11-22", "supports": "TrueTime as a distributed clock that lets Spanner generate monotonically increasing timestamps; definition of external consistency", "status": "verified" },
+    { "title": "NTP Project FAQ, \"How accurate will my clock be?\" (5.1.3.1)", "url": "https://www.ntp.org/ntpfaq/ntp-s-algo/", "accessed": "2026-11-22", "supports": "typical NTP accuracy of about 5–100 ms over the internet and about 1 ms on a quiet LAN; oscillator temperature sensitivity", "status": "verified" },
+    { "title": "Linux man-pages, clock_gettime(2)", "url": "https://man7.org/linux/man-pages/man2/clock_gettime.2.html", "accessed": "2026-11-22", "supports": "CLOCK_REALTIME is affected by discontinuous jumps; CLOCK_MONOTONIC is not", "status": "verified" },
+    { "title": "Java SE 21 API, java.lang.System (nanoTime, currentTimeMillis)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/System.html", "accessed": "2026-11-22", "supports": "nanoTime measures elapsed time from an arbitrary origin and is unrelated to wall-clock time; currentTimeMillis is milliseconds since the Unix epoch", "status": "verified" },
+    { "title": "Cloudflare blog, \"How and why the leap second affected Cloudflare DNS\" (2017)", "url": "https://blog.cloudflare.com/how-and-why-the-leap-second-affected-cloudflare-dns/", "accessed": "2026-11-22", "supports": "the 1 January 2017 incident: negative durations from time.Now(), rand.Int63n panic, about 0.2% of DNS queries affected at peak", "status": "verified" },
+    { "title": "Go 1.9 Release Notes, \"Transparent Monotonic Time support\"", "url": "https://go.dev/doc/go1.9", "accessed": "2026-11-22", "supports": "Go 1.9 made Time values carry monotonic readings so durations are safe under wall-clock adjustments", "status": "verified" },
+    { "title": "Kulkarni, Demirbas, Madeppa, Avva, Leone, \"Logical Physical Clocks and Consistent Snapshots in Globally Distributed Databases\" (2014)", "url": "https://cse.buffalo.edu/tech-reports/2014-04.pdf", "accessed": "2026-11-22", "supports": "HLC definition (physical component l plus logical counter c), closeness to NTP time, 64-bit encoding", "status": "verified" },
+    { "title": "CockroachDB docs, \"Transaction Layer: Time and hybrid logical clocks\"", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/transaction-layer", "accessed": "2026-11-22", "supports": "CockroachDB uses HLC timestamps; a node out of sync with at least half the others by 80% of the maximum offset crashes", "status": "verified" },
+    { "title": "Wikipedia, \"Vector clock\"", "url": "https://en.wikipedia.org/wiki/Vector_clock", "accessed": "2026-11-22", "supports": "attribution of vector clocks to Fidge (1988) and Mattern (1988); update and comparison rules", "status": "secondary" },
+    { "title": "DeCandia et al., \"Dynamo: Amazon's Highly Available Key-value Store\", SOSP 2007", "url": "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf", "accessed": "2026-11-22", "supports": "Dynamo stores a vector clock, a list of (node, counter) pairs, with every version to detect concurrent writes", "status": "verified" },
+    { "title": "Apache Cassandra documentation, \"Dynamo\" (data versioning)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html", "accessed": "2026-11-22", "supports": "Cassandra resolves conflicts with last-write-wins using timestamps supplied by the client or the coordinator", "status": "verified" },
+    { "title": "Martin Kleppmann, Designing Data-Intensive Applications, ch. 8 \"The Trouble with Distributed Systems\" (O'Reilly, 2017)", "url": "https://dataintensive.net/", "accessed": "2026-11-22", "supports": "process pauses (GC, VM migration) and the data-loss argument against LWW on wall clocks", "status": "reference" }
+  ]
+}

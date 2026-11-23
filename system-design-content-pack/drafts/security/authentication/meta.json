@@ -1,0 +1,135 @@
+{
+  "slug": "authentication",
+  "title": "Authentication: sessions, tokens and passwords",
+  "moduleId": "security",
+  "level": "intermediate",
+  "minutes": 9,
+  "problem": "Passwords get stolen in bulk, sessions get hijacked, and a login that lives in one server's memory breaks the moment you add a second server.",
+  "summary": "Authentication proves who is asking: salted adaptive hashes for passwords, an opaque session id in a hardened cookie or a signed bearer token for every request after login, a second factor that resists phishing, and single sign-on when an identity provider should own the login.",
+  "catTip": "My collar tag says Cache, but the vet still checks the microchip. Proof once, then a wristband for the visit. If I lose the wristband, anyone wearing it is me until it expires, which is exactly why it expires.",
+  "recall": {
+    "q": "Your login works on one server but users get logged out at random once you add a second one. What is wrong, and what are the two standard fixes?",
+    "a": "Sessions are stored in each server's own memory, so a request that lands on the other server finds nothing. Either keep sessions in a shared store such as Redis referenced by an opaque session id in a cookie, or issue a signed bearer token that any server verifies locally; either way the servers themselves stay stateless."
+  },
+  "archNodes": [
+    "gateway"
+  ],
+  "guide": {
+    "breaks": "Fast unsalted hashes let a stolen table be cracked in hours, a cookie without flags is stolen by one script bug, and a login kept in one server's memory vanishes when the load balancer picks another server.",
+    "tradeoffs": "Every strengthening costs something: slow hashes burn CPU on each login, server-side sessions need a highly available store, self-contained tokens are hard to revoke, and extra factors add friction and account-recovery problems.",
+    "explainSimply": "Logging in is like checking in at a hotel: you prove who you are once and get a key card that opens your room until checkout. The card is just a random number the front desk can look up, so losing it is bad but the desk can cancel it instantly. A second factor is the desk also ringing your phone before handing it over.",
+    "hint": "Where does the session live right now, and where could it live so that any server can find it?"
+  },
+  "meow": "Meow once at the desk, get a wristband. Meow at every door with the wristband. Lose the wristband, and whoever wears it meows as me.",
+  "quiz": [
+    {
+      "prompt": "A startup stores passwords as SHA-256 hashes with a per-user salt and asks whether to switch to Argon2id. What is the strongest reason to switch?",
+      "options": [
+        "SHA-256 is broken and collisions can be found in seconds",
+        "SHA-256 is designed to be fast, so an attacker holding the table can test billions of guesses per second; Argon2id is deliberately slow and memory-hard",
+        "Argon2id does not need a salt, which simplifies the schema",
+        "Argon2id output is shorter, so the table takes less space"
+      ],
+      "answer": 1,
+      "explanation": "Password hashing must be expensive per guess; salting alone does not slow an attacker down. SHA-256 is not broken, Argon2id still uses a salt, and output length is irrelevant."
+    },
+    {
+      "prompt": "After a user logs in, the server keeps the same session id the browser already had before login. Which attack does this enable?",
+      "options": [
+        "Cross-site request forgery",
+        "Session fixation: an attacker who planted that id in the victim's browser is now logged in as the victim",
+        "SQL injection through the session cookie",
+        "Replay of the TOTP code within its 30-second window"
+      ],
+      "answer": 1,
+      "explanation": "Fixation works because the pre-login id becomes the post-login id; regenerating the id on login breaks it. CSRF is about the browser attaching cookies to cross-site requests, not about which id is issued."
+    }
+  ],
+  "cards": [
+    {
+      "q": "List the three cookie flags a session cookie should carry and the attack each one blunts.",
+      "a": "Secure (no plaintext HTTP, so no network sniffing), HttpOnly (scripts cannot read it, so XSS cannot steal it), SameSite=Lax or Strict (the browser does not attach it to cross-site requests, blunting CSRF). Add the host-only name prefix and Path=/ for good measure."
+    },
+    {
+      "q": "A bank wants a second factor. Rank SMS codes, TOTP apps and passkeys by phishing resistance and say why.",
+      "a": "Passkeys (WebAuthn) are phishing-resistant because the browser signs only for the origin that registered the key. TOTP codes can be relayed by a fake page within the 30-second window. SMS is weakest: phishable plus SIM-swap and interception risk, which is why NIST SP 800-63B classes it as restricted."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "MFA",
+      "full": "Multi-Factor Authentication",
+      "note": "Proof from two different factor types (know, have, are); WebAuthn passkeys are the phishing-resistant kind, SMS the restricted one."
+    },
+    {
+      "term": "SSO",
+      "full": "Single Sign-On",
+      "note": "One identity provider authenticates the user and sends your app a signed assertion (SAML) or ID token (OIDC); you never see the password."
+    }
+  ],
+  "sources": [
+    {
+      "title": "OWASP Cheat Sheet Series: Password Storage Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html",
+      "accessed": "2026-11-22",
+      "supports": "Argon2id minimum of 19 MiB, 2 iterations, 1 parallelism; scrypt and bcrypt floors; the 72-byte bcrypt limit; PBKDF2-HMAC-SHA256 at 600,000 iterations; salting; the legacy-hash upgrade path",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP Cheat Sheet Series: Session Management Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html",
+      "accessed": "2026-11-22",
+      "supports": "64 bits of session id entropy; Secure, HttpOnly, SameSite, Domain and Path guidance; the __Host- prefix; renewing the id after any privilege change; idle timeouts of 2-5 and 15-30 minutes",
+      "status": "verified"
+    },
+    {
+      "title": "NIST SP 800-63B-4, Digital Identity Guidelines: Authentication and Authenticator Management (July 2025)",
+      "url": "https://pages.nist.gov/800-63-4/sp800-63b.html",
+      "accessed": "2026-11-22",
+      "supports": "15-character minimum for single-factor passwords and 8 within MFA, no composition rules, no periodic change, blocklist check; PSTN/SMS out-of-band authentication remains restricted; at least one phishing-resistant option at AAL2",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 6238, TOTP: Time-Based One-Time Password Algorithm (May 2011)",
+      "url": "https://www.rfc-editor.org/rfc/rfc6238",
+      "accessed": "2026-11-22",
+      "supports": "TOTP as HOTP with a time-based moving factor and the default 30-second time step",
+      "status": "verified"
+    },
+    {
+      "title": "W3C, Web Authentication: An API for accessing Public Key Credentials, Level 3",
+      "url": "https://www.w3.org/TR/webauthn-3/",
+      "accessed": "2026-11-22",
+      "supports": "credentials scoped to the registering relying party's origins; passkey as the term for discoverable credentials",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP Cheat Sheet Series: Multifactor Authentication Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html",
+      "accessed": "2026-11-22",
+      "supports": "TOTP phishability, MFA fatigue and number matching, SIM-swap risk for SMS",
+      "status": "verified"
+    },
+    {
+      "title": "OASIS, Security Assertion Markup Language (SAML) V2.0, OASIS Standard, March 2005",
+      "url": "https://www.oasis-open.org/standard/saml/",
+      "accessed": "2026-11-22",
+      "supports": "SAML 2.0 as the XML assertion standard for single sign-on",
+      "status": "verified"
+    },
+    {
+      "title": "OpenID Connect Core 1.0 incorporating errata set 2 (December 2023)",
+      "url": "https://openid.net/specs/openid-connect-core-1_0.html",
+      "accessed": "2026-11-22",
+      "supports": "OIDC as an identity layer on OAuth 2.0 that returns a signed ID token",
+      "status": "verified"
+    },
+    {
+      "title": "web.dev, SameSite cookies explained",
+      "url": "https://web.dev/articles/samesite-cookies-explained",
+      "accessed": "2026-11-22",
+      "supports": "Chrome treating cookies without a SameSite attribute as Lax and Lax cookies being sent on top-level navigations",
+      "status": "verified"
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+**API security** is the chain of checks a request passes between the edge and your business logic: who sent it, may they touch this object, is the input what you expect, was a browser tricked into sending it, have you seen it before. Most checks live at the API gateway (see [API gateway](/learn/api-gateway)) or in shared middleware; the ones that need data live in the service.
+
+## The OWASP API Security Top 10
+
+OWASP's 2023 list is the shared vocabulary for API weaknesses.
+
+| Entry | Name |
+| --- | --- |
+| API1 | Broken object level authorization |
+| API2 | Broken authentication |
+| API3 | Broken object property level authorization |
+| API4 | Unrestricted resource consumption |
+| API5 | Broken function level authorization |
+| API6 | Unrestricted access to sensitive business flows |
+| API7 | Server side request forgery |
+| API8 | Security misconfiguration |
+| API9 | Improper inventory management |
+| API10 | Unsafe consumption of APIs |
+
+API1, API3 and API5 are authorisation failures ([Authorisation](/learn/authorization)) and API2 is [Authentication](/learn/authentication); API9 is forgotten versions and debug endpoints left running, and API10 is trusting third-party responses blindly. The rest is this lesson.
+
+<Mermaid caption="The checks a request passes, from the edge inwards. Everything the gateway can decide without data happens there; the checks that need the row happen in the service." chart={`flowchart LR
+    C["Client"] --> E["Edge: TLS, per-IP limits, DDoS absorption"]
+    E --> G["Gateway: token validity, scope for the route, schema and size limits, per-key rate limits"]
+    G --> S["Service: object-level authorisation, parameterised queries, idempotency keys on writes"]
+    S --> D[("Database")]
+    S -. "outbound webhooks: HMAC over timestamp and body" .-> W["Customer's server"]
+    B["Browser"] -. "SameSite cookies plus a CSRF token" .-> G
+`} />
+
+## Validate input against an allow-list
+
+Define what you accept and reject everything else: types, lengths, ranges, enumerations, formats. Validate syntax (is this a date?) and semantics (may it be in the past?). Do it server-side even when the client does, limit request size before parsing, and reject unknown fields rather than ignoring them, which is how a client sets `isAdmin: true` on its own profile (API3). Allow-lists beat deny-lists because you cannot enumerate every malicious string.
+
+## Injection: keep code and data apart
+
+SQL injection happens when user input becomes part of the query text.
+
+```go
+// vulnerable: the input is spliced into the SQL
+rows, err := db.Query("SELECT * FROM users WHERE email = '" + email + "'")
+
+// safe: the structure is fixed and the value is bound as data
+rows, err := db.Query("SELECT * FROM users WHERE email = $1", email)
+```
+
+With a **parameterised query** the database receives the SQL structure and the values separately, so a value can never change the syntax, whatever quotes it contains. Where part of a query cannot be a parameter, such as a sort column, map the user's choice onto a fixed allow-list of your own values; manual escaping is error-prone and OWASP discourages it. Binding does not decide whether the caller may see the row.
+
+## CSRF and CORS are different problems
+
+|  | CSRF | CORS |
+| --- | --- | --- |
+| What it is | An attack: another site makes the victim's browser send a request to your API, cookies attached | A browser rule: your server declares which other origins' scripts may read its responses |
+| Who enforces | Nobody, unless you do | The browser |
+| Protects against | Unwanted state changes with the victim's credentials | Scripts on other origins reading your data |
+| Does not cover | Requests that carry no automatic credentials | Anything that is not a browser: curl, servers, mobile apps |
+
+**CSRF defences**: `SameSite=Lax` or `Strict` on session cookies so the browser withholds them from cross-site requests (Chrome defaults to Lax, which still sends cookies on top-level GET navigations, so never change state on GET); a per-session **anti-CSRF token** the attacker's page cannot read, or a signed double-submit cookie; for JSON APIs, a required custom header, which a cross-origin page cannot add without passing CORS. APIs that take a bearer token set by script are not exposed, because nothing is attached automatically.
+
+**CORS** is permission, not protection. `Access-Control-Allow-Origin` names the origins allowed to read responses; the browser preflights non-simple requests with `OPTIONS`. Browsers refuse a wildcard with credentials, and reflecting any `Origin` header back is the API8 misconfiguration that switches CORS off. <mark>Nothing in CORS authenticates anybody.</mark>
+
+## API keys, user tokens and scopes
+
+An **API key** identifies a calling application or tenant: long-lived, sent in a header, used for quotas, billing and attribution. A **user token** identifies a person and their consent, short-lived and scoped (see [OAuth 2.0, OpenID Connect and JWT](/learn/oauth-jwt)). **Scopes** such as `posts:read` limit what a token may do and are checked at the gateway; whether the caller may touch *this* post is the service's job. Treat keys as secrets: show once, store hashed, rotate (see [Secrets management](/learn/secrets-management)).
+
+## Limits, abuse and retries
+
+Rate limits (see [Rate limiting](/learn/rate-limiting)) answer API4: per key, per user and per IP, far tighter on login, OTP and password-reset endpoints. API6 needs limits on the business flow rather than the request: a booking API for an IPL final caps reservations per account and per payment instrument, not just requests per second. Retried writes need **idempotency keys** (see [Idempotency](/learn/idempotency)); store the key with a hash of the request so a reused key with a different body is rejected.
+
+## Webhooks: sign, timestamp, deduplicate
+
+A customer's server cannot authenticate you with a session. The standard pattern, Stripe's among others: compute an **HMAC-SHA256** over the timestamp, a dot and the raw request body with a secret shared at registration, and send timestamp and signature in a header. The receiver recomputes the HMAC over the raw bytes, compares in constant time, and rejects a timestamp outside a tolerance window (Stripe's default is five minutes). The timestamp is inside the signed string, so an attacker cannot refresh a captured request; within the window the receiver deduplicates by event id.
+
+<Callout type="analogy" title="A dated, signed cheque">
+
+A cheque carries a signature (the HMAC proves who wrote it), a date (the timestamp) and a serial number (the event id). The bank refuses a cheque that is too old and refuses to pay the same number twice. Where it stops: a bank checks a signature by eye; your receiver compares in constant time, or the time it takes to say no leaks the answer.
+
+</Callout>
+
+<Callout type="interview" title="Walk the request inwards">
+
+"At the gateway: TLS, token validation, scope check, per-key rate limits, schema validation and size limits. In the service: object-level authorisation, parameterised queries, idempotency keys on writes. Browser clients get SameSite cookies plus a CSRF token, and CORS lists only our web origins. Outbound webhooks are HMAC-signed with a timestamp."
+
+</Callout>
+
+<DeepDive title="Go deeper: server-side request forgery">
+
+Any feature that fetches a URL the user supplies, such as import-from-link, can be pointed at things only your server can reach: the cloud metadata endpoint that hands out credentials, an internal admin service, the database port. That is API7. Defend with an allow-list of destination hosts where possible, refuse private and link-local address ranges after resolving the name and after every redirect, route outbound fetches through an egress proxy with no path into the private network, and never return the raw response to the caller.
+
+</DeepDive>

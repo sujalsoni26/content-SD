@@ -1,0 +1,84 @@
+A **log** is a record of one event, with a timestamp, written as it happens. Where a metric (see [Metrics and monitoring](/learn/metrics-monitoring)) counts or summarises, a log keeps the individual: this order, this error, this retry. That makes logs indispensable for debugging and expensive at scale: a service at 2,000 requests per second writing one 300-byte line per request produces about 50 GB a day, and a company has hundreds of services. This lesson is about making that volume searchable, affordable and safe.
+
+## Structure, not prose
+
+A free-text line such as `Payment failed for user 42 after 3 retries (gateway timeout)` reads well and searches badly: pulling "all gateway timeouts for one user" means a regular expression that breaks the day someone rewords the message. A **structured log** is the same event as a record with named fields:
+
+```json
+{
+  "ts": "2026-11-22T14:02:07.412Z",
+  "level": "ERROR",
+  "service": "payments",
+  "event": "payment.capture_failed",
+  "order_id": "o_88213",
+  "user_id": "u_6f2a…",
+  "attempt": 3,
+  "error.code": "GATEWAY_TIMEOUT",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "span_id": "00f067aa0ba902b7"
+}
+```
+
+The rules: the event name is a stable identifier, not a sentence; variables go in fields, never interpolated into the message; field names are shared across services. OpenTelemetry's log data model gives a vendor-neutral shape for exactly this (timestamp, severity, body, attributes, resource, trace and span ids), so lines from a Go service and a Java service look the same to the store.
+
+## Levels, and what belongs at each
+
+| Level | Belongs here | Example | In production |
+| --- | --- | --- | --- |
+| DEBUG | Detail a developer needs to follow one code path | cache key computed, SQL text | Off, switched on briefly |
+| INFO | One line per meaningful business event | order placed, payment captured | On; sampled when very high volume |
+| WARN | Unexpected but handled; someone should look this week | retry succeeded on the third attempt, fallback served | On |
+| ERROR | An operation failed and a user or job felt it | capture failed after all retries | On; alert on the rate via metrics |
+| FATAL | The process cannot continue | cannot bind port, config invalid | On |
+
+The discipline is at the top: ERROR means a failure that mattered, not every caught exception, and a 404 for a missing product is INFO. Syslog's eight severities (RFC 5424) and OpenTelemetry's severity numbers both map onto these five, so the names are portable.
+
+## One id that follows the request
+
+A line is only useful in context, and the context in a distributed system is the request. Generate a **correlation id** at the edge, pass it in a header on every call, and stamp it on every line each service writes; one filter then returns the whole story of a request across nine services, in order. With tracing in place the trace id does this job: the W3C `traceparent` header already carries it hop to hop, and it lands in the `trace_id` field above. The trace shows which hop was slow; the lines carrying that trace id say why (see [Distributed tracing](/learn/tracing)).
+
+## The pipeline
+
+<Mermaid caption="A log pipeline. The application only writes to stdout; everything after that is the platform's job. The broker lets indexers fall behind during a burst without lines being dropped." chart={`flowchart LR
+    A["App writes JSON lines to stdout"] --> AG["Node agent: tail, parse, redact"]
+    AG --> K["Kafka topic: buffer and replay"]
+    K --> PR["Processor: enrich, sample, route"]
+    PR --> H["Hot index: recent days, fast search"]
+    PR --> C["Object storage archive: months to years"]
+    H --> Q["Search and dashboards"]
+    C -.->|rehydrate on demand| Q
+`} />
+
+The twelve-factor rule applies: the app writes its event stream to stdout and never concerns itself with routing or storage. A node-level **agent** (Fluent Bit, Vector and Filebeat are common) tails the files, parses the JSON, adds pod, host and zone, and ships. A **broker** such as Kafka (see [Kafka architecture](/learn/kafka-architecture)) sits between agents and indexers so that a deploy storm producing ten times the normal volume is absorbed rather than dropped, and so that a second consumer can read the same stream. Indexers write to a **hot store** built for search (Elasticsearch or OpenSearch, Loki, ClickHouse); the raw stream goes to object storage.
+
+## Sampling and dynamic levels
+
+Volume is a dial. Keep every WARN and ERROR. For high-volume, repetitive INFO (health checks, cache hits) keep one in N at the agent, and keep every line for a request whose trace was sampled, so logs and traces agree. Rather than twenty lines per request, many teams emit one wide line at the end with everything that happened, which is cheaper to store and easier to query.
+
+The second dial is the level, changed at runtime. Spring Boot's actuator, for example, accepts a POST to `/actuator/loggers/com.example.payments` with a new `configuredLevel`, so DEBUG can be switched on for one component during an incident and off again without a deploy. Pair it with a timer: DEBUG left on is how a disk fills at 3 a.m.
+
+## Retention tiers and cost
+
+Cost follows bytes ingested, bytes indexed and days retained. Elasticsearch names its tiers hot, warm, cold and frozen, each slower and cheaper than the last, with frozen served from snapshots; the same shape exists everywhere. Decide retention per class of log, not per service: audit and security events for years because the law says so, application logs a week or two in the hot tier, DEBUG for hours. The cheapest log line is the one never shipped, so drop health-check lines at the agent.
+
+## Keep people and secrets out
+
+Logs are copied widely and kept long, so anything written to them leaks for the whole retention period. **PII (personally identifiable information)**, which the GDPR defines as any information relating to an identified or identifiable person (names, id numbers, location data, online identifiers), and secrets of every kind must not appear. OWASP's logging guidance lists what should never be recorded: passwords, session ids, access tokens, connection strings, encryption keys, card and bank details. Redact at the source with an allow-list of fields the logger may emit, and again at the agent with pattern rules for card-number and token shapes. Where you must follow a person across lines, log a pseudonymous id and keep the lookup elsewhere.
+
+<Callout type="analogy" title="A receipt, not a diary">
+
+A diary entry says "bought some things, spent a lot". A receipt has labelled fields: shop, time, item, price. You can total a year of receipts in seconds and never a year of diary entries. Structured logs are receipts, and the request id is the order number printed on every one. Where the analogy stops: a receipt is private to you, while a log is read by many people and systems, which is why what you print on it matters.
+
+</Callout>
+
+<Callout type="interview" title="One sentence on logging">
+
+"Services write structured JSON to stdout with a level, an event name and the trace id; an agent ships to Kafka, indexers keep 14 days hot and object storage keeps a year; INFO is sampled, WARN and ERROR are not; PII and tokens are redacted at source." If asked for more, talk about dynamic log levels during incidents.
+
+</Callout>
+
+<DeepDive title="Go deeper: what the broker buys you">
+
+Without a broker, the index's write capacity is the ceiling for every service at once: a deploy that logs a stack trace per request on a hundred pods saturates it, and agents either block, filling disks on the nodes, or drop. With a topic in between, the burst becomes lag that the indexers work off, retention on the topic gives replay when an indexer is rebuilt, and several consumers read the same stream independently. The price is another system to run and a few seconds before a line is searchable, which is why the alerting path should be metrics, not log search.
+
+</DeepDive>

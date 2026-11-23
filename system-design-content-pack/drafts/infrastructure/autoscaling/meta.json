@@ -1,0 +1,73 @@
+{
+  "slug": "autoscaling",
+  "title": "Autoscaling",
+  "moduleId": "infrastructure",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Traffic doubles in minutes but a new machine takes minutes to boot and warm up, so capacity added on a signal arrives late, flaps, or overwhelms the database behind it.",
+  "summary": "Autoscaling changes capacity from a signal such as CPU, requests per instance or queue depth. Because new capacity lags the signal, policies add stabilisation windows, cooldowns, headroom and hard maximums; horizontal, vertical, cluster and scale-to-zero autoscalers each trade cost against reaction time.",
+  "catTip": "When the bowl empties faster than the human refills it, I do not wait for the hunger signal: I start meowing at 5:55. Predictive scaling. And I stop meowing slowly, in case a second helping is coming. Stabilisation window.",
+  "recall": {
+    "q": "Your HPA scales down right after scaling up, over and over. Which two defaults are meant to stop this, and what are their values?",
+    "a": "The tolerance (changes within 10% of the target are ignored) and the scale-down stabilisation window (300 seconds by default, during which the HPA uses the highest desired count it computed). Scale-up has no window on purpose: add capacity fast, remove it slowly."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A fleet sized by hand is either paying for idle machines or falling over during a spike, and a naive autoscaler oscillates, arrives too late, or scales the web tier past what the database can serve.",
+    "tradeoffs": "Every defence against lag costs money or latency: headroom and slow scale-in keep idle capacity, stabilisation delays savings, scale to zero makes the first request wait, and a maximum set too low drops traffic.",
+    "explainSimply": "Autoscaling is a thermostat for servers: when the room gets hot it turns on more cooling, and when it cools down it turns some off. The catch is that the cooling takes minutes to start, so you switch it on early, keep some running just in case, and do not switch it off the moment the temperature dips.",
+    "hint": "Think about what happens in the minutes between the metric crossing the line and the new machine serving its first request."
+  },
+  "meow": "Meow-tric crossed the line? New box boots, boots, boots. Keep spare boxes; scale out fast, scale in like a cat leaving a warm lap: slowly.",
+  "quiz": [
+    {
+      "prompt": "A worker fleet consumes from a queue. Which scaling metric is the best choice, and why?",
+      "options": [
+        "Average CPU, because it is available on every machine",
+        "Total queue length, because more messages means more work",
+        "Queue length divided by the number of workers, because it changes in proportion as workers are added or removed",
+        "p99 latency of the workers, because it is what users feel"
+      ],
+      "answer": 2,
+      "explanation": "A target-tracking controller needs a metric that moves in proportion to the fleet; a raw queue length does not fall just because you added workers, which is why AWS recommends a per-instance backlog metric. CPU is a poor proxy for I/O-bound consumers and latency is a lagging symptom."
+    },
+    {
+      "prompt": "What is the main cost of scaling a service to zero replicas, and which tools are built for it?",
+      "options": [
+        "Lost data, because the last replica's memory is discarded; use StatefulSets instead",
+        "A cold start on the first request while a replica is created; KEDA and Knative implement scale to zero",
+        "Higher cloud bills, because zero-replica Deployments are billed at a flat rate; use the HPA instead",
+        "Nothing: the HPA already scales to zero by default"
+      ],
+      "answer": 1,
+      "explanation": "Scaling to zero trades idle cost for first-request latency, and KEDA (event sources) and Knative (HTTP services) handle the zero-to-one step that the HPA alone does not. Stateless replicas lose nothing on removal, so the first option confuses scaling with persistence."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Why does the HPA apply a 300-second stabilisation window to scale-down but none to scale-up?",
+      "a": "Removing capacity you still needed causes errors, while adding capacity you did not need costs only a few minutes of money. The window takes the highest recommendation of the last five minutes so a dip in the metric does not remove Pods that a moment later would have to be recreated."
+    },
+    {
+      "q": "An autoscaler keeps adding web Pods during an incident but latency gets worse. What is probably happening, and which bound was missing?",
+      "a": "The bottleneck is downstream, typically the database: each new Pod opens more connections, the database slows further, latency rises and a latency-driven policy adds even more Pods. The maximum replica count should be derived from what the slowest dependency can take, not from the web tier alone."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Kubernetes Docs, Horizontal Pod Autoscaling", "url": "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/", "accessed": "2026-11-22", "supports": "the HPA algorithm (desiredReplicas = ceil of currentReplicas times currentMetric over desiredMetric), 15-second sync period, 10% tolerance, 300-second scale-down stabilisation window with none for scale-up, default scaling policies, and the description of flapping", "status": "verified" },
+    { "title": "KEDA Docs, KEDA Concepts", "url": "https://keda.sh/docs/latest/concepts/", "accessed": "2026-11-22", "supports": "KEDA scales a workload between zero and one itself and creates an HPA for one-to-n scaling; scalers for queues, streams, Prometheus and cron", "status": "verified" },
+    { "title": "KEDA Docs, ScaledObject specification", "url": "https://keda.sh/docs/latest/reference/scaledobject-spec/", "accessed": "2026-11-22", "supports": "pollingInterval default 30 seconds, cooldownPeriod default 300 seconds, minReplicaCount default 0, maxReplicaCount default 100", "status": "verified" },
+    { "title": "Knative Docs, Configuring scale to zero", "url": "https://knative.dev/docs/serving/autoscaling/scale-to-zero/", "accessed": "2026-11-22", "supports": "scale to zero requires the Knative Pod Autoscaler; scale-to-zero-grace-period defaults to 30s", "status": "verified" },
+    { "title": "Knative Docs, Additional autoscaling configuration for Knative Pod Autoscaler", "url": "https://knative.dev/docs/serving/autoscaling/kpa-specific/", "accessed": "2026-11-22", "supports": "stable window default 60s; panic threshold 200% and panic window 10% of the stable window", "status": "verified" },
+    { "title": "AWS Docs, Scaling cooldowns for Amazon EC2 Auto Scaling", "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-scaling-cooldowns.html", "accessed": "2026-11-22", "supports": "default cooldown of 300 seconds for simple scaling policies; target tracking and step scaling use instance warmup instead", "status": "verified" },
+    { "title": "AWS Docs, Target tracking scaling policies for Amazon EC2 Auto Scaling", "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-scaling-target-tracking.html", "accessed": "2026-11-22", "supports": "the thermostat model; predefined metrics including ALBRequestCountPerTarget; request count, latency and raw SQS queue length are unsuitable; EC2 metrics default to 5-minute intervals, 1 minute with detailed monitoring; scale-in is gradual and blocked during warm-up", "status": "verified" },
+    { "title": "AWS Docs, Predictive scaling for Amazon EC2 Auto Scaling", "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-predictive-scaling.html", "accessed": "2026-11-22", "supports": "predictive scaling analyses historical load for daily and weekly patterns and launches capacity ahead of forecast demand; suited to cyclical traffic and slow-initialising applications", "status": "verified" },
+    { "title": "AWS Docs, Scheduled scaling for Amazon EC2 Auto Scaling", "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-scheduled-scaling.html", "accessed": "2026-11-22", "supports": "scheduled actions set desired, minimum and maximum capacity at specific or recurring times and combine with scaling policies", "status": "verified" },
+    { "title": "Google Cloud Docs, Autoscaling groups of instances", "url": "https://docs.cloud.google.com/compute/docs/autoscaler", "accessed": "2026-11-22", "supports": "the default stabilization period of 10 minutes for scale-in decisions and the default 60-second initialization period", "status": "verified" },
+    { "title": "Kubernetes Autoscaler, Cluster Autoscaler FAQ", "url": "https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md", "accessed": "2026-11-22", "supports": "scale-up on unschedulable Pods checked every 10 seconds; a node is removed after being unneeded for 10 minutes below the 0.5 utilisation threshold", "status": "verified" },
+    { "title": "Kubernetes Autoscaler, Vertical Pod Autoscaler components", "url": "https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/docs/components.md", "accessed": "2026-11-22", "supports": "the Recommender computes requests from usage history and the Updater evicts Pods to apply them, or updates in place when supported", "status": "verified" },
+    { "title": "Karpenter Docs", "url": "https://karpenter.sh/docs/", "accessed": "2026-11-22", "supports": "Karpenter provisions nodes for Pods the scheduler marks unschedulable and removes them when no longer needed", "status": "verified" },
+    { "title": "AWS Docs, Understanding the Lambda execution environment lifecycle", "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html", "accessed": "2026-11-22", "supports": "cold starts typically occur in under 1% of invocations and last from under 100 ms to over 1 second; provisioned concurrency pre-initialises environments", "status": "verified" }
+  ]
+}

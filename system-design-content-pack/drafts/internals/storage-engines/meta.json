@@ -1,0 +1,78 @@
+{
+  "slug": "storage-engines",
+  "title": "How a database stores data",
+  "moduleId": "internals",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "A query that touches one 100-byte row still reads whole pages from disk, and the wrong layout or engine turns a simple report into a full-table crawl.",
+  "summary": "A storage engine moves fixed-size pages between disk and a buffer pool. Row stores suit transactions, column stores suit analytics, and MySQL, MongoDB and RocksDB show that the engine is a swappable part beneath the query layer.",
+  "catTip": "I never fetch one kibble; I knock the whole bowl over. Databases are the same: ask for one row and a whole 8 kB page comes along. Keep the bowls you use most in the warm spot by the server.",
+  "recall": {
+    "q": "Why does a database read pages rather than rows, and what does the buffer pool do about the cost?",
+    "a": "Disks and SSDs move fixed-size blocks, so engines store rows in fixed-size pages (8 kB in PostgreSQL by default) and read a whole page to get one row. The buffer pool caches pages in RAM so repeated reads of hot pages cost memory time instead of a disk read."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without pages and a buffer pool every row lookup is a random disk read, and without the right row or column layout an analytics scan drags whole rows through memory to use three columns.",
+    "tradeoffs": "Fixed pages waste space and amplify small writes, RAM spent on the buffer pool is RAM taken from everything else, and a column store's fast scans come with slow single-row updates.",
+    "explainSimply": "A database keeps its data in fixed-size pages, like a warehouse that only moves whole pallets. Asking for one item still brings a pallet, so the database parks the most-used pallets by the door, which is the buffer pool. Row stores pack each order on one pallet; column stores pack all the prices together, which is better for reports.",
+    "hint": "Think about what the disk actually moves, and where recently used pages wait."
+  },
+  "meow": "One row? Whole page, meow. Keep the hot pages in the buffer pool and the forklift stays parked.",
+  "quiz": [
+    {
+      "prompt": "A PostgreSQL query fetches a single 120-byte row by primary key and nothing is cached. What does the database read from disk?",
+      "options": [
+        "Exactly 120 bytes",
+        "One 8 kB page per B-tree level it visits, then the 8 kB heap page holding the row",
+        "The whole table file",
+        "Only the index entry, since the index stores the row"
+      ],
+      "answer": 1,
+      "explanation": "Storage moves fixed-size pages, so each index level and the heap page cost a page read. The index entry holds a ctid, not the row, so the heap page is still needed."
+    },
+    {
+      "prompt": "A finance query sums one column across 500 million rows of a 40-column table and takes minutes on the OLTP database. Which change attacks the root cause?",
+      "options": [
+        "Add a B-tree index on the summed column",
+        "Serve reporting from a column-oriented copy that reads only the columns the query needs",
+        "Increase the buffer pool until the whole table fits",
+        "Switch the table from InnoDB to MyISAM"
+      ],
+      "answer": 1,
+      "explanation": "A row store drags all 40 columns through memory to sum one; a column store reads just that column and compresses it well. A bigger buffer pool helps only if the table fits, and it still reads every row."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Your InnoDB table uses random UUID primary keys and inserts have become slow, with many page splits. Why, and what would you change?",
+      "a": "InnoDB stores rows inside the primary-key B-tree, so random keys scatter inserts across the tree, dirtying many pages and splitting leaves, while increasing keys append at the right edge. Use an increasing key (auto-increment or time-ordered) and keep it short, since every secondary index copies it."
+    },
+    {
+      "q": "Name the default storage engine beneath MySQL, the default beneath MongoDB, and two databases that embed RocksDB or a RocksDB-inspired engine.",
+      "a": "InnoDB (MySQL) and WiredTiger (MongoDB). MyRocks puts RocksDB under MySQL, and CockroachDB uses Pebble, an engine inspired by RocksDB."
+    }
+  ],
+  "glossary": [
+    { "term": "OLTP", "full": "Online Transaction Processing", "note": "Many small reads and writes that touch whole rows; the workload row stores are built for." },
+    { "term": "OLAP", "full": "Online Analytical Processing", "note": "Scans and aggregates over millions of rows and a few columns; the workload column stores are built for." }
+  ],
+  "sources": [
+    { "title": "PostgreSQL documentation, Database Page Layout", "url": "https://www.postgresql.org/docs/current/storage-page-layout.html", "accessed": "2026-11-22", "supports": "8 kB default page size chosen at compile time; 24-byte page header, 4-byte item identifiers, 23-byte tuple header", "status": "verified" },
+    { "title": "PostgreSQL documentation, TOAST", "url": "https://www.postgresql.org/docs/current/storage-toast.html", "accessed": "2026-11-22", "supports": "tuples cannot span pages; large values are compressed or split into a side table", "status": "verified" },
+    { "title": "PostgreSQL documentation, Resource Consumption (shared_buffers)", "url": "https://www.postgresql.org/docs/current/runtime-config-resource.html", "accessed": "2026-11-22", "supports": "shared_buffers default of 128 MB", "status": "verified" },
+    { "title": "PostgreSQL documentation, Using EXPLAIN", "url": "https://www.postgresql.org/docs/current/using-explain.html", "accessed": "2026-11-22", "supports": "EXPLAIN (ANALYZE, BUFFERS) reporting shared hit and read counts", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, InnoDB Startup Options and System Variables", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-parameters.html", "accessed": "2026-11-22", "supports": "innodb_page_size default 16384 with 4K to 64K options set only at initialisation; innodb_buffer_pool_size default 128 MB", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Buffer Pool", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-buffer-pool.html", "accessed": "2026-11-22", "supports": "up to 80% of memory on dedicated servers; LRU with midpoint insertion and a 3/8 old sublist", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Clustered and Secondary Indexes", "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html", "accessed": "2026-11-22", "supports": "the clustered index stores row data; secondary index records contain the primary key; long primary keys enlarge secondary indexes", "status": "verified" },
+    { "title": "MySQL 8.4 Reference Manual, Alternative Storage Engines", "url": "https://dev.mysql.com/doc/refman/8.4/en/storage-engines.html", "accessed": "2026-11-22", "supports": "pluggable storage engine architecture, InnoDB as default, engine chosen per table, list of engines", "status": "verified" },
+    { "title": "MongoDB Manual, WiredTiger Storage Engine", "url": "https://www.mongodb.com/docs/manual/core/wiredtiger/", "accessed": "2026-11-22", "supports": "WiredTiger as the default engine; document-level concurrency; checkpoints every 60 seconds; journal; snappy compression by default", "status": "verified" },
+    { "title": "RocksDB wiki, RocksDB Overview", "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Overview", "accessed": "2026-11-22", "supports": "RocksDB as a C++ key-value storage engine library started at Facebook, borrowing code from LevelDB", "status": "verified" },
+    { "title": "MyRocks project site", "url": "http://myrocks.io/", "accessed": "2026-11-22", "supports": "MyRocks as a RocksDB storage engine for MySQL", "status": "verified" },
+    { "title": "CockroachDB documentation, Storage Layer", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/storage-layer", "accessed": "2026-11-22", "supports": "Pebble as CockroachDB's storage engine, inspired by RocksDB", "status": "verified" },
+    { "title": "SQLite documentation, Architecture of SQLite", "url": "https://www.sqlite.org/arch.html", "accessed": "2026-11-22", "supports": "SQLite stores each table and index in a B-tree; default page size 4096 bytes", "status": "verified" },
+    { "title": "ClickHouse documentation, What is ClickHouse?", "url": "https://clickhouse.com/docs/intro", "accessed": "2026-11-22", "supports": "column-oriented layout reads only the columns a query needs; row-oriented layout retrieves whole rows quickly", "status": "verified" },
+    { "title": "Apache Parquet project", "url": "https://parquet.apache.org/", "accessed": "2026-11-22", "supports": "Parquet as a columnar file format", "status": "reference" },
+    { "title": "Martin Kleppmann, Designing Data-Intensive Applications, ch. 3 \"Storage and Retrieval\" (O'Reilly, 2017)", "url": "https://dataintensive.net/", "accessed": "2026-11-22", "supports": "row versus column storage for OLTP and OLAP, and the storage-engine framing", "status": "reference" }
+  ]
+}

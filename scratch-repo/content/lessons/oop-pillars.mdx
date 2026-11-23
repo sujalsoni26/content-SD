@@ -1,0 +1,115 @@
+An object is a bundle of state plus the only code allowed to change it. **Object-oriented programming (OOP)** rests on four habits that follow from that idea: **encapsulation** keeps state valid by hiding it behind methods, **abstraction** exposes what an object does rather than how, **inheritance** lets one class reuse and specialise another, and **polymorphism** lets a caller treat different objects the same way. The first and the last do most of the work in a low-level design; inheritance is the one that costs the most, and the next three lessons are about those costs.
+
+## Encapsulation: invariants live behind methods
+
+An **invariant** is a fact about an object that must stay true: a balance is never negative, a ticket always refers to a spot, a cart's total equals the sum of its lines. Encapsulation is the discipline that every path to the state runs through a method which preserves the invariant.
+
+Here is a wallet with no encapsulation. The field is public, so the overdraft check lives wherever the caller remembered to write it, which eventually is nowhere.
+
+```java
+class Wallet {
+    public long balancePaise;                 // anyone can write anything
+}
+wallet.balancePaise -= 50_000;                // an overdraft nobody checked
+```
+
+Move the field behind a method and the invariant is enforced in exactly one place.
+
+```java
+class Wallet {
+    private long balancePaise;
+    void debit(long paise) {
+        if (paise <= 0 || paise > balancePaise)
+            throw new IllegalArgumentException("insufficient funds");
+        balancePaise -= paise;
+    }
+}
+```
+
+A getter and a setter for every field is **not** encapsulation; it is a public field with more typing, because `setBalance(-1)` is still allowed. Ask what each class promises, and expose only the methods that keep the promise. For pure values with nothing to protect, a Java `record` is the cleanest answer: `record Money(long paise, String currency)` with an empty body is immutable, so there is no invalid state to reach.
+
+## Abstraction: interfaces say what, not how
+
+An **abstraction** is a contract a caller can program against without knowing the implementation. In Java the usual tool is the `interface`.
+
+```java
+interface PaymentGateway {
+    PaymentResult charge(Money amount, Card card);
+}
+```
+
+Checkout code that depends on `PaymentGateway` works with Razorpay in production and with an in-memory fake in a test, and it does not change when the vendor does. The test of a good abstraction is the **leak**: if the interface returns the vendor's raw response object, throws the vendor's exceptions or has a method called `redisKeyFor`, callers now depend on the very thing the interface was meant to hide, and swapping it means touching them all.
+
+<Callout type="analogy" title="A vending machine">
+
+You press a button and a drink appears. You cannot reach into the coin box (encapsulation), and you do not know whether a spiral or a conveyor moved the can (abstraction). Where the analogy stops: a real machine's buttons are fixed for life, whereas the point of an interface is that the mechanism behind the same buttons can be replaced.
+
+</Callout>
+
+## Inheritance: is-a, at a price
+
+`class SavingsAccount extends Account` says a savings account **is an** account: everything that accepts an `Account` must accept a `SavingsAccount`, and the subclass inherits fields and methods it can specialise. Use it only when that sentence is true in every context the parent is used, not merely because two classes share a few lines. A subclass is coupled to how its parent is written, not just to what it promises; [Composition over inheritance](/learn/composition-over-inheritance) shows how that breaks and what to do instead.
+
+## Polymorphism: replace the switch
+
+**Polymorphism** means one call, `vehicle.hourlyFeePaise()`, runs different code depending on the object's runtime class. Its everyday use is removing conditionals that branch on type. The before:
+
+```java
+long hourlyFeePaise(Vehicle v) {
+    switch (v.type()) {
+        case BIKE:  return 2_000;
+        case CAR:   return 5_000;
+        default:    throw new IllegalStateException("unknown type");
+    }
+}
+```
+
+Every new vehicle type means finding every such switch in the codebase. The after moves each case into the class that knows the answer:
+
+```java
+interface Vehicle { long hourlyFeePaise(); }
+final class Bike implements Vehicle { public long hourlyFeePaise() { return 2_000; } }
+final class Car  implements Vehicle { public long hourlyFeePaise() { return 5_000; } }
+long fee = vehicle.hourlyFeePaise();        // adding Truck touches no caller
+```
+
+The trade-off is real: the switch kept one operation in one place, and polymorphism spreads it over many classes. When the set of types is closed and it is the operations that keep changing, a `switch` over a `sealed` interface (Java 17), which the compiler checks for missing cases once pattern matching for switch is available (Java 21), is the better shape. Choose by asking which changes more often: the types, or the operations on them.
+
+<Mermaid caption="Polymorphism in one picture: the caller depends on the Vehicle interface, each class answers for itself, and a new vehicle type is a new box with no change to the caller." chart={`classDiagram
+    class Vehicle {
+        <<interface>>
+        +hourlyFeePaise() long
+    }
+    class Bike {
+        +hourlyFeePaise() long
+    }
+    class Car {
+        +hourlyFeePaise() long
+    }
+    class FeeCalculator {
+        +fee(Vehicle v) long
+    }
+    Bike ..|> Vehicle
+    Car ..|> Vehicle
+    FeeCalculator --> Vehicle : calls, never a switch
+`} />
+
+## Interfaces versus abstract classes
+
+Both let you declare methods without bodies. The difference is state and lineage.
+
+| | Interface | Abstract class |
+| --- | --- | --- |
+| Fields | Only constants (`public static final`) | Any fields, including mutable state |
+| Constructors | None | Yes; subclasses call `super(...)` |
+| Methods | Abstract, `default` and `static`, all public; private helpers since Java 9 | Abstract and concrete; any visibility |
+| How many | A class implements any number | A class extends exactly one |
+| Reach for it when | Unrelated classes share a contract (`Comparable`) | Closely related classes share code and state |
+
+A rule that holds up in interviews: start with an interface for the contract; add an abstract class only when several implementations genuinely share code, and keep it behind the interface so callers never see it.
+
+<Callout type="interview" title="Name the invariant when you draw the class">
+
+When you add a class to the whiteboard (step four of the [LLD workflow](/learn/lld-intro)), say what it protects: "`Spot` owns `occupied`, and only `assign` and `release` change it, so two cars cannot be parked in one spot." That one sentence shows encapsulation, and it sets up the concurrency discussion before the interviewer asks.
+
+</Callout>

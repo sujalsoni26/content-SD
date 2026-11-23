@@ -1,0 +1,64 @@
+{
+  "slug": "sagas",
+  "title": "Sagas and compensating actions",
+  "moduleId": "distributed",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "A checkout spans three services and three databases; payment is declined after stock was reserved, and nothing can roll back a transaction another service has already committed.",
+  "summary": "A saga is a sequence of local transactions across services, each paired with a compensating transaction that undoes it. Coordinated by events (choreography) or a coordinator (orchestration), it replaces locks and two-phase commit with compensation and idempotent, retried steps.",
+  "catTip": "I knock the vase off the shelf, then the lamp, then I think better of it. I cannot un-knock the vase, but I can push the lamp back and look innocent. That is a compensation, not a rollback.",
+  "recall": {
+    "q": "Payment is declined after Inventory has reserved stock for an order. What does the saga do, and what must be true of that action?",
+    "a": "It runs the compensating transactions for the completed steps in reverse: release the reservation and mark the order CANCELLED. Compensations must be idempotent and retried until they succeed, because the messages that drive them arrive at least once and a compensation can itself fail."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A business transaction that spans several services cannot be rolled back once one service has committed, so a failure half-way leaves reserved stock, taken payments or half-created orders behind.",
+    "tradeoffs": "You give up isolation and atomic rollback: other transactions see intermediate states, every step and compensation must be idempotent, and some actions can only be compensated semantically rather than undone.",
+    "explainSimply": "A saga is how you book a trip across several companies: flight, then hotel, then taxi, each a separate booking. If the hotel is full you do not rewind time; you cancel the flight and accept the fee. Each booking has a matching cancellation, and the trip ends either fully booked or fully cancelled.",
+    "hint": "Think about what a cancellation does that a rewind would not, and what happens if the cancellation request is sent twice."
+  },
+  "meow": "Meow forward, meow backward. Each paw step has an un-step, but the kibble I already ate stays eaten: compensation, not rollback.",
+  "quiz": [
+    {
+      "prompt": "In a checkout saga (create order, reserve stock, charge card, create shipment, confirm order), which step is the natural pivot, and why?",
+      "options": [
+        "Create order, because it is the first step and everything depends on it",
+        "Charge card, because once it succeeds the saga must complete and later steps can be retried, while earlier steps can be compensated",
+        "Create shipment, because physical actions cannot be undone",
+        "Confirm order, because it is the last step and marks success"
+      ],
+      "answer": 1,
+      "explanation": "The pivot is the go/no-go point that separates compensatable steps from retriable ones, and the charge is the hardest step to undo cleanly. Create shipment is irreversible, which is exactly why it belongs after the pivot as a retriable step rather than at it."
+    },
+    {
+      "prompt": "Why must saga steps and compensations be idempotent?",
+      "options": [
+        "Because the orchestrator runs each step exactly once and idempotency is only a safety margin",
+        "Because the messages that drive a saga are delivered at least once, so a step or compensation can run twice after a retry or a crash",
+        "Because idempotency makes compensating transactions unnecessary",
+        "Because two-phase commit requires idempotent participants"
+      ],
+      "answer": 1,
+      "explanation": "Brokers and outbox relays redeliver after crashes, so duplicates are normal rather than rare. Idempotency does not remove the need to compensate; it makes repeating a step or a compensation harmless."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A saga has seven steps, two branches and a 15-minute timeout on payment. Choreography or orchestration, and why?",
+      "a": "Orchestration. The flow with its branches, timeouts and compensations lives in one durable coordinator that can be read and tested; with choreography the flow would exist only as the sum of subscriptions across seven services, with a real risk of cycles."
+    },
+    {
+      "q": "What is a semantic lock in a saga, and what problem does it address?",
+      "a": "An application-level flag, such as an order's PENDING state, that marks a saga in progress on that data. It addresses the lack of isolation: other transactions can see intermediate states, so they treat PENDING rows as provisional and wait or refuse rather than act on them."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Hector Garcia-Molina and Kenneth Salem, \"Sagas\", SIGMOD 1987, pp. 249–259", "url": "https://doi.org/10.1145/38713.38742", "accessed": "2026-11-22", "supports": "the 1987 origin of sagas as long-lived transactions split into sub-transactions each with a compensating transaction (bibliographic record checked via Crossref; the paper text was not re-read)", "status": "reference" },
+    { "title": "Chris Richardson, microservices.io, \"Pattern: Saga\"", "url": "https://microservices.io/patterns/data/saga.html", "accessed": "2026-11-22", "supports": "a saga as a sequence of local transactions; choreography (each local transaction publishes events that trigger the next) versus orchestration (an orchestrator tells participants what to execute); lack of automatic rollback and of isolation; the pending-order example", "status": "verified" },
+    { "title": "Chris Richardson, \"Managing data consistency in a microservice architecture using Sagas, part 1\" (microservices.io, 2019)", "url": "https://microservices.io/post/microservices/2019/07/09/developing-sagas-part-1.html", "accessed": "2026-11-22", "supports": "the PENDING state as a semantic lock countermeasure, described as application-level locking", "status": "verified" },
+    { "title": "Microsoft Azure Architecture Center, \"Saga design pattern\"", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/saga", "accessed": "2026-11-22", "supports": "compensable, pivot and retryable transactions; benefits and drawbacks of choreography and orchestration; countermeasures for isolation anomalies including semantic lock, commutative updates and reread values", "status": "verified" },
+    { "title": "Chris Richardson, microservices.io, \"Pattern: Transactional outbox\"", "url": "https://microservices.io/patterns/data/transactional-outbox.html", "accessed": "2026-11-22", "supports": "the dual-write problem, the outbox table written in the same local transaction, and the resulting at-least-once publishing that requires idempotent consumers", "status": "verified" }
+  ]
+}

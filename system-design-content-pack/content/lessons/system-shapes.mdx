@@ -1,0 +1,36 @@
+| Shape | Examples | Design focus |
+| --- | --- | --- |
+| Read-heavy, tiny objects | URL shortener, timelines, news feeds | Caching, read replicas |
+| Storage- and bandwidth-heavy | Google Drive, YouTube, Netflix, Dropbox | Object storage, CDN, chunking, deduplication, delta sync, metadata DB |
+| Write-heavy streams | Chat, metrics, logs, event pipelines | Append-only logs (Kafka), sequential I/O, queues, partitioning |
+
+<Callout type="interview" title="Find the dominant number">
+
+Ask the interviewer which number dominates (QPS, storage or bandwidth), confirm your assumptions, then design for that number.
+
+</Callout>
+
+<DeepDive title="Try it: classify ten systems">
+
+Name the shape before you open the answer column. Several are mixed; the point is to find the number that dominates.
+
+| System | Shape | Why |
+| --- | --- | --- |
+| Wikipedia | Read-heavy, tiny objects | Millions of reads per edit; cache and replicate |
+| WhatsApp messaging | Write-heavy stream | Billions of small messages a day; partition and append |
+| YouTube | Storage- and bandwidth-heavy | Huge objects, served repeatedly: object storage and a CDN |
+| Stock ticker | Write-heavy stream | A nonstop flood of small updates; fan out through a log |
+| Dropbox | Storage- and bandwidth-heavy | Large files, chunked and deduplicated |
+| IoT sensor ingestion | Write-heavy stream | Millions of devices, each writing often, rarely read back |
+| Google Maps tiles | Read-heavy and bandwidth-heavy | The same tiles fetched constantly; a CDN carries most of it |
+| Ticket booking | Mixed: read-heavy seat maps, write bursts that must be correct | Cache the map; protect the writes with holds and constraints |
+| Logging pipeline | Write-heavy stream | Append everything, query rarely |
+| News feed | Read-heavy, tiny objects (with a fan-out write path) | Reads dominate; the write path decides how the feed is built |
+
+</DeepDive>
+
+<DeepDive title="Go deeper: why write-heavy systems love append-only logs">
+
+Recall the latency table (see [Latency, throughput and the numbers to know](/learn/latency)): one disk seek costs about as much as reading half a megabyte sequentially. Appending every write to the end of a log turns random writes into sequential ones, which is why Kafka and LSM-tree databases (Cassandra, RocksDB) handle enormous write rates on ordinary disks.
+
+</DeepDive>

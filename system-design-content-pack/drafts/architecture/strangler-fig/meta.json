@@ -1,0 +1,68 @@
+{
+  "slug": "strangler-fig",
+  "title": "Migrating safely: strangler fig and friends",
+  "moduleId": "architecture",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "A rewrite freezes features for years and ends in one cut-over night, while the behaviour you must reproduce is written down nowhere but in the old code.",
+  "summary": "Strangler fig puts a routing facade in front of a legacy system and moves one capability at a time, verified by parallel runs and switched by feature flags. Data moves by expand and contract with CDC keeping copies in step, never by dual writes.",
+  "catTip": "I moved house one room at a time. New bed first, then the bowl, then the litter tray, each with a way back. Nobody picked me up and dropped me somewhere new all at once, which is how it should be.",
+  "recall": {
+    "q": "How does a strangler-fig migration move a capability from an old system to a new one, and how is its data moved safely?",
+    "a": "A facade routes all traffic to the legacy system; one capability is rebuilt, verified with shadow traffic or a parallel run, and switched over with a feature flag, after which the old path is deleted. Data moves by expand and contract: add the new store, backfill and sync it by CDC, move readers then writers with one writer of record at a time, then remove the old store; dual writes are avoided because no transaction spans both."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without an incremental path a replacement is a multi-year rewrite with a frozen roadmap and a single cut-over, and any attempt to run old and new side by side with dual writes leaves the two databases silently disagreeing.",
+    "tradeoffs": "Running two systems at once costs a facade, duplicated infrastructure, synchronisation plumbing and a growing pile of flags, all of which must be removed at the end or they become the next legacy system.",
+    "explainSimply": "Renovate a shop while it keeps trading: fence off one aisle, fit the new one behind the fence, open it, move the stock, take the old aisle down, move the fence. Customers never see a closed shop. The fence is the facade and moving the stock is the data migration.",
+    "hint": "Think about what sits in front of both systems, what decides which one answers, and who is allowed to write the data at any moment."
+  },
+  "meow": "New bed first, then the bowl, then the tray. Each move has a way back. Never all at once.",
+  "quiz": [
+    {
+      "prompt": "During a migration the new order service writes each order to its own database and then inserts the same row into the legacy database. What is the risk, and what is the better approach?",
+      "options": [
+        "No risk, because both databases are fast enough to keep up",
+        "Without a shared transaction one write can fail after the other succeeds and the stores diverge silently; keep one writer of record and sync the other through CDC or an outbox",
+        "The legacy database will become the bottleneck, so the new service should write to it first",
+        "Wrap both inserts in a two-phase commit between the service and the legacy database"
+      ],
+      "answer": 1,
+      "explanation": "This is the dual-write hazard: a crash or error between the two writes leaves copies that disagree and retries compound it. Two-phase commit is the plausible distractor, but it is rarely available across unrelated stores and it blocks both systems on the slowest participant."
+    },
+    {
+      "prompt": "In a parallel run such as GitHub's Scientist, what does the user receive?",
+      "options": [
+        "Whichever of the two results arrives first",
+        "The new implementation's result, with the old one logged for comparison",
+        "The old implementation's result, while the new result is compared and logged",
+        "A merged result when the two implementations agree"
+      ],
+      "answer": 2,
+      "explanation": "The control (old path) always answers the caller; the candidate runs alongside so mismatches can be studied without affecting users. Serving the new result first would turn verification into the switch itself."
+    }
+  ],
+  "cards": [
+    {
+      "q": "You must replace the pricing module inside a monolith and there is no HTTP seam to route around. Which pattern applies and what are the steps?",
+      "a": "Branch by abstraction: introduce an interface over the old pricing code, move all callers onto it, build the new implementation behind the same interface, switch with a feature flag (parallel-running to compare if you can), then delete the old code and, if it no longer helps, the interface. Trunk stays releasable throughout."
+    },
+    {
+      "q": "What is the strangler fig's exit criterion, and what happens if you ignore it?",
+      "a": "Stop when the remaining legacy pieces are cheap and stable or the next slice costs more than it returns, then remove the facade's transitional rules and stale flags. Ignore it and the facade plus half-migrated paths become a second legacy system wrapped around the first."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Martin Fowler, \"Strangler Fig Application\" (bliki, revised 22 August 2024)", "url": "https://martinfowler.com/bliki/StranglerFigApplication.html", "accessed": "2026-11-22", "supports": "the Queensland 2001 origin; the fig metaphor; seams and transitional architecture that goes away when modernization is complete; why incremental replacement beats a cut-over rewrite; investment and returns 'gradually and visibly'; the rename from 'Strangler Application'", "status": "verified" },
+    { "title": "Martin Fowler, \"Branch By Abstraction\" (bliki)", "url": "https://martinfowler.com/bliki/BranchByAbstraction.html", "accessed": "2026-11-22", "supports": "the steps of branch by abstraction; term from Paul Hammant, technique credited to Stacy Curl; keeps the system releasable", "status": "verified" },
+    { "title": "Danilo Sato, \"Parallel Change\" (martinfowler.com, 13 May 2014)", "url": "https://martinfowler.com/bliki/ParallelChange.html", "accessed": "2026-11-22", "supports": "expand, migrate and contract phases for backward-incompatible interface and schema changes", "status": "verified" },
+    { "title": "Pete Hodgson, \"Feature Toggles (aka Feature Flags)\" (martinfowler.com, revised 9 October 2017)", "url": "https://martinfowler.com/articles/feature-toggles.html", "accessed": "2026-11-22", "supports": "release, experiment, ops and permissioning toggles; toggles as 'inventory which comes with a carrying cost'; remove toggles proactively", "status": "verified" },
+    { "title": "GitHub, \"Scientist: A Ruby library for carefully refactoring critical paths\" (README)", "url": "https://github.com/github/scientist", "accessed": "2026-11-22", "supports": "use block as control and try block as candidate; both run, timed and compared; the control's result is always returned", "status": "verified" },
+    { "title": "Gunnar Morling, \"Reliable Microservices Data Exchange With the Outbox Pattern\" (Debezium blog, 19 February 2019)", "url": "https://debezium.io/blog/2019/02/19/reliable-microservices-data-exchange-with-the-outbox-pattern/", "accessed": "2026-11-22", "supports": "the dual-write problem: no shared transaction across a database and a second system, so one write can succeed and the other fail; outbox plus CDC as the remedy", "status": "verified" },
+    { "title": "Envoy, \"What is Envoy\" (docs)", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/what_is_envoy", "accessed": "2026-11-22", "supports": "request shadowing as a built-in proxy feature", "status": "verified" },
+    { "title": "Kirsten Westeinde, \"Deconstructing the Monolith\" (Shopify Engineering, 21 February 2019)", "url": "https://shopify.engineering/deconstructing-monolith-designing-software-maximizes-developer-productivity", "accessed": "2026-11-22", "supports": "component isolation enabled Shopify to replace its legacy tax engine", "status": "verified" },
+    { "title": "Sam Newman, Monolith to Microservices (O'Reilly)", "url": "https://samnewman.io/books/monolith-to-microservices/", "accessed": "2026-11-22", "supports": "strangler fig, branch by abstraction, parallel run and change data capture as the migration patterns; book not re-read, chapter list taken from the author's site", "status": "reference" }
+  ]
+}

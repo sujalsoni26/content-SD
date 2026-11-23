@@ -1,0 +1,41 @@
+Every card below names a problem from the low-level design track, modules 15 and 16. Say the principle, pattern or class structure that answers it before you flip, and mark the ones you missed as "Again" so they come back. The table underneath is the same map in reading order, one row per lesson, so a miss tells you which foundation to reread or which case study to redo on a blank page.
+
+<Interactive name="recall-cards" variant="lld" />
+
+<DeepDive title="Show the full table">
+
+| Problem | Principle, pattern or design |
+| --- | --- |
+| **Foundations** | |
+| The box is decided; what is inside it? | [What low-level design is](/learn/lld-intro) |
+| An invariant anyone can break; a switch on type | [OOP: encapsulation, abstraction, inheritance, polymorphism](/learn/oop-pillars) |
+| Owns, has, uses, is-a: which arrow? | [Class relationships and UML](/learn/class-relationships-uml) |
+| A subclass broken by its parent's internals | [Composition over inheritance](/learn/composition-over-inheritance) |
+| Where should this code live? | [SOLID principles](/learn/solid) |
+| A class that builds its own database connection | [Interfaces, abstractions and dependency injection](/learn/interfaces-abstractions-di) |
+| Who decides which object to build | [Design patterns I: creational](/learn/design-patterns-creational) |
+| A wrapper with the same interface, and why | [Design patterns II: structural](/learn/design-patterns-structural) |
+| A conditional that keeps growing; a status with five switches | [Design patterns III: behavioural](/learn/design-patterns-behavioural) |
+| A counter that comes up short | [Concurrency and thread safety](/learn/concurrency-basics) |
+| Returning null, catching Exception | [Error handling and resilience in code](/learn/error-handling) |
+| A method called calc(l, t, f, d, c) | [Clean code and maintainability](/learn/clean-code) |
+| A test that must sleep for a minute | [Unit testing and designing for extensibility](/learn/testing-extensibility) |
+| **Case studies** | |
+| Spots, tickets and a strategy for assigning them | [LLD: Parking lot](/learn/lld-parking-lot) |
+| Idle, has money, dispensing: a class per state | [LLD: Vending machine](/learn/lld-vending-machine) |
+| Requests, a dispatcher and SCAN | [LLD: Elevator system](/learn/lld-elevator) |
+| Book versus copy, loans and fines | [LLD: Library management system](/learn/lld-library-management) |
+| Two users, one seat, a hold with a TTL | [LLD: Movie ticket booking](/learn/lld-movie-ticket-booking) |
+| Split an expense, then simplify the debts | [LLD: Splitwise](/learn/lld-splitwise) |
+| A board, dice you can test, and a game loop | [LLD: Snake and Ladder](/learn/lld-snake-and-ladder) |
+| Polymorphic moves, check, and undo | [LLD: Chess](/learn/lld-chess) |
+| LRU in constant time, with a TTL and a lock | [LLD: In-memory cache](/learn/lld-in-memory-cache) |
+| Levels, appenders and an asynchronous queue | [LLD: Logging framework](/learn/lld-logging-framework) |
+| A token bucket per key, thread-safe | [LLD: Rate limiter](/learn/lld-rate-limiter) |
+| A queue of next-run times and a worker pool | [LLD: Task scheduler](/learn/lld-task-scheduler) |
+| Exactly one driver per trip | [LLD: Ride booking](/learn/lld-ride-booking) |
+| An order's lifecycle, with payment and compensation | [LLD: Food ordering system](/learn/lld-food-ordering) |
+
+</DeepDive>
+
+The best revision for a case study is not rereading it: close the lesson, write the requirements from memory, draw the class diagram and the main sequence, and only then compare. If the diagram came out different, ask whether yours still keeps every responsibility in one place and every invariant behind a method (see [OOP pillars](/learn/oop-pillars)); a different design that does both is not wrong. Redo one problem a week, starting with the [parking lot](/learn/lld-parking-lot), and the fourteen problems become one habit.

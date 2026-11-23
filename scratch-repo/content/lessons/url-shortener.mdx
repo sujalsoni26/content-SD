@@ -1,0 +1,143 @@
+Given a long URL, return a short one; visiting the short URL redirects to the original. This walks through [the interview playbook](/learn/playbook) step by step.
+
+## Requirements
+
+- **Functional:** shorten a long URL; redirect a short URL to its long URL; optional custom alias (`/diwali-sale`); optional expiry (default: never).
+- **Out of scope:** click analytics (revisited below), user accounts, spam detection.
+- **Non-functional:**
+  - **Uniqueness:** each short code maps to exactly one long URL (one long URL may have several codes).
+  - **Fast redirects:** under 200 ms.
+  - **High availability (99.99%) over strong consistency:** a dead short link is broken for everyone who has it, while a mapping never changes once written, so a stale read is rare and harmless.
+  - **Scale:** 1 billion URLs over 10 years, 100M monthly active users, reads:writes = 1,000:1.
+
+## Estimation
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Write QPS | 10⁹ ÷ (10 years × 3.15 × 10⁷ s) | \~3 writes/s |
+| Read QPS | 3 × 1,000 | \~3,000 reads/s on average |
+| Storage | 10⁹ rows × 500 B (code, long URL, timestamps) | \~500 GB |
+| Code length | 62⁵ ≈ 0.9 billion (too few) · 62⁶ ≈ 57 billion · 62⁷ ≈ 3.5 trillion | 6 base-62 characters (7 for 100B URLs) |
+
+→ Read-heavy with a small dataset: <mark>500 GB fits one PostgreSQL instance, so no sharding</mark>. Saying that is a green flag. The [worked estimation example](/learn/estimation-examples) assumed about 365× more writes (100M a day), which pushes storage to \~1 PB and codes to 7 characters, and that is where sharding enters.
+
+**Base 62** = 0–9, A–Z, a–z: 62 URL-safe characters, avoiding `?`, `#` and `/`, which mean something in a URL.
+
+<Interactive name="base62" />
+
+## API
+
+| Endpoint | Request | Success | Errors |
+| --- | --- | --- | --- |
+| `POST /urls` | `{ "long_url", "custom_alias"?, "expires_at"? }` | 201 + `{ "short_code", "short_url" }` | 400 invalid URL · 409 alias taken · 429 rate limited |
+| `GET /{code}` | – | 302 with `Location: <long URL>` | 404 not found · 410 expired |
+
+## Data model
+
+```sql
+CREATE TABLE urls (
+  id          BIGINT PRIMARY KEY,           -- counter value
+  short_code  VARCHAR(16) UNIQUE NOT NULL,  -- base 62 of id, or a custom alias
+  long_url    TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL,
+  expires_at  TIMESTAMPTZ                   -- NULL = never expires
+);
+```
+
+The `UNIQUE` constraint builds a B-tree index, so a lookup takes a few steps instead of scanning a billion rows (see [Database indexing](/learn/indexing)).
+
+## High-level design
+
+Start with client → app server → PostgreSQL; at this scale that already works. The final version runs stateless app servers behind a load balancer and adds Redis:
+
+<Diagram name="url-shortener-architecture" caption="URL shortener, final design." />
+
+- **Write path:** `POST /urls` → the app server takes the next ID from Redis (`INCR`) → encodes it in base 62 (1,000,000 → `4C92`) → inserts the row → returns 201 with the short URL.
+- **Read path:** `GET /4C92` → check Redis → on a miss, read PostgreSQL and cache the result → 302 to the long URL (or 404 / 410).
+
+<Mermaid caption="Write path: a Redis counter gives a unique ID, encoded in base 62. Read path: Redis first, PostgreSQL on a miss." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client
+    participant A as App server
+    participant R as Redis
+    participant DB as PostgreSQL
+    Note over C,DB: Write path
+    C->>A: POST /urls
+    A->>R: INCR
+    R-->>A: 1000000
+    Note over A: Base 62: 4C92
+    A->>DB: Insert row
+    A-->>C: 201 + short URL
+    Note over C,DB: Read path
+    C->>A: GET /4C92
+    A->>R: Look up 4C92
+    alt Hit
+        R-->>A: Long URL
+    else Miss
+        A->>DB: Read the row
+        DB-->>A: Long URL
+        A->>R: Cache it with a TTL
+    end
+    A-->>C: 302 to the long URL
+`} />
+
+## Deep dive 1: generating unique codes
+
+| Approach | How | Verdict |
+| --- | --- | --- |
+| Prefix or suffix of the URL | Keep 6 characters of the URL itself | Fails at once: every URL starts with `https:` |
+| Hash and truncate | SHA-256 or MD5 of the URL, keep 6 characters | Truncation collides early (birthday paradox: after about √N codes, roughly 300k URLs for 62⁶ and only \~5k for 6 hex characters). Fixing it needs salt, retries and a lookup per write |
+| Counter + base 62 | One global counter, encoded in base 62 | Unique by construction: one insert, no checks, no retries. **Chosen** |
+
+- A **Bloom filter** (a compact bit array that answers "definitely new" or "maybe taken") can skip most database lookups in the hashing approach, but the counter makes it unnecessary.
+- **Where the counter lives:** not in app-server memory, where a restart loses it and each server would count on its own. Use one atomic counter: Redis `INCR` is single-threaded, so 1,000 simultaneous calls get 1,000 different numbers. At 3 writes/s the database's own sequence would work too.
+- **Predictable codes:** sequential IDs let anyone walk through every link. If that matters, scramble the ID with a reversible permutation before encoding.
+
+<Callout type="warning" title="Common slip">
+
+Redis lives in memory, so the counter needs persistence (AOF) and a replica, or a restart can hand out old IDs again. Separate counters per server only work if each owns its own ID range (server 1 takes 1–1,000, server 2 takes 1,001–2,000, refilled in batches), which also takes Redis off most writes.
+
+</Callout>
+
+## Deep dive 2: 301 or 302 redirect?
+
+|  | 301 Moved Permanently | 302 Found (temporary) |
+| --- | --- | --- |
+| Browser | Caches the redirect; later clicks never reach you | Asks your server on every click |
+| Server load | Lowest | Every click hits you (cache it) |
+| Expiry, edits, analytics | Impossible once cached | Possible: you see every click |
+
+→ **Choose 302:** expiry is a requirement and analytics is likely next, and caching keeps the extra load cheap.
+
+## Deep dive 3: fast reads at 3,000 QPS
+
+- The unique index makes each lookup a few B-tree steps, so PostgreSQL alone meets the 200 ms target. Because the code is the base 62 of the ID, you can also decode it and look up by primary key.
+- **Hot links** (a viral Diwali-sale link) skew traffic. Put Redis in front as a cache-aside layer (see [Caching](/learn/caching)), evict with LRU (a recently clicked link tends to be clicked again), and set a TTL of about a day, never beyond the link's `expires_at`.
+- The 99.99% target needs **redundancy everywhere**: several app servers, a PostgreSQL read replica with failover, and a Redis replica.
+
+## Deep dive 4: custom aliases
+
+- Two users can request the same alias at the same instant, so check-then-insert in the app is a race (see [Idempotency](/learn/idempotency)). Let the database's **unique constraint** decide: insert, and return **409 Conflict** if it fails.
+- An alias can also clash with a code the counter generates later. Keep aliases in their own namespace (say, longer than 6 characters) or have the generator skip codes already taken.
+
+## Expiry and analytics
+
+Expired links return **410 Gone**, and a background job deletes them. With 302 you can log every click as an event to a queue (Kafka) and aggregate it asynchronously, so analytics never slows the redirect (see [Message queues](/learn/message-queues)).
+
+<Callout type="interview" title="Don't over-engineer">
+
+No sharding, no queue on the redirect path, no separate ID service: at 3 writes/s and 500 GB the simple design meets every requirement, and saying so out loud is a green flag.
+
+</Callout>
+
+<Callout type="idea" title="What the other case studies change">
+
+Every case study in this module follows the same steps. What changes is the number that dominates: [a pastebin](/learn/design-pastebin) adds large objects, [a notification system](/learn/design-notification-system) adds fan-out and retries, [a key-value store](/learn/design-key-value-store) adds replication and consensus. Keep the shortener's habit: say the numbers first, then earn each box.
+
+</Callout>

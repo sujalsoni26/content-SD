@@ -1,0 +1,69 @@
+{
+  "slug": "metrics-monitoring",
+  "title": "Metrics and monitoring",
+  "moduleId": "operations",
+  "level": "intermediate",
+  "minutes": 9,
+  "problem": "Dashboards full of averages and host graphs hide the slow tail, page people on CPU spikes nobody can act on, and fall over when someone adds a user-id label.",
+  "summary": "Counters, gauges and histograms are the three instruments; RED describes a service and USE a resource. Keep labels bounded, pull rather than push where you can, and page on symptoms users feel rather than on causes.",
+  "catTip": "I count every mouse I see (counter), weigh myself after dinner (gauge), and sort my naps into buckets by length (histogram). Averaging my nap p99 with the dog's would be nonsense; add the buckets instead.",
+  "recall": {
+    "q": "Why can you not average per-instance p99 values to get a service-wide p99, and what should you do instead?",
+    "a": "A percentile is a position in a distribution, not an additive quantity, so averaging twenty p99s gives a meaningless number. Histogram bucket counts do add: sum each bucket across instances and estimate the quantile from the combined cumulative counts."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without the right instruments the team graphs averages that hide the tail, averages percentiles into nonsense, and pages on causes like CPU that nobody can act on at 3 a.m.",
+    "tradeoffs": "Histograms cost a dozen series per label combination, bounded labels mean you cannot query metrics by user, and symptom-only paging means some causes are found later on a dashboard rather than by a page.",
+    "explainSimply": "A metric is a number you record over and over: how many requests came in, how many are being handled right now, how long each one took. Think of a car: the odometer only goes up, the speedometer goes up and down, and a tally of journey times sorted into buckets tells you how often a trip was slow. Alerts should work like a smoke alarm, ringing on the smoke rather than on every warm pan.",
+    "hint": "Ask which quantity you can add across machines: a position in a distribution, or a count of observations in a bucket."
+  },
+  "meow": "Purr-centiles do not average. Count the naps in each bucket, then meow the p99.",
+  "quiz": [
+    {
+      "prompt": "You run 20 instances of a service and want the service-wide p99 latency. Which approach is correct?",
+      "options": [
+        "Average the per-instance p99 values",
+        "Take the highest per-instance p99",
+        "Sum the histogram buckets across instances, then estimate the quantile from the combined buckets",
+        "Use the p99 reported by the instance that handles the most traffic"
+      ],
+      "answer": 2,
+      "explanation": "Percentiles are positions in a distribution and cannot be averaged or otherwise combined, but bucket counts add, so the fleet-wide quantile is estimated from the summed buckets. The highest per-instance p99 is the strongest distractor: it is an upper bound on the service p99, not the service p99."
+    },
+    {
+      "prompt": "Which label is most likely to exhaust a Prometheus server's memory?",
+      "options": ["HTTP status code", "HTTP method", "User id", "Deployment region"],
+      "answer": 2,
+      "explanation": "Every unique label combination is a new time series, and a user id is unbounded, so the series count grows with the user base. Status, method and region each have a small, known set of values."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A dashboard shows a counter's raw value climbing for days and then dropping to zero. What happened, and how should the panel be written instead?",
+      "a": "The process restarted, which resets a counter to zero. Graph rate(counter[5m]) rather than the raw value: the rate function turns the total into events per second and handles resets."
+    },
+    {
+      "q": "A page fires whenever database CPU passes 80%, and half the pages need no action. Reframe it using the symptoms-versus-causes rule.",
+      "a": "CPU is a cause. Page on what users feel, such as error-budget burn rate or user-visible latency, and put CPU on the dashboard for diagnosis. Keep cause-based pages only for predictable exhaustion with no early symptom, such as a disk that will fill in four hours."
+    }
+  ],
+  "glossary": [
+    { "term": "RED", "full": "Rate, Errors, Duration", "note": "Tom Wilkie's three metrics for every service: requests per second, failures per second, and the latency distribution." },
+    { "term": "USE", "full": "Utilisation, Saturation, Errors", "note": "Brendan Gregg's checklist for every resource: how busy it is, how much work is queued because it cannot be served, and how many errors it reports." }
+  ],
+  "sources": [
+    { "title": "Prometheus docs, \"Metric types\"", "url": "https://prometheus.io/docs/concepts/metric_types/", "accessed": "2026-11-22", "supports": "counter (monotonic, resets to zero on restart), gauge, histogram (_bucket, _sum, _count) and summary definitions", "status": "verified" },
+    { "title": "Prometheus docs, \"Histograms and summaries\"", "url": "https://prometheus.io/docs/practices/histograms/", "accessed": "2026-11-22", "supports": "histogram buckets aggregate across instances while summary quantiles cannot; averaging quantiles is 'statistically nonsensical'; quantile error bounded by bucket width; a boundary at the SLO threshold makes the share under it exact; recommendation to prefer native histograms", "status": "verified" },
+    { "title": "Prometheus docs, \"Query functions: histogram_quantile()\"", "url": "https://prometheus.io/docs/prometheus/latest/querying/functions/", "accessed": "2026-11-22", "supports": "the sum by (le) rate(...) form and the uniform-distribution (linear) interpolation within a bucket", "status": "verified" },
+    { "title": "Prometheus docs, \"Metric and label naming\"", "url": "https://prometheus.io/docs/practices/naming/", "accessed": "2026-11-22", "supports": "every unique label combination is a new time series; do not use labels for high-cardinality dimensions such as user ids or email addresses", "status": "verified" },
+    { "title": "Prometheus docs, \"Configuration\"", "url": "https://prometheus.io/docs/prometheus/latest/configuration/configuration/", "accessed": "2026-11-22", "supports": "default scrape_interval of 1m", "status": "verified" },
+    { "title": "Prometheus docs, \"FAQ: Why do you pull rather than push?\"", "url": "https://prometheus.io/docs/introduction/faq/", "accessed": "2026-11-22", "supports": "reasons for pulling (run a monitoring instance on a laptop, tell when a target is down, inspect a target in a browser), the Pushgateway for cases where you must push, and the statement that pull versus push is not a major point", "status": "verified" },
+    { "title": "prometheus/client_golang package docs, DefBuckets", "url": "https://pkg.go.dev/github.com/prometheus/client_golang/prometheus", "accessed": "2026-11-22", "supports": "the default histogram boundaries .005 to 10 seconds (11 boundaries) tailored to network-service response times", "status": "verified" },
+    { "title": "Brendan Gregg, \"The USE Method\"", "url": "https://www.brendangregg.com/usemethod.html", "accessed": "2026-11-22", "supports": "for every resource check utilisation, saturation and errors; definitions of the three terms; intended for early-stage performance investigation", "status": "verified" },
+    { "title": "Grafana Labs blog, \"The RED Method: How to Instrument Your Services\" (report of Tom Wilkie's GrafanaCon talk)", "url": "https://grafana.com/blog/2018/08/02/the-red-method-how-to-instrument-your-services/", "accessed": "2026-11-22", "supports": "Tom Wilkie created RED in 2015; Rate, Errors, Duration; RED as the four golden signals without saturation; USE for hardware-like resources; apply RED to every service so people can be on call for code they did not write", "status": "secondary" },
+    { "title": "Google SRE Book, ch. 6 \"Monitoring Distributed Systems\" (written by Rob Ewaschuk)", "url": "https://sre.google/sre-book/monitoring-distributed-systems/", "accessed": "2026-11-22", "supports": "the four golden signals; symptoms versus causes; every page should be urgent and actionable; prefer catching symptoms over causes; distributions rather than means", "status": "verified" },
+    { "title": "Rob Ewaschuk, \"My Philosophy on Alerting\"", "url": "https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q/mobilebasic", "accessed": "2026-11-22", "supports": "the essay's ideas form the foundation of the SRE book's monitoring chapter; alert on symptoms, keep causes on dashboards; the sparing exception for resources walking towards a cliff (quota, memory, disk)", "status": "verified" },
+    { "title": "Prometheus docs, \"Alerting\" (practices)", "url": "https://prometheus.io/docs/practices/alerting/", "accessed": "2026-11-22", "supports": "alert on latency and errors as high in the stack as possible; page on latency at only one point in a stack; page on user-visible errors", "status": "verified" }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "slug": "incident-response",
+  "title": "Incidents, postmortems and chaos engineering",
+  "moduleId": "operations",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "The pager fires at 3 a.m., three engineers debug the same thing in three chats, nobody updates customers, and the same outage returns next quarter.",
+  "summary": "Incident response runs an outage with severity levels, an incident commander who delegates operations and communications, a live timeline and a status page, then learns from it with a blameless postmortem whose action items buy back the error budget.",
+  "catTip": "When the fish tank overflows, one cat commands, one cat mops and one cat tells the humans. Afterwards nobody blames the cat who knocked the pump; we ask why the pump could be knocked. Then we practise knocking it on purpose.",
+  "recall": {
+    "q": "Who runs an incident and what does each role own?",
+    "a": "The incident commander owns the overall picture and every role not delegated; the operations lead owns the fix; the communications lead owns updates to the status page and stakeholders. The live incident document holds the timeline, which becomes the postmortem."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without roles and a timeline, several people fix the same thing while nobody talks to customers, and without a blameless postmortem the organisation hides causes and repeats the outage.",
+    "tradeoffs": "Formal roles, status cadences, postmortem reviews and game days cost engineering time on every incident and every quarter, and averages such as MTTR are too noisy to prove the investment is paying off.",
+    "explainSimply": "An incident is run like an emergency room: triage decides how serious it is, one person leads and does not also operate, one person keeps the chart and one talks to the family. Afterwards the team reviews the chart without blaming anyone and fixes what let the mistake happen. Then they rehearse, so that the next real emergency is not the first time.",
+    "hint": "Think about the three jobs that must happen at once during an outage and who holds the ones nobody has taken."
+  },
+  "meow": "Page, meow. Commander, mopper, talker. Timeline, status page, blameless postmortem. Then we break it on purpose, gently.",
+  "quiz": [
+    {
+      "prompt": "During a SEV-1, the engineer fixing the database also keeps replying to executives and updating the status page. According to the incident command model, what is wrong?",
+      "options": [
+        "Nothing; the person closest to the problem knows the most and should communicate it",
+        "Operations and communications are held by one person, so neither is done well and nobody holds the overall picture",
+        "Executives should not be told about an incident until the postmortem is written",
+        "Status page updates should wait until the root cause is known"
+      ],
+      "answer": 1,
+      "explanation": "The model separates the incident commander, the operations lead and the communications lead precisely so that fixing and informing do not compete for one person's attention. The last option is the believable error: status pages are updated on a cadence with what is known so far, never held back for a root cause."
+    },
+    {
+      "prompt": "Why does Google's analysis warn against using MTTR to judge whether reliability work is paying off?",
+      "options": [
+        "Because MTTR only counts incidents that monitoring detected",
+        "Because incident durations vary so widely and there are so few of them that the mean swings by chance, hiding or inventing improvements",
+        "Because MTTR double-counts incidents that have more than one root cause",
+        "Because MTTR is measured in minutes while SLOs are measured in percentages"
+      ],
+      "answer": 1,
+      "explanation": "Davidovič's Monte Carlo simulations show that heavy-tailed durations and small samples make the mean unreliable for decisions or trends. The first option is the plausible distractor, but detection method is a problem for MTTD's definition, not the statistical flaw in averaging recovery times."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Name the five triggers the SRE book lists for writing a postmortem.",
+      "a": "User-visible downtime or degradation beyond a threshold; data loss of any kind; on-call intervention such as a rollback or traffic reroute; a resolution time above a threshold; a monitoring failure, which usually means someone found the incident by hand."
+    },
+    {
+      "q": "A postmortem concludes that the engineer should have been more careful. What is wrong, and what replaces it?",
+      "a": "It blames a person rather than the system, so the next person in the same situation will fail the same way and people will hide details next time. Replace it with the conditions that made the mistake possible and action items with owners: a guard rail, a test, a runbook step."
+    }
+  ],
+  "glossary": [
+    { "term": "MTTD", "full": "Mean Time To Detect", "note": "Average time from a fault starting to the alert; useful per incident, noisy as a quarterly average." },
+    { "term": "MTTR", "full": "Mean Time To Recover", "note": "Average time from alert (or fault) to service restored; heavy-tailed durations and small samples make it a poor trend metric." },
+    { "term": "ICS", "full": "Incident Command System", "note": "The emergency-management structure firefighters created in 1968, with a single commander delegating roles; Google's incident response is adapted from it." }
+  ],
+  "sources": [
+    { "title": "Google SRE Book, ch. 14 \"Managing Incidents\"", "url": "https://sre.google/sre-book/managing-incidents/", "accessed": "2026-11-22", "supports": "the three conditions for declaring an incident; incident command, operational work and communication roles; the commander holds undelegated roles; live incident state document, recognised command post, clear live handoff", "status": "verified" },
+    { "title": "Google SRE Book, ch. 15 \"Postmortem Culture: Learning from Failure\"", "url": "https://sre.google/sre-book/postmortem-culture/", "accessed": "2026-11-22", "supports": "blameless postmortems; the five postmortem triggers; an unreviewed postmortem might as well never have existed", "status": "verified" },
+    { "title": "Google SRE Book, Appendix D \"Example Postmortem\"", "url": "https://sre.google/sre-book/example-postmortem/", "accessed": "2026-11-22", "supports": "the template sections: summary, impact, root causes, trigger, resolution, detection, action items with type and owner, lessons learned, timeline", "status": "verified" },
+    { "title": "Google SRE Book, ch. 11 \"Being On-Call\"", "url": "https://sre.google/sre-book/being-on-call/", "accessed": "2026-11-22", "supports": "the 50% cap on operational work and 25% on-call cap; at most two incidents per 12-hour shift; 5-minute and 30-minute response-time expectations", "status": "verified" },
+    { "title": "Google SRE Book, ch. 6 \"Monitoring Distributed Systems\"", "url": "https://sre.google/sre-book/monitoring-distributed-systems/", "accessed": "2026-11-22", "supports": "every page should be actionable and urgent; page on symptoms rather than causes", "status": "verified" },
+    { "title": "Google SRE Book, ch. 3 \"Embracing Risk\"", "url": "https://sre.google/sre-book/embracing-risk/", "accessed": "2026-11-22", "supports": "releases are halted while the error budget is exhausted", "status": "verified" },
+    { "title": "Google SRE Workbook, ch. 9 \"Incident Response\"", "url": "https://sre.google/workbook/incident-response/", "accessed": "2026-11-22", "supports": "Google's incident response is based on the Incident Command System established by firefighters in 1968; the IC, CL and OL roles; the three Cs", "status": "verified" },
+    { "title": "Google SRE Workbook, ch. 10 \"Postmortem Culture: Learning from Failure\"", "url": "https://sre.google/workbook/postmortem-culture/", "accessed": "2026-11-22", "supports": "the marks of a bad postmortem: missing context, key details omitted, missing ownership, counterproductive finger pointing, delayed publication", "status": "verified" },
+    { "title": "Google SRE Workbook, ch. 2 \"Implementing SLOs\"", "url": "https://sre.google/workbook/implementing-slos/", "accessed": "2026-11-22", "supports": "error-budget policies that pause feature launches and focus the team on reliability when the budget is exhausted", "status": "verified" },
+    { "title": "Štěpán Davidovič, \"Incident Metrics in SRE: Critically Evaluating MTTR and Friends\" (O'Reilly, 2021)", "url": "https://sre.google/resources/practices-and-processes/incident-metrics-in-sre/", "accessed": "2026-11-22", "supports": "Monte Carlo simulation showing MTTR and similar statistics are poorly suited to decision-making or trend analysis", "status": "verified" },
+    { "title": "PagerDuty Incident Response documentation, Severity Levels", "url": "https://docs.pagerduty.com/ops-guides/incident-response-guide/severity-levels", "accessed": "2026-11-22", "supports": "SEV-1 to SEV-5 definitions and what each triggers; anything above SEV-3 is a major incident; when unsure treat it as the higher level", "status": "verified" },
+    { "title": "Atlassian Incident Management, Understanding incident severity levels", "url": "https://www.atlassian.com/incident-management/kpis/severity-levels", "accessed": "2026-11-22", "supports": "severity as a measure of business impact; SEV 1 and 2 page on-call immediately, SEV 3 handled in working hours", "status": "verified" },
+    { "title": "Principles of Chaos Engineering", "url": "https://principlesofchaos.org/", "accessed": "2026-11-22", "supports": "the definition of chaos engineering and its advanced principles: steady-state hypothesis, vary real-world events, run in production, automate, minimise blast radius", "status": "verified" },
+    { "title": "Netflix, Chaos Monkey documentation", "url": "https://netflix.github.io/chaosmonkey/", "accessed": "2026-11-22", "supports": "Chaos Monkey randomly terminates instances in production", "status": "verified" },
+    { "title": "InfoQ, \"Netflix Open Sources Chaos Monkey\", 31 July 2012", "url": "https://www.infoq.com/news/2012/07/chaos-monkey", "accessed": "2026-11-22", "supports": "Chaos Monkey first unveiled in December 2010 and open-sourced in July 2012", "status": "secondary" },
+    { "title": "AWS Well-Architected Framework, REL12-BP05 \"Conduct game days regularly\"", "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/rel12-bp05.html", "accessed": "2026-11-22", "supports": "a game day is a scheduled exercise in which the team responds to a simulated failure in a production-like environment with the same people and procedures as a real event", "status": "verified" }
+  ]
+}

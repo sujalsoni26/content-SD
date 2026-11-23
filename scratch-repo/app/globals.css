@@ -1,0 +1,228 @@
+@import "tailwindcss";
+
+/* Dark mode follows a `.dark` class on <html> (set before paint by ThemeScript). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ------------------------------------------------------------------
+   Design tokens. Semantic colours are CSS variables so one Tailwind
+   utility (bg-surface, text-ink-2, border-line…) works in both themes.
+   Direction: a drafting table — cool blueprint paper, cobalt ink,
+   amber for data stores and the companion.
+   ------------------------------------------------------------------ */
+:root {
+  --canvas: #f2f4f8;
+  --grid: rgb(45 84 224 / 0.05);
+  --surface: #ffffff;
+  --surface-2: #eef1f6;
+  --surface-3: #dfe4ed;
+  --ink: #131a2c;
+  --ink-2: #485267;
+  --ink-3: #6f7a90;
+  --line: #d8dee8;
+  --line-strong: #a5b0c2;
+  --accent: #2b50d8;
+  --accent-ink: #ffffff;
+  --accent-soft: #e3e9fc;
+  --amber: #d98510;
+  --amber-ink: #8a4f00;
+  --amber-soft: #fcefd6;
+  --good: #187a4f;
+  --good-soft: #dcf2e6;
+  --bad: #c4352d;
+  --bad-soft: #fbe3e0;
+  --warn: #9b620c;
+  --warn-soft: #faeed6;
+  --violet: #6741c9;
+  --violet-soft: #ece5fb;
+  --header: rgb(242 244 248 / 0.85);
+  --shadow-color: 222 47% 11%;
+  color-scheme: light;
+}
+
+.dark {
+  --canvas: #0c111e;
+  --grid: rgb(124 155 255 / 0.045);
+  --surface: #131a2b;
+  --surface-2: #1a2337;
+  --surface-3: #243049;
+  --ink: #e6eaf3;
+  --ink-2: #a8b2c6;
+  --ink-3: #7f8aa3;
+  --line: #263049;
+  --line-strong: #3f4b6a;
+  --accent: #7f9cff;
+  --accent-ink: #0c111e;
+  --accent-soft: #1c2853;
+  --amber: #f2b347;
+  --amber-ink: #f5bf5f;
+  --amber-soft: #382a12;
+  --good: #52c690;
+  --good-soft: #11301f;
+  --bad: #ff7369;
+  --bad-soft: #3a1714;
+  --warn: #f0b24f;
+  --warn-soft: #33260f;
+  --violet: #b6a0ff;
+  --violet-soft: #2a2050;
+  --header: rgb(12 17 30 / 0.82);
+  --shadow-color: 225 60% 2%;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-amber: var(--amber);
+  --color-amber-ink: var(--amber-ink);
+  --color-amber-soft: var(--amber-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-violet: var(--violet);
+  --color-violet-soft: var(--violet-soft);
+  --color-header: var(--header);
+
+  --font-display: var(--font-bricolage), ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+  --font-sans: var(--font-atkinson), ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  --shadow-soft: 0 1px 2px hsl(var(--shadow-color) / 0.06), 0 4px 16px hsl(var(--shadow-color) / 0.06);
+  --shadow-lift: 0 2px 6px hsl(var(--shadow-color) / 0.08), 0 18px 48px hsl(var(--shadow-color) / 0.18);
+
+  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --animate-rise: rise 0.5s var(--ease-out-soft) both;
+  --animate-pop: pop 0.4s var(--ease-out-soft);
+  --animate-march: march 1.1s linear infinite;
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes pop {
+    40% { transform: scale(1.12); }
+  }
+  @keyframes march {
+    to { stroke-dashoffset: -13; }
+  }
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-padding-top: 5rem;
+  }
+  body {
+    background-color: var(--canvas);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 28px 28px;
+    color: var(--ink);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--ink);
+  }
+  :focus-visible {
+    outline: 2.5px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  h1, h2, h3, h4 {
+    text-wrap: balance;
+  }
+  /* Highlighter stroke for the one key phrase per section (lessons write <mark> directly). */
+  mark {
+    background-color: transparent;
+    background-image: linear-gradient(transparent 52%, var(--amber-soft) 52%);
+    color: inherit;
+    padding: 0 2px;
+    border-radius: 2px;
+  }
+  .dark mark {
+    background-image: linear-gradient(transparent 52%, color-mix(in srgb, var(--amber) 35%, transparent) 52%);
+  }
+}
+
+/* ---------------- SVG diagram vocabulary (static + interactive diagrams) ---------------- */
+@layer components {
+  .dg-box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+  .dg-box--store { fill: var(--amber-soft); stroke: var(--amber); }
+  .dg-box--accent { fill: var(--accent-soft); stroke: var(--accent); }
+  .dg-box--good { fill: var(--good-soft); stroke: var(--good); }
+  .dg-box--bad { fill: var(--bad-soft); stroke: var(--bad); }
+  .dg-box--ghost { fill: transparent; stroke-dasharray: 6 5; }
+  .dg-zone { fill: var(--surface-2); fill-opacity: 0.55; stroke: var(--line-strong); stroke-dasharray: 4 5; stroke-width: 1.2; }
+  .dg-text { fill: var(--ink); font-family: var(--font-sans); font-size: 15px; font-weight: 700; }
+  .dg-sub { fill: var(--ink-2); font-family: var(--font-sans); font-size: 12.5px; }
+  .dg-label { fill: var(--ink-3); font-family: var(--font-sans); font-size: 12px; }
+  .dg-text--accent { fill: var(--accent); }
+  .dg-text--bad { fill: var(--bad); }
+  .dg-text--good { fill: var(--good); }
+  .dg-line { fill: none; stroke: var(--line-strong); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .dg-line--dash { stroke-dasharray: 5 5; }
+  .dg-line--accent { stroke: var(--accent); }
+  .dg-line--bad { stroke: var(--bad); }
+  .dg-line--good { stroke: var(--good); }
+  .dg-flow { stroke-dasharray: 7 6; animation: var(--animate-march); }
+  .dg-ah { fill: var(--line-strong); }
+  .dg-ah--accent { fill: var(--accent); }
+  .dg-ah--bad { fill: var(--bad); }
+  .dg-dot { fill: var(--ink-3); }
+  .dg-dot--accent { fill: var(--accent); }
+  .dg-dot--good { fill: var(--good); }
+  .dg-dot--bad { fill: var(--bad); }
+  .dg-dot--muted { fill: var(--line-strong); }
+
+  /* Shiki dual-theme code blocks (rehype emits --shiki-light / --shiki-dark per token). */
+  .shiki,
+  .shiki span {
+    color: var(--shiki-light);
+  }
+  .dark .shiki,
+  .dark .shiki span {
+    color: var(--shiki-dark);
+  }
+  .shiki {
+    background-color: transparent !important;
+  }
+
+  /* Mermaid output inherits the theme through themeVariables; keep it responsive. */
+  .mermaid-render svg {
+    max-width: 100%;
+    height: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* User-chosen "reduced" or "off" motion (companion settings) gets the same treatment site-wide. */
+html[data-motion="reduced"] *, html[data-motion="reduced"] *::before, html[data-motion="reduced"] *::after,
+html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}

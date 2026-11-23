@@ -1,0 +1,78 @@
+Every case study in this module is written to the same template, in the order the [interview playbook](/learn/playbook) uses. Learn the shape once and you can skim the routine parts of any design and slow down where the real difficulty lives.
+
+## The template
+
+| Step | Section | What you will find there |
+| --- | --- | --- |
+| 1 | Requirements | What users can do (functional), how well the system must do it (non-functional, each with a reason), and what is out of scope |
+| 2 | Estimation | The assumptions, stated first, then QPS, storage and bandwidth, and the one number that dominates |
+| 3 | API | Each endpoint as a row: method, path, request, success, errors |
+| 4 | Data model | Tables or documents with their keys and indexes |
+| 5 | High-level design | The architecture, what each component is responsible for, and the hottest request and data flows |
+| 6 | Storage and caching | Which store holds which data, and what is cached where |
+| 7 | Scaling | How each tier grows, and where sharding or fan-out appears |
+| 8 | Consistency and availability | Per feature, with the reason |
+| 9 | Failure and recovery | What breaks, what users see, how it heals |
+| 10 | Security | Who may do what, and the abuse the design invites |
+| 11 | Observability | The handful of metrics and the one trace that prove the system is healthy |
+| 12 | Trade-offs and bottlenecks | The next thing to break, and the alternatives not taken |
+| 13 | How it evolves | What changes at 10× and at 100× |
+| Deep dives | The two or three hardest problems | Each one gets its own section, as [Design a URL shortener](/learn/url-shortener) does |
+
+The order is not decoration. Each section's output is the next section's input: you cannot size servers before you know the traffic, and you cannot choose a database before you know the data and the queries. <mark>The numbers decide the boxes.</mark>
+
+<Mermaid caption="The template as a pipeline: each section's output is the next section's input, and the dominant number from the estimation decides which later sections become deep dives." chart={`flowchart LR
+    R["1 Requirements"] --> E["2 Estimation: the dominant number"]
+    E --> A["3 API"] --> D["4 Data model"] --> H["5 High-level design"]
+    H --> S["6 Storage and caching"] --> SC["7 Scaling"] --> CA["8 Consistency and availability"]
+    CA --> F["9 Failure and recovery"] --> SE["10 Security"] --> O["11 Observability"]
+    O --> T["12 Trade-offs"] --> EV["13 Evolution at 10x and 100x"]
+    E -. "picks the two or three hardest problems" .-> DD["Deep dives"]
+`} />
+
+## How to read a case study
+
+<Steps>
+
+1. Read the requirements, then **stop**. Write your own estimates and sketch a first diagram before reading on.
+2. Compare. Where you differed, ask whether the difference matters. Often two designs are both right under different assumptions, and the case study says which assumption decides.
+3. Change one assumption (ten times the users, objects a hundred times bigger) and work out which boxes change. The estimator in [The formulas](/learn/estimation-formulas) does the arithmetic.
+4. Hunt for the word *because*. Every box has a sentence that earns it. A box you cannot justify is a box you should remove.
+
+</Steps>
+
+<Callout type="idea" title="Three shapes, one question">
+
+Before the API, name the shape (see [Three system shapes](/learn/system-shapes)): read-heavy with tiny objects, storage- and bandwidth-heavy, or a write-heavy stream. The shape tells you which sections will be routine and which will be the deep dives.
+
+</Callout>
+
+## How to practise for an interview
+
+- **Requirements in two minutes.** Say the functional list, then the non-functional list with reasons, then what you are leaving out. Ask one clarifying question.
+- **Numbers out loud.** State each assumption before using it, round aggressively, and finish with the dominant number.
+- **Draw the simplest thing first.** One server and one database, then add a box only when a number forces it.
+- **Choose your deep dives.** Pick the two problems the dominant number created and spend most of the remaining time there.
+- **Keep a clock.** The playbook's DeepDive gives a rough split for a 45-minute round.
+
+<Callout type="interview" title="Lead with the dominant number">
+
+"Reads are a thousand times writes and the same few links get most of them, so this is a caching problem." One sentence like that, early, tells the interviewer you have found the design problem rather than the diagram.
+
+</Callout>
+
+## The order of the case studies
+
+The shortener comes first because it is small enough to hold in your head. The next few add one new dimension each: [Pastebin](/learn/design-pastebin) adds large objects, [a distributed rate limiter](/learn/design-rate-limiter) adds shared state across instances, [a notification system](/learn/design-notification-system) adds fan-out and retries. The later studies combine several tracks at once, which is why their prerequisites point into the advanced modules.
+
+<Callout type="analogy" title="Recipes list ingredients before steps">
+
+A cookbook puts ingredients, then method, then variations, in the same order on every page. You do not reread the format each time; you look for the unusual ingredient. Case studies work the same way: the template is fixed so your attention can go to the one thing that is different about this system.
+
+</Callout>
+
+## Come back here after each study
+
+Each card below names a problem from one case study in this module. Say the design decision and the reason before you flip, and mark a miss as "Again" so the card returns. The deck is thin on your first visit and complete by the last study; revisiting it after each one is the cheapest practice this module offers.
+
+<Interactive name="recall-cards" variant="hld" />

@@ -1,0 +1,293 @@
+**Snake and Ladder** is the smallest board game that still exercises every step of a low-level design: a **board** of numbered cells, **snakes** and **ladders** that jump a token, **dice** that bring in chance, **players** who take turns, and a **game loop** that stops when someone wins. The decision that separates a good answer from a fair one is treating the dice as an abstraction, so the game can be tested without luck.
+
+## Requirements and assumptions
+
+**Functional**
+
+- Two to four players, each with one token that starts off the board on cell 0.
+- A board of n cells, 100 by default (a 10 by 10 grid), with snakes and ladders placed at setup. A snake's head is above its tail; a ladder's bottom is below its top.
+- Players roll one six-sided die in turn and move forward by the roll. Landing on a snake's head sends the token to the tail; landing on a ladder's bottom lifts it to the top.
+- The first token to reach the last cell wins.
+- Rule variants are configuration, not code changes: what happens when a roll would pass the last cell (win anyway, stay put, or bounce back by the excess), and whether a six earns another turn.
+
+**Non-functional**
+
+- Deterministic under test: a test must be able to say "roll a 4, then a 6" and assert where the token ends up.
+- A board is validated when it is built; an impossible board is rejected before the first turn.
+- Small, readable classes. This is a basic problem, and the interviewer is checking responsibilities and relationships, not cleverness.
+
+**Assumptions and out of scope.** Single process, turn-based, no network. The display is someone else's problem, so there is no user interface, no saving of games and no computer opponent.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility |
+| --- | --- |
+| `Board` | Knows its size and the jumps keyed by start cell; answers "a token landing on cell c ends up where?" |
+| `Jump`, `Snake`, `Ladder` | Know a start and an end; a snake goes down and a ladder goes up, enforced when they are created |
+| `Dice` | Does `roll()`; `RandomDice` for play, `FixedDice` for tests |
+| `Player` | Knows a name and a position; moves when the game tells it to |
+| `GameRules` | Knows the variants: the overshoot rule and whether a six repeats |
+| `Game` | Does the turn: whose go, roll, resolve overshoot, follow a jump, check the win, rotate the queue |
+| `BoardBuilder` | Does setup validation and produces an immutable `Board` |
+
+There is no `Cell` class. A cell is an `int`; a class earns its place when it has behaviour or an invariant, and a cell number here has neither. Saying that out loud is better than drawing a hundred objects that do nothing. `Snake` and `Ladder` are two classes behind one interface because the board treats them identically, the polymorphism from [OOP pillars](/learn/oop-pillars): `destination(cell)` never asks which kind it has.
+
+## Class design
+
+<Mermaid caption="Static structure. The board owns its jumps (filled diamond); the game aggregates players that exist independently of it (hollow diamond); dice and jumps are interfaces so that tests and new piece types plug in." chart={`classDiagram
+    direction LR
+    class Dice {
+        <<interface>>
+        +roll() int
+    }
+    class Jump {
+        <<interface>>
+        +start() int
+        +end() int
+    }
+    class RandomDice {
+        -Random random
+        -int faces
+    }
+    class FixedDice {
+        -Iterator rolls
+    }
+    class Snake {
+        -int head
+        -int tail
+    }
+    class Ladder {
+        -int bottom
+        -int top
+    }
+    class Board {
+        -int size
+        -Map jumpsByStart
+        +destination(int cell) int
+    }
+    class Player {
+        -String name
+        -int position
+        +moveTo(int cell)
+    }
+    class GameRules {
+        -OvershootRule overshoot
+        -boolean extraTurnOnSix
+    }
+    class Game {
+        -Deque turnOrder
+        -Player winner
+        +playTurn()
+        +isOver() boolean
+    }
+    class BoardBuilder {
+        +snake(int head, int tail) BoardBuilder
+        +ladder(int bottom, int top) BoardBuilder
+        +build() Board
+    }
+    RandomDice ..|> Dice
+    FixedDice ..|> Dice
+    Snake ..|> Jump
+    Ladder ..|> Jump
+    Board "1" *-- "0..*" Jump : by start cell
+    Game "1" --> "1" Board
+    Game "1" --> "1" Dice
+    Game "1" --> "1" GameRules
+    Game "1" o-- "2..*" Player : turn order
+    BoardBuilder ..> Board : builds
+`} />
+
+The relationships are the vocabulary of [Class relationships and UML](/learn/class-relationships-uml) applied once each. `Board` to `Jump` is composition: a jump belongs to one board and dies with it. `Game` to `Player` is aggregation: the same players can start a second game. `Game` to `Dice` is an association to an interface, which is the seam the tests use. `BoardBuilder` to `Board` is a dependency: it creates the board and keeps no reference.
+
+## Key interfaces and methods
+
+The dice first, because everything testable depends on it. `Random.nextInt(6)` returns 0 to 5, so a die adds one. `FixedDice` is a fake in the sense of [Testing and extensibility](/learn/testing-extensibility): a working, simplified implementation whose rolls come from a script.
+
+```java
+interface Dice { int roll(); }
+
+final class RandomDice implements Dice {
+    private final Random random;  private final int faces;
+    RandomDice(Random random, int faces) { this.random = random; this.faces = faces; }
+    public int roll() { return random.nextInt(faces) + 1; }   // nextInt(6) is 0..5, so a die is 1..6
+}
+
+final class FixedDice implements Dice {                      // a test fake: the rolls come from a script
+    private final Iterator<Integer> rolls;
+    FixedDice(Integer... script) { this.rolls = List.of(script).iterator(); }
+    public int roll() { return rolls.next(); }
+}
+```
+
+Snakes and ladders are records that refuse to be built the wrong way round.
+
+```java
+sealed interface Jump permits Snake, Ladder { int start(); int end(); }
+
+record Snake(int head, int tail) implements Jump {
+    Snake { if (tail >= head) throw new IllegalArgumentException("a snake goes down: " + head + " to " + tail); }
+    public int start() { return head; }   public int end() { return tail; }
+}
+// Ladder(bottom, top) is the mirror image: top must be greater than bottom
+
+final class Board {
+    private final int size;                          // 100 for a 10 by 10 board
+    private final Map<Integer, Jump> jumpsByStart;   // at most one jump starts on any cell
+    int size() { return size; }
+    int destination(int cell) {                      // follow a snake or a ladder once
+        Jump j = jumpsByStart.get(cell);
+        return j == null ? cell : j.end();
+    }
+}
+```
+
+The overshoot rule is an enum with a method, the lightest form of a Strategy: each constant is one algorithm and the game never branches on which one it has.
+
+```java
+enum OvershootRule {
+    WIN, STAY, BOUNCE;
+    int resolve(int from, int roll, int last) {
+        int target = from + roll;
+        if (target <= last) return target;
+        return switch (this) {
+            case WIN -> last;                        // passing the last cell still wins
+            case STAY -> from;                       // the token does not move
+            case BOUNCE -> last - (target - last);   // needs a 3, rolls a 5: forward 3, back 2
+        };
+    }
+}
+```
+
+The game owns the only mutable state, the turn queue and the winner, and `playTurn` is the whole algorithm.
+
+```java
+final class Game {
+    private final Board board;  private final Dice dice;  private final GameRules rules;
+    private final Deque<Player> turnOrder;  private Player winner;
+
+    void playTurn() {
+        if (winner != null) throw new IllegalStateException("game over");
+        Player p = turnOrder.pollFirst();
+        int roll = dice.roll();
+        int target = rules.overshoot().resolve(p.position(), roll, board.size());
+        p.moveTo(board.destination(target));               // snake or ladder applied after the bounce
+        if (p.position() == board.size()) { winner = p; return; }
+        if (rules.extraTurnOnSix() && roll == 6) turnOrder.addFirst(p); else turnOrder.addLast(p);
+    }
+}
+```
+
+## Interactions
+
+<Mermaid caption="One turn. The game asks each collaborator one question and keeps the sequencing to itself." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant G as Game
+    participant D as Dice
+    participant R as OvershootRule
+    participant B as Board
+    participant P as Asha
+    G->>D: roll()
+    D-->>G: 4
+    G->>R: resolve(from 95, roll 4, last 100)
+    R-->>G: 99
+    G->>B: destination(99)
+    B-->>G: 78, there is a snake head on 99
+    G->>P: moveTo(78)
+    Note over G: 78 is not 100, so no winner and Asha goes to the back of the queue
+`} />
+
+The full loop in pseudocode, which is what you would write on the whiteboard before any class:
+
+```text
+play(players, board, dice, rules):
+    queue = players in seating order, every token on cell 0
+    while there is no winner:
+        p = queue.removeFirst()
+        roll = dice.roll()
+        target = rules.overshoot.resolve(p.position, roll, board.size)
+        p.position = board.destination(target)      # follow a snake or a ladder once
+        if p.position == board.size: winner = p
+        else if rules.extraTurnOnSix and roll == 6: queue.addFirst(p)
+        else: queue.addLast(p)
+    announce winner
+```
+
+<Mermaid caption="Resolving one turn. Every diamond is a rule that lives in exactly one class." chart={`flowchart TD
+    A["Take the player at the front of the queue"] --> B["Roll the dice"]
+    B --> C{"Would the roll pass the last cell?"}
+    C -->|"no"| E["Target is position plus roll"]
+    C -->|"yes"| D["Apply the overshoot rule: win, stay or bounce back"]
+    E --> F{"Snake head or ladder bottom on the target?"}
+    D --> F
+    F -->|"yes"| G["Move to the tail or the top, once"]
+    F -->|"no"| H["Move to the target"]
+    G --> I{"On the last cell?"}
+    H --> I
+    I -->|"yes"| W["Winner, game over"]
+    I -->|"no"| J{"Rolled a six with the extra-turn rule on?"}
+    J -->|"yes"| K["Same player goes again"]
+    J -->|"no"| L["Player joins the back of the queue"]
+`} />
+
+<Callout type="analogy" title="Rehearsal dice">
+
+In a stage play the die is a prop, and in rehearsal the director decides what it shows so that the actors can practise the scene where the hero slides down the snake. `FixedDice` is the director's die; `RandomDice` is opening night. Where the analogy fails: nobody mistakes a rehearsal for the real show, but a fake left in production code is a bug, so the fake lives in the test sources and the composition root chooses the real one.
+
+</Callout>
+
+## Design patterns used and why
+
+- **Strategy**, twice. `Dice` makes randomness replaceable, which is what makes the game testable; `OvershootRule` makes the house rule replaceable without a conditional in the loop. Both have more than one real implementation, which is the test for whether a Strategy has earned its place.
+- **Builder** for the board. A board has many optional parts, snakes and ladders in any number, and rules that only make sense once all parts are known: no two jumps from one cell, no jump starting on the last cell. `build()` is where those checks run, as the [creational patterns](/learn/design-patterns-creational) lesson describes.
+- **Not used.** No Singleton for `Game` or `Board`: two games in one process is a normal thing to want, and a test wants dozens. No Observer yet: a `PlayerMoved` event is the natural hook for a display, and it is listed under extensibility rather than built now.
+
+Reproducibility has a second route worth knowing: two `Random` instances created with the same seed and given the same sequence of calls produce identical sequences. A seeded `RandomDice` reproduces a whole game, which is useful for replaying a bug report; the fake remains the better unit-testing tool because a test can state the rolls it needs instead of searching for a seed that produces them.
+
+## Edge cases and error handling
+
+| Case | Decision |
+| --- | --- |
+| Snake head on the last cell | Reject at build: nobody could ever win |
+| Any jump starting on cell 0 | Reject at build: tokens never land there |
+| Two jumps starting on one cell | Reject at build |
+| A ladder's top is a snake's head | Decide once: follow jumps once (the default here), or reject such boards at build. Following chains needs cycle detection, so it is opt-in |
+| Snake with tail at or above its head | Rejected by the record's constructor |
+| Roll would pass the last cell | The configured overshoot rule decides: win, stay or bounce |
+| Bounce lands on a snake | The jump applies after the bounce, because resolve runs before destination |
+| Fewer than two players | Reject when the game is created |
+| A player leaves mid-game | Remove from the queue; with one player left, that player wins by default, a documented decision |
+| Board of one cell, or dice with one face | Reject: no game is possible |
+
+Setup problems are `IllegalArgumentException`s thrown by constructors and `build()`, so a bad board never reaches a turn; `playTurn` after a win is an `IllegalStateException`. Fail fast at the boundary, as the [error handling](/learn/error-handling) lesson puts it, and the loop itself needs no defensive checks.
+
+## Concurrency
+
+None, and say so. The game is turn-based and single-threaded; the only mutable state is the queue, the positions and the winner, all owned by `Game`. A networked version would receive moves from several connections and serialise them into one queue of commands handled by a single game thread, which keeps this design intact. `java.util.Random` is thread-safe but contended; its documentation suggests `ThreadLocalRandom` for multithreaded designs, a detail for that future, not for now.
+
+## Extensibility and trade-offs
+
+- **Bigger boards, more faces, two dice**: configuration, plus a `Dice` implementation that sums two rolls.
+- **New cell effects** ("miss a turn", teleport): when the second kind of effect arrives, generalise `Jump` to a `CellEffect` with `apply(Player)`; not before.
+- **A display or a log**: an Observer on `PlayerMoved` and `GameWon`.
+- **Undo** belongs to the next case study, [Chess](/learn/lld-chess), where moves become Commands.
+
+| Decision | You gain | You pay |
+| --- | --- | --- |
+| Dice behind an interface | Deterministic tests, swappable randomness | One interface and one fake for a one-line method |
+| Jumps as a map by start cell | Sparse, easy to validate in the builder | An array of 101 destinations would be simpler and faster for a fixed board |
+| Enum rule with a method | Three variants in nine lines | A fourth variant with its own state would push it to full classes |
+| Follow a jump once | No cycles, trivial to reason about | Some house rules expect chains |
+
+<Callout type="interview" title="The two-minute version">
+
+"Board owns jumps keyed by start cell and answers destination(cell). Snake and Ladder implement one Jump interface and validate their direction. Dice is an interface so tests inject a scripted FixedDice. Game owns a deque of players and the winner; a turn is roll, resolve overshoot through a GameRules enum, follow one jump, check the win, rotate the queue. The builder rejects impossible boards before play." Then name the ladder-onto-snake decision before you are asked.
+
+</Callout>
+
+<mark>Make the dice an interface and the board a validated map of jumps, and the game loop becomes ten testable lines.</mark>

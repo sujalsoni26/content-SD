@@ -1,0 +1,66 @@
+{
+  "slug": "threat-modelling",
+  "title": "Threat modelling and security boundaries",
+  "moduleId": "security",
+  "level": "advanced",
+  "minutes": 9,
+  "problem": "Security reviews that start from a checklist miss the attacks that matter for this system, and reviews that start from fear never finish.",
+  "summary": "Threat modelling draws the system as a data-flow diagram with trust boundaries, applies STRIDE and abuse cases at each one, and answers with layers: zero-trust identity and authorisation inside the network, segmentation to cut blast radius, and DDoS absorbed at the edge first.",
+  "catTip": "I threat-model the house daily: front door, cat flap, the window the humans forget. For each I ask who could get in, what they could take, and whether anyone would notice. Then I nap in the safest spot.",
+  "recall": {
+    "q": "Apply STRIDE to the boundary between your services and the database when every service connects with the same password. Name two threats and their fixes.",
+    "a": "Spoofing: anyone holding the password is any service, fixed by per-workload identities (mTLS or dynamic credentials). Repudiation: the audit log shows one user for everything, fixed by per-service credentials. A third is elevation of privilege through injection into an over-privileged account, fixed by least-privilege grants and parameterised queries."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a model you defend the parts you happen to know about, trust the private network because it is private, and discover the abuse case when the ticket bots or the scrapers do.",
+    "tradeoffs": "Modelling takes time from building and goes stale as the architecture changes, zero trust adds identity and policy machinery to every internal call, and edge DDoS protection is a cost paid before any attack happens.",
+    "explainSimply": "Threat modelling is walking round the house with a burglar's eyes: list every door and window, and at each one ask who could pretend to be the postman, swap the parcel, sneak a look in, block the door or reach the safe. Then fix the worst ones first, and walk again after every renovation.",
+    "hint": "Who could pretend to be a service, and who would the log blame?"
+  },
+  "meow": "Front door, cat flap, forgotten window: who gets in, what do they take, who notices? Model done, nap begins.",
+  "quiz": [
+    {
+      "prompt": "In STRIDE, which category is violated when a user deletes a post and the system has no log that could prove who did it?",
+      "options": ["Spoofing", "Repudiation", "Information disclosure", "Elevation of privilege"],
+      "answer": 1,
+      "explanation": "Repudiation is denying an action without the system being able to prove otherwise; audit logs with request ids are the mitigation. Spoofing is about using someone else's identity, not about missing evidence."
+    },
+    {
+      "prompt": "A terabit-scale volumetric DDoS hits your API. Which layer must absorb it, and why?",
+      "options": [
+        "The application servers, by autoscaling until the attack ends",
+        "The API gateway's rate limiter, keyed by client IP",
+        "An anycast CDN or edge network, because only the edge has capacity near the traffic's sources",
+        "The database, by rejecting connections above a threshold"
+      ],
+      "answer": 2,
+      "explanation": "Floods must be stopped where there is matching capacity, and anycast spreads attack traffic across many sites close to where it originates. Rate limiting and load shedding protect the gateway and services from what reaches them, not from terabits."
+    }
+  ],
+  "cards": [
+    {
+      "q": "List the six STRIDE threats with the property each one violates.",
+      "a": "Spoofing: authentication. Tampering: integrity. Repudiation: non-repudiation. Information disclosure: confidentiality. Denial of service: availability. Elevation of privilege: authorisation."
+    },
+    {
+      "q": "Zero trust says the network is compromised. Does that make network segmentation pointless? Explain.",
+      "a": "No. Zero trust stops you relying on network location as proof of identity, so every internal call is authenticated and authorised. Segmentation still limits blast radius: a database reachable only from the application tier means a compromised edge host cannot even try the password."
+    }
+  ],
+  "glossary": [
+    { "term": "STRIDE", "full": "Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege", "note": "Microsoft's six threat categories, each the violation of one security property; applied per trust boundary or per element." }
+  ],
+  "sources": [
+    { "title": "Threat Modeling Manifesto", "url": "https://www.threatmodelingmanifesto.org/", "accessed": "2026-11-22", "supports": "the definition of threat modelling and the four key questions", "status": "verified" },
+    { "title": "OWASP Cheat Sheet Series: Threat Modeling Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html", "accessed": "2026-11-22", "supports": "data-flow diagram elements including trust boundaries, STRIDE mapped to security attributes, modelling early and maintaining the model as the system changes", "status": "verified" },
+    { "title": "Microsoft Learn: Threats, Microsoft Threat Modeling Tool (STRIDE model)", "url": "https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats", "accessed": "2026-11-22", "supports": "the six STRIDE categories and their definitions, and STRIDE's place in the Security Development Lifecycle", "status": "verified" },
+    { "title": "NIST SP 800-207, Zero Trust Architecture (August 2020), sections 2.1 and 3", "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-207.pdf", "accessed": "2026-11-22", "supports": "the definition of zero trust, the seven tenets paraphrased in the lesson, and the policy engine, policy administrator and policy enforcement point components", "status": "verified" },
+    { "title": "OWASP Cheat Sheet Series: Abuse Case Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Abuse_Case_Cheat_Sheet.html", "accessed": "2026-11-22", "supports": "abuse cases as unexpected uses of a feature, defined in a workshop and turned into security requirements or acceptance criteria", "status": "verified" },
+    { "title": "OWASP API Security Top 10 2023", "url": "https://api-security.owasp.org/editions/2023/en/0x11-t10/", "accessed": "2026-11-22", "supports": "API6:2023 Unrestricted Access to Sensitive Business Flows", "status": "verified" },
+    { "title": "RFC 4786, Operation of Anycast Services (BCP 126, December 2006)", "url": "https://www.rfc-editor.org/rfc/rfc4786", "accessed": "2026-11-22", "supports": "anycast making one service address available from many locations and constraining denial-of-service traffic to the regions around the nodes that receive it", "status": "verified" },
+    { "title": "AWS whitepaper: AWS Best Practices for DDoS Resiliency, Mitigation techniques", "url": "https://docs.aws.amazon.com/whitepapers/latest/aws-best-practices-ddos-resiliency/mitigation-techniques.html", "accessed": "2026-11-22", "supports": "edge services absorbing infrastructure-layer (layer 3 and 4) attacks with capacity in the terabits per second range, and web application firewalls handling layer 7 attacks", "status": "verified" },
+    { "title": "Dark Reading, \"20 Years of STRIDE: Looking Back, Looking Forward\" (2019)", "url": "https://www.darkreading.com/20-years-of-stride-looking-back-looking-forward/a/d-id/1334275", "accessed": "2026-11-22", "supports": "STRIDE's origin in Kohnfelder and Garg's 1999 Microsoft paper The Threats to Our Products", "status": "secondary" },
+    { "title": "Adam Shostack, Threat Modeling: Designing for Security (Wiley, 2014)", "url": "https://shostack.org/books/threat-modeling-book", "accessed": "2026-11-22", "supports": "the long-form treatment of STRIDE and STRIDE-per-element named in the DeepDive", "status": "reference" }
+  ]
+}

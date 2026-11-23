@@ -1,0 +1,72 @@
+A **multi-tenant** system serves many customers, its **tenants**, from one deployment, while each tenant experiences a system of its own. Every architectural decision in it is a decision about what to share. AWS's SaaS Lens names the three answers: **silo**, where a tenant gets dedicated resources; **pool**, where tenants share them; and **bridge**, where some layers are shared and some dedicated. Almost every real system is a bridge, and this lesson is about where to draw its lines.
+
+## Four ways to hold tenant data
+
+| Model | Isolation | Cost per tenant | Migration pain | Noisy-neighbour risk | Suits |
+| --- | --- | --- | --- | --- | --- |
+| Shared schema with a tenant id column (pool) | Logical only, enforced by every query and by row-level security | Lowest; an idle tenant costs nothing | One migration for everyone | Highest; one tenant's scan slows all | A long tail of small tenants |
+| Schema per tenant | Logical, by namespace | Low, but the catalogue bloats with thousands of copies of every table | One migration per schema, with partial-failure states | High; same engine, same disks | Hundreds of mid-sized tenants that want per-tenant restore |
+| Database per tenant (silo) | Strong: separate storage, credentials and backups | High; each database has a floor cost and its own connection pool | One migration per database | Low inside the database; shared compute still contends | Regulated or large tenants |
+| Cell (a silo of the whole stack) | Strongest: nothing shared but the router | Highest; a cell must fit its largest tenant | One rollout per cell, which is also the point | Contained to the cell | Tenants whose outage must never be anyone else's |
+
+Salesforce is the famous pool: one metadata-driven schema in which every row carries an organisation id and the platform partitions storage by it. Shopify is the famous cell design: its *pods* each hold a set of shops on fully isolated datastores. The [bulkheads](/learn/bulkheads-degradation) lesson built the cell and its thin router; this lesson only asks which tenants belong in one.
+
+## Tenant identity comes from the token
+
+A request's tenant is a **claim in the verified access token**, placed there at login when the identity provider bound the user to the tenant (Microsoft's Entra tokens carry it as `tid`; the SaaS Lens calls the bundle a SaaS identity). It is never read from a path, a query parameter or a subdomain the client controls, as [Authorisation](/learn/authorization) insisted, and it is enforced again at the data layer, where that lesson's row-level security policy turns a forgotten `WHERE` into an empty result rather than a leak. Services behind the gateway receive the tenant in the forwarded token or a signed header, and never trust a tenant id that arrives in a request body.
+
+Between the token and the row sits **tenant-aware routing**. A **tenant catalogue** records each tenant's home: pool cluster A, dedicated database 17, the EU cell. The gateway reads the claim, looks up the home and routes. Inside a pool, [sharding](/learn/sharding) by tenant id keeps all of one tenant's rows together, which is what Citus does when a table is distributed by its tenant column, and a tenant that outgrows its neighbours can be moved to a shard of its own with `isolate_tenant_to_new_shard`.
+
+<Mermaid caption="The token names the tenant, the catalogue names its home. Pooled tenants share a cluster guarded by row-level security; a premium tenant has its own database; a regulated tenant has a whole cell in its region. Metering sees all three." chart={`flowchart LR
+    U["Request with access token"] --> GW["Gateway: verify token, read the tenant claim"]
+    GW --> RT["Tenant router: catalogue of tenant to home"]
+    RT -->|"pooled tenants"| P["Shared cluster: tenant id on every row, row-level security"]
+    RT -->|"premium tenant"| S["Dedicated database"]
+    RT -->|"regulated EU tenant"| C["EU cell: own stack and data store"]
+    P --> M["Metering: usage per tenant"]
+    S --> M
+    C --> M
+`} />
+
+## Noisy neighbours
+
+A **noisy neighbour** is a tenant whose load degrades everyone else's service: the export job that runs at 02:00, the integration that polls every second, the customer forty times larger than the next. The SaaS Lens's answer is layered, and each layer is a lesson you have met.
+
+- **Per-tenant rate limits and quotas**, keyed by the tenant claim rather than by address (see [Rate limiting](/learn/rate-limiting)): requests per second, rows per export, storage per plan. Tiers make the limits a product decision; the Lens's worked example reserves a concurrency of 100 for a Basic tier and 300 for Advanced.
+- **Bulkheads**: a separate worker pool or queue per tier, so that a Basic tenant's backlog cannot starve Premium.
+- **Isolation by tier**: Premium tenants in dedicated databases or cells, the rest pooled, which the Lens calls tier-based isolation and which is the bridge model in practice.
+- **Moving the whale**: when one tenant dominates a shard, give it a shard, a database or a cell of its own.
+
+## Data residency
+
+Some tenants may not be pooled wherever is cheapest. The GDPR's Chapter V restricts transfers of personal data outside the EU, and the Reserve Bank of India requires payment-system data to be stored only in India, so a tenant's **home region** is part of its catalogue entry and the pool itself is per region: an EU pool, an India pool, with the router sending each tenant to its own. Residency is the commonest reason a small tenant ends up in a silo: not size, but law. [Multi-region](/learn/multi-region) covers the cross-region replication these pools must *not* do.
+
+## Metering and cost allocation
+
+In a silo the bill is the tenant's: tag the resources and read the invoice. In a pool you must **meter**: count requests, storage bytes, compute seconds and rows processed per tenant, then apportion the shared infrastructure cost by share of consumption. The SaaS Lens asks two questions of every design, how you measure each tenant's consumption and how you correlate it with infrastructure cost, because cost per tenant is what tells you which plan loses money, which tenant should move to a silo and pay for it, and who the noisy neighbour actually is.
+
+## What gets hard
+
+Migrations multiply: one `ALTER TABLE` becomes one per schema or per database, each able to fail on its own. Connection pooling fragments, because PgBouncer pools per database-and-user pair, so a thousand databases means a thousand pools. Cross-tenant features (your own analytics, a global search, abuse detection) are trivial in a pool and a fan-out across every silo and cell. Backups follow the model too: restoring one tenant from a pool backup means extracting its rows from everyone else's, while a silo restores whole. And tenants move: onboarding puts them in the pool, growth or a contract moves them to a silo, and the move itself is a migration with a cut-over.
+
+## The condition that decides
+
+<mark>Regulated or very large tenants get dedicated resources; the long tail of small tenants shares.</mark> Start every tenant in the pool with a tenant id column, row-level security and per-tenant limits; graduate a tenant to its own database or cell when a contract, a regulator or its share of the load says so; and keep the catalogue as the one place that knows where anyone lives.
+
+<Callout type="analogy" title="Flats, houses and a gated estate">
+
+A block of flats is the pool: one building, one boiler, bills divided by the meter in each flat, and the neighbour's party is your problem. A detached house is the silo: your own boiler and your own bill. A gated estate with its own water and power is the cell. Where it breaks: a tenant can move from the flats to a house with an afternoon's paperwork, while moving a tenant's data is a migration with a cut-over.
+
+</Callout>
+
+<Callout type="interview" title="Pool by default, silo by condition">
+
+"Shared schema with a tenant id on every row, row-level security as the last line, the tenant taken from the token, per-tenant rate limits and a tier-based bulkhead for noisy neighbours. Regulated or very large tenants get a dedicated database or cell in their required region, and a tenant catalogue routes each request to its home. We meter per tenant so we know what each one costs."
+
+</Callout>
+
+<DeepDive title="Go deeper: graduating a tenant from pool to silo">
+
+Copy the tenant's rows into the new database with a snapshot, then stream the changes with [change data capture](/learn/cdc) filtered by tenant id until the lag is near zero. Flip the catalogue entry so that new requests route to the silo, stop the stream, and keep the pool rows read-only for a rollback window before deleting them. The dangerous moment is between the flip and the stream stopping, when a request still in flight on the pool could write a row the silo never sees; a brief write freeze for that one tenant, enforced at the gateway, closes it.
+
+</DeepDive>

@@ -1,0 +1,87 @@
+**Service discovery** is how a caller finds a live instance of a service when instances come and go. A **service registry** (or the DNS acting as one) keeps the current list of addresses and their health, and either the caller or a proxy in front of it consults that list for every request.
+
+In a monolith, "where is the pricing module?" is a function call. Split into [microservices](/learn/microservices) and the answer is an address that keeps changing: [Kubernetes](/learn/kubernetes) replaces Pods on every rollout, autoscaling adds and removes instances by the minute, and a dead machine takes its IP with it. A ride-booking app whose pricing service runs forty instances may see every one replaced before lunch. Hard-coding addresses is the fallacy "topology does not change" from [What makes a system distributed](/learn/distributed-fundamentals), and it breaks at the first rollout.
+
+## Two places to put the lookup
+
+<Comparison>
+
+<ComparisonItem title="Client-side discovery">
+
+The caller asks the registry for the instances of `pricing`, picks one (round robin, least loaded) and calls it directly; Netflix's Eureka with the Ribbon client is the classic example. Fewer hops and nothing extra in the request path, but every language you use needs a registry-aware client and the caller is coupled to the registry.
+
+</ComparisonItem>
+
+<ComparisonItem title="Server-side discovery">
+
+The caller sends the request to one well-known address, a load balancer or proxy, which consults the registry and forwards; AWS Elastic Load Balancing and Kubernetes Services work this way. Callers stay simple and language-agnostic; the cost is an extra hop and a router you must run, scale and keep highly available.
+
+</ComparisonItem>
+
+</Comparison>
+
+<Mermaid caption="Client-side: the caller holds the list and chooses. Server-side: a router at a fixed address chooses on the caller's behalf." chart={`flowchart LR
+    subgraph CS ["Client-side discovery"]
+        C1["Caller"] -->|lookup pricing| REG1["Registry"]
+        C1 -->|call the chosen instance| P1["pricing instance"]
+    end
+    subgraph SS ["Server-side discovery"]
+        C2["Caller"] -->|call one fixed address| LB["Router or load balancer"]
+        LB -->|lookup| REG2["Registry"]
+        LB -->|forward| P2["pricing instance"]
+    end
+`} />
+
+Both styles depend on the same thing: a registry whose idea of who is alive is close to the truth.
+
+## Registries, registration and health
+
+A registry maps a service name to its instances and a health verdict. Instances **register** on start-up, or the platform registers them, and membership is **health-based**: an instance that stops proving it is alive drops out of the answers.
+
+| Registry | How it learns an instance is alive | Where you meet it |
+| --- | --- | --- |
+| Consul | Agents on each host run health checks; servers keep the catalogue with Raft; a DNS query for `pricing.service.consul` returns only passing instances | HashiCorp stacks, VM fleets, several data centres |
+| etcd | Keys carry a lease with a TTL that the client must keep alive; when the lease expires every key attached to it is deleted and watchers are told | Kubernetes keeps its own objects here; home-grown registries |
+| Eureka | Clients send a heartbeat every 30 seconds; after 90 seconds without one the server removes the instance; clients fetch registry deltas every 30 seconds | Spring Cloud Netflix services |
+
+Look at the Eureka numbers: an instance can be dead for up to 90 seconds before the server notices, and a client's cached copy can be another 30 seconds behind. <mark>Discovery is a cache of who is alive, and it is always slightly wrong.</mark> Callers therefore pair it with [timeouts and retries](/learn/timeouts-retries) against a different instance, and the window is a tuning knob: shorter heartbeats detect death sooner but evict slow instances by mistake and load the registry.
+
+Kubernetes never asks a container to register: the platform itself tracks which Pods match a Service's label selector and pass their readiness probe.
+
+## DNS as the registry
+
+The oldest registry is [DNS](/learn/dns): a name resolves to one or more A records and every client already speaks it. Its weakness is caching: a dead instance stays in circulation until the TTL runs out, and a short TTL means more queries.
+
+Kubernetes sidesteps this by giving a Service a *virtual* IP that never changes while the Pods behind it churn. The cluster DNS (CoreDNS, exposed as a Service named `kube-dns`) answers `pricing.payments.svc.cluster.local` with the Service's ClusterIP, and a Pod in the same namespace can simply say `pricing`; because the ClusterIP is stable, DNS caching is harmless. Discovery proper happens on every node: `kube-proxy` watches Service and **EndpointSlice** objects, which list the IPs of Pods currently passing readiness, and rewrites traffic for the virtual IP to one of them. A failing readiness probe removes a Pod from the slices within a probe period, far faster than any DNS TTL. Clients that want to choose for themselves use a *headless* Service (`clusterIP: None`), whose name returns the Pod IPs directly; SRV records carry port numbers for named ports.
+
+```text
+pricing.payments.svc.cluster.local              -> 10.96.12.7   (ClusterIP, never changes)
+_http._tcp.pricing.payments.svc.cluster.local   -> port 8080    (SRV record)
+pricing   (asked from a Pod in namespace payments) -> same answer, via the search list
+```
+
+## Gossip-based membership
+
+A registry is a central place to ask; **gossip** removes the centre. Each node periodically picks a random peer and exchanges what it knows, and failure is detected by probing, with a *suspected* state before conviction so that one lost packet does not evict a healthy node. Consul's membership layer, Serf, is a gossip protocol based on SWIM; Cassandra nodes gossip with a random peer every second and decide locally, with a phi accrual failure detector, whether a peer is up. Gossip needs no coordinator but converges gradually, so two nodes can briefly disagree about who is alive; it returns in [Quorums and leaderless replication](/learn/quorums), where the same membership view decides who holds which data.
+
+## What gets hard
+
+The registry is now a dependency of every request, so it must be more available than anything it serves: Consul and etcd replicate with Raft, and Eureka clients work from a locally cached copy of the registry. Health checks lie in both directions: a shallow check passes while the instance returns errors (grey failure), while a deep check that calls the database fails under load and removes exactly the capacity you needed. Across clusters or regions, names need a scope (`.svc.cluster.local` is per cluster), which is where a [service mesh](/learn/service-mesh) and [multi-region](/learn/multi-region) routing take over.
+
+<Callout type="analogy" title="Reception desk or your own contacts list">
+
+Server-side discovery is the hospital switchboard: you dial one number and are put through to whichever doctor is on duty. Client-side is keeping the duty rota in your own phone and calling the doctor directly: quicker, but your rota goes stale and every caller needs a copy. The switchboard can itself be engaged or out of order, which is why the router must be redundant.
+
+</Callout>
+
+<Callout type="interview" title="Say where the lookup happens and how stale it can be">
+
+"Callers hit the Kubernetes Service by DNS name; the ClusterIP is stable so caching does not hurt; kube-proxy routes to Pods in the EndpointSlices, and a failing readiness probe removes a Pod within one probe period. Across clusters we use Consul with health checks, and callers retry once against another instance." Naming the staleness window shows you know discovery is a cache.
+
+</Callout>
+
+<DeepDive title="Go deeper: why the virtual IP matters">
+
+Putting a never-changing virtual IP in DNS moves the fast-changing part, which Pods are ready, out of DNS and into EndpointSlices, which the control plane updates immediately and kube-proxy applies on every node. Slices hold at most 100 endpoints each by default, so a Service with thousands of Pods is spread over many small objects rather than one huge one; the older Endpoints object, which kept every address in a single object, is deprecated since Kubernetes 1.33 for exactly that reason.
+
+</DeepDive>

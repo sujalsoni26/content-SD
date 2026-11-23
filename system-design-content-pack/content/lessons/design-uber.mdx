@@ -1,0 +1,318 @@
+A rider opens the app, sees cars nearby with a price and a pickup time, taps once, and within seconds exactly one driver is heading their way. The design has two halves with opposite needs: a lossy **location stream** of a quarter of a million driver positions a second held in an in-memory **geospatial index**, and a **trip state machine** handling a few hundred requests a second that must never assign two drivers to one ride. **Surge pricing** and **ETA** sit beside them as separate services. It assumes [WebSockets](/learn/websockets), [Sharding](/learn/sharding) and [Consistency](/learn/consistency), and follows the order of [How to work a case study](/learn/case-study-method).
+
+## Requirements
+
+- **Functional:** drivers go online and stream their position; a rider gets an upfront fare and pickup ETA; the rider requests a ride and is matched with one nearby driver, who can accept or decline; both see live positions and the ETA until the trip ends; the trip runs through requested, matched, en route, in trip and completed or cancelled; the fare is charged at the end; surge raises fares where demand outstrips drivers.
+- **Out of scope:** deliveries and multi-stop trips, pooling (it returns under *How it evolves*), scheduled rides, the routing engine's internals (a dependency), fraud and driver onboarding, and the payment system itself (see [Design a payment system](/learn/design-payment-system)).
+- **Non-functional:**
+  - **Exactly one driver per trip**, because two cars for one rider is the failure riders remember and drivers resent.
+  - **Positions fresh within about 5 s**, because a stale car on the map is a broken product; losing one sample is fine, since the next supersedes it.
+  - **A match in under 10 s**, because a rider on a spinner cancels.
+  - **Availability over consistency for ingest and tracking**, because a city must not go dark while a shard fails over (see [CAP](/learn/cap)).
+  - **The trip record is durable and auditable**, because it is the bill.
+
+## Estimation
+
+Assume 150M monthly riders and 6M registered drivers; 20M trips a day; 300k drivers online on average and 1M at the evening peak (a peak factor of about 3); each online driver reports its position every 4 s, the interval Uber's 2015 talk described; a position sample is 50 B stored; a rider opens the app three times per trip taken and each open renders about 20 nearby cars with ETAs; a trip lasts 20 minutes; a rider in a trip receives the driver's position every 4 s and a fresh ETA every 10 s; a trip record is 2 KB plus its 300 position samples; 90-day retention; H3 resolution 8 cells average 0.74 km² and resolution 9 cells 0.105 km².
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Location updates/s | 3 × 10⁵ ÷ 4 s | 75k/s average, \~250k/s at peak |
+| Location bytes at peak | 250k/s × 50 B | 12.5 MB/s: trivial bytes, hard rate |
+| Live positions in memory | 10⁶ drivers × 100 B | 100 MB: the live index fits one machine's RAM |
+| Position history | 75k/s × 86,400 s × 50 B | \~324 GB a day, \~29 TB for 90 days |
+| Trip requests/s | 2 × 10⁷ ÷ 10⁵ s | 200/s (peak \~600/s) |
+| Concurrent trips | 2 × 10⁷ × 20 min ÷ 1,440 min | \~280k average, \~800k at peak |
+| Nearby-driver queries/s | 2 × 10⁷ × 3 opens ÷ 10⁵ s | 600/s (peak \~1,800/s), \~20 candidates each |
+| ETA computations/s | 600 × 20 + 280k ÷ 10 s | 12k + 28k = 40k/s (peak \~120k/s) |
+| Position pushes to riders/s | 280k trips ÷ 4 s | 70k/s (peak \~200k/s) |
+| Persistent connections | 10⁶ drivers + 8 × 10⁵ riders in trips + browsing | \~2M at peak |
+| Trip storage | 2 × 10⁷ × (2 KB + 300 × 50 B) = 2 × 10⁷ × 17 KB | \~340 GB a day, \~30 TB for 90 days |
+| Cells for a 2-km search | π × 2² ≈ 12.6 km² ÷ 0.74 km² | \~17 resolution-8 cells (\~120 at resolution 9) |
+| Surge recomputation | 500k active cells every 30 s | \~17k cell writes/s |
+
+→ <mark>A quarter of a million position writes a second against six hundred ride requests: about 400 to 1</mark>, and the two sides want opposite things. Positions are a firehose where each sample makes the last worthless, so they belong in memory with no durability; trips are rare and valuable, so each gets a transaction. The ETA service is the hidden hot read path at 120k computations a second. In the terms of [Three system shapes](/learn/system-shapes): a write-heavy stream feeding a small transactional core, with a read-heavy compute service beside it. Storage is beside the point: 30 TB of trips and 29 TB of traces a quarter.
+
+## API
+
+| Endpoint | Request | Success | Errors |
+| --- | --- | --- | --- |
+| frame `location` (driver, every 4 s) | `{ "lat", "lng", "heading", "speed", "ts" }` | none: fire and forget | dropped silently if `ts` is older than the last sample |
+| `GET /v1/quote?pickup=&dropoff=&product=` | – | 200 + `{ "quote_id", "fare", "surge_multiplier", "pickup_eta_s", "expires_at" }` (2 min) | 404 outside coverage · 503 ETA unavailable, show a range |
+| `POST /v1/trips` | `{ "quote_id", "idempotency_key", "pickup", "dropoff", "payment_method_id" }` | 202 + `{ "trip_id", "state": "requested" }` | 409 quote expired · 402 payment method rejected · 429 |
+| frame `offer` (server to driver) | `{ "trip_id", "offer_id", "pickup", "pickup_eta_s", "earnings", "expires_at" }` (15 s) | driver frame `accept` or `decline` with `offer_id` | `accept` after expiry → 410 |
+| `GET /v1/trips/{trip_id}` | – | 200 + state, driver, car, live ETA | 404 · 403 not a party |
+| frames `arrived`, `start`, `end` (driver) | `{ "trip_id", "ts", "lat", "lng" }` | 200 + next state | 409 illegal transition |
+| `POST /v1/trips/{trip_id}/cancel` | `{ "reason" }` | 200 + `{ "fee" }` | 409 already in trip |
+| stream `trip/{trip_id}` (to rider) | subscribe over the connection | driver position every 4 s, ETA every 10 s, state changes | – |
+
+The quote is a promise with an expiry: fare and surge are frozen for two minutes so the price a rider taps is the price they pay. `idempotency_key` makes a double tap or a retried request one trip (see [Idempotency](/learn/idempotency)); `offer_id` does the same for a driver's accept. Location frames get no acknowledgement, because an ack would double the busiest traffic in the system to protect data that is obsolete four seconds later.
+
+## Data model
+
+```sql
+-- Transactional core, sharded by city (region_id): a trip and its driver live on one shard
+CREATE TABLE drivers (
+  driver_id        BIGINT PRIMARY KEY,
+  region_id        INT NOT NULL,
+  status           TEXT NOT NULL,         -- offline, available, offered, assigned, in_trip
+  current_trip_id  BIGINT,
+  vehicle          JSONB NOT NULL,
+  rating           NUMERIC(3,2),
+  version          BIGINT NOT NULL        -- optimistic concurrency on status changes
+);
+
+CREATE TABLE trips (
+  trip_id          BIGINT PRIMARY KEY,
+  region_id        INT NOT NULL,
+  rider_id         BIGINT NOT NULL,
+  driver_id        BIGINT,
+  state            TEXT NOT NULL,         -- requested, matched, en_route, arrived, in_trip, completed, cancelled
+  quote_id         BIGINT NOT NULL,
+  idempotency_key  TEXT UNIQUE NOT NULL,
+  pickup           POINT NOT NULL, dropoff POINT NOT NULL,
+  fare_quoted      NUMERIC(10,2) NOT NULL, surge_multiplier NUMERIC(4,2) NOT NULL,
+  fare_final       NUMERIC(10,2),
+  requested_at     TIMESTAMPTZ NOT NULL, matched_at TIMESTAMPTZ, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ
+);
+
+CREATE TABLE offers (
+  offer_id   BIGINT PRIMARY KEY, trip_id BIGINT NOT NULL, driver_id BIGINT NOT NULL,
+  sent_at    TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, outcome TEXT  -- accepted, declined, expired
+);
+
+-- Not in SQL
+-- geo index (memory):     cell_id -> { driver_id -> (lat, lng, heading, ts) }
+-- surge (cache, TTL 60 s): cell_id -> multiplier
+-- position log (append):  (driver_id, trip_id?, ts, lat, lng) for traces and ETA training
+```
+
+`drivers.status` and `trips.state` are the two columns the design protects: they change together in one transaction (deep dive 2), which is why both tables carry `region_id` and share a shard. `offers` lets a driver's accept be checked against what was offered and when. Positions never enter SQL: the live set is a hash map keyed by cell, the history an append-only log.
+
+## High-level design
+
+<Mermaid caption="Two halves. Driver positions flow through gateways into an in-memory geo index and a log; a ride request flows through quote, trip and dispatch services, and the match is one transaction. Surge and ETA are separate services read at quote time." chart={`flowchart LR
+    D["Driver app"] -- "position every 4 s" --> GW["WebSocket gateways"]
+    GW --> LI["Location ingest"]
+    LI --> GEO[("Geo index: H3 cell to drivers, in memory, sharded by region")]
+    LI --> LOG["Position log"]
+    LOG --> SURGE["Surge service: supply vs demand per cell"]
+    R["Rider app"] --> API["API gateway"]
+    API --> QS["Quote service"]
+    QS --> ETA["ETA service: routing engine plus ML"]
+    QS --> SURGE
+    API --> TS["Trip service: state machine"]
+    TS --> TDB[("Trips and drivers, sharded by region")]
+    TS --> DS["Dispatch: candidates, rank by ETA, offer"]
+    DS --> GEO
+    DS --> ETA
+    DS -- "offer, 15 s" --> GW
+    TS -- "state and positions" --> GW --> R
+    TS -. "trip completed" .-> PAY["Payments"]
+`} />
+
+- **Gateways** hold about 2M persistent connections, upstream for positions and downstream for offers and tracking, because polling every 4 s from a million phones would be 250k HTTP requests a second for 50 B of payload each (the comparison in [WebSockets](/learn/websockets)).
+- **Location ingest** timestamps each sample, drops anything older than the driver's last, updates the geo index and appends to the log, so the index is always current and the log is the only durable copy.
+- **The geo index** is an in-memory map from cell to drivers, sharded by region, because 250k writes a second and sub-10-ms queries need memory and the whole live set is 100 MB (deep dive 1).
+- **The quote service** composes fare, surge and pickup ETA into a promise with an expiry, so pricing is decided once, before dispatch, and cannot drift during it.
+- **The trip service** owns the state machine and the transactional store, because every state change is money or liability and must happen exactly once (deep dive 2).
+- **Dispatch** pulls candidates from the geo index, ranks them by road ETA rather than straight-line distance (a driver across a river is not close), and offers the trip to one driver at a time with a 15-second timeout, so one trip is never offered to two drivers at once.
+- **Surge and ETA are separate services** because their load, latency and failure modes differ from everything else, and either can degrade (a fare range, a straight-line estimate) without stopping dispatch (deep dive 3).
+- **Payments** charge the quoted fare on completion with `trip_id` as the idempotency key, downstream of the trip service, because a charge must never block a state transition.
+
+<Mermaid caption="A ride from quote to match. Dispatch offers one driver at a time; the accept becomes a single conditional transaction on the trip and the driver rows, and only then does the rider learn who is coming." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant R as Rider
+    participant Q as Quote service
+    participant T as Trip service
+    participant DS as Dispatch
+    participant G as Geo index
+    participant D1 as Driver 1
+    participant D2 as Driver 2
+    R->>Q: GET /v1/quote pickup, dropoff
+    Note over Q: ETA service, surge per cell
+    Q-->>R: fare, pickup ETA, quote_id (2 min)
+    R->>T: POST /v1/trips quote_id, idempotency_key
+    T->>T: insert trip, state requested
+    T-->>R: 202 trip_id
+    T->>DS: dispatch(trip_id)
+    DS->>G: drivers in k-ring of pickup cell
+    G-->>DS: 14 candidates
+    Note over DS: rank by road ETA, filter product and rating
+    DS->>D1: offer, expires in 15 s
+    D1-->>DS: decline
+    DS->>D2: offer, expires in 15 s
+    D2-->>DS: accept(offer_id)
+    DS->>T: assign(trip_id, driver 2, offer_id)
+    Note over T: one transaction: trip requested to matched, driver available to assigned, both conditional
+    T-->>DS: matched
+    T-->>R: matched, driver 2, ETA 4 min
+    loop every 4 s until arrival
+        T-->>R: driver position
+    end
+`} />
+
+## Storage and caching
+
+| Data | Where | Why |
+| --- | --- | --- |
+| Live driver positions | In-memory geo index, sharded by region, replicated to a warm standby | 250k writes/s, sub-10-ms reads, 100 MB total; rebuilt from the log and the next 4 s of samples after a crash |
+| Position history | Append-only log, 7 days, then a warehouse | Trip traces, disputes, ETA training; never read on the request path |
+| Trips, drivers, offers | Replicated SQL, sharded by `region_id` | Transactions across the trip and driver rows; 340 GB a day is nothing |
+| Quotes | Cache with a 2-minute TTL, keyed by `quote_id` | A promise that expires |
+| Surge multipliers | Cache keyed by cell, 60 s TTL | Recomputed every 30 s by the stream job; read at every quote |
+| ETA results | Cache keyed by (origin cell, destination cell, 5-minute bucket) | Browsing riders ask the same question repeatedly; in-trip ETAs bypass the cache |
+| Map and road graph | In the routing engine's memory | A dependency, versioned and deployed like code |
+
+The surprising row is the first: the most-written data in the system is also the least durable, and that is correct. A dead index node is replaced by a standby at most one reporting interval behind, and drivers fill in the rest within 4 s; a disk write for a position protects something that is wrong before the write completes (see [Caching](/learn/caching) for the TTL arithmetic the quote and surge caches share).
+
+## Scaling
+
+**The location half shards by geography.** Each region (a city or a few neighbouring ones) gets its own ingest, geo index and gateways, because a driver in Pune never matters to a rider in Chennai. Within a region the index fits one machine with a standby, and `region_id` is also the SQL shard key, so a trip and its driver are always on one shard. The city boundary is the exception: a cross-region trip belongs to the pickup's region, and a driver who crosses is re-registered in the new index on their next sample.
+
+**The transactional half barely needs to scale.** Six hundred requests a second at peak, each a handful of row updates, is one primary per large region with replicas for reads (see [Replication](/learn/replication)). What does scale is dispatch's fan-out: one geo query and about 20 ETA calls per request, so dispatch workers are stateless and horizontal and the ETA service is sized for 120k calls a second behind a cache.
+
+**Gateways scale by count**, with the registry pattern from [Design WhatsApp](/learn/design-whatsapp) to find a rider's connection, except that a lost position push is simply replaced by the next one. Autoscaling follows the evening peak city by city (see [Autoscaling](/learn/autoscaling)).
+
+## Consistency and availability
+
+| Feature | Model | Why |
+| --- | --- | --- |
+| Driver assignment | Strong: one conditional transaction on the trip and driver rows | Two drivers for one rider is the failure the design exists to prevent |
+| Trip state transitions | Strong, with legal transitions enforced by the state machine | `end` before `start` is a billing bug |
+| Rider's request | Idempotent on `idempotency_key` | A double tap is one trip |
+| Live positions | Eventual and lossy, freshest sample wins | Obsolete in 4 s |
+| Surge multiplier | Eventual, frozen into the quote for 2 minutes | Riders must see the price they pay; drift is absorbed by the expiry |
+| ETA | Best effort, degrades to an estimate | A missing ETA should widen the range, not block the request |
+| Payment | Exactly once via `trip_id` as the idempotency key, asynchronous | A failed charge is retried; it never holds the trip |
+
+During a partition between a region's gateways and its trip store, location ingest and tracking keep working (they never touch SQL), quotes keep working from caches, and new matches wait: <mark>the stream stays available, the transaction stays consistent</mark>. Uber's account of rebuilding its fulfilment platform describes the earlier availability-first design leaving trips and drivers inconsistent after multi-entity writes, and names consistency as a primary criterion for its replacement (deep dive 2).
+
+<Callout type="analogy" title="A taxi rank with a dispatcher and a whiteboard">
+
+Drivers shout their position every few seconds and the dispatcher scribbles it on a whiteboard divided into hexagonal patches, wiping old scribbles as new shouts arrive. When a fare comes in, the dispatcher reads the nearby patches, radios one driver at a time, and only when one says yes writes the fare into the ledger, in ink, against that driver. The whiteboard is the geo index; the ledger is the trip store. What the analogy misses: a real dispatcher knows the city, which is why the ETA service, not the whiteboard, ranks the drivers.
+
+</Callout>
+
+## Failure and recovery
+
+| Failure | What users see | How it heals |
+| --- | --- | --- |
+| A geo index node dies | Nearby cars vanish from the map for a few seconds in one region | The standby takes over with the last replicated state; drivers' next samples fill any gap within 4 s |
+| Driver accepts after the 15-second offer expired | "Offer no longer available" | The accept carries `offer_id`; the trip service rejects it with 410 and dispatch has already moved on |
+| Two dispatch workers offer the same driver (duplicate dispatch after a retry) | Nothing | The driver row's conditional update lets exactly one assignment through; the other gets 409 and re-dispatches (deep dive 2) |
+| Driver's phone dies mid-trip | The rider's car stops moving on the map | A 60-second position timeout alerts both parties; the trip can be ended by support with the last known position |
+| ETA service down | Quotes show a time range, dispatch ranks by straight-line distance | A degraded mode, flagged in the quote, rather than an outage (see [Bulkheads and graceful degradation](/learn/bulkheads-degradation)) |
+| Surge job falls behind | Multipliers go stale | Cache entries expire after 60 s and the quote falls back to the last known value or 1.0 by policy |
+| Trip store failover | New matches pause for seconds in one region | Replica promotion; in-flight transactions roll back, and the rider's idempotent request retries cleanly |
+| Payment provider down | Nothing during the trip | `trip.completed` is queued; the charge retries with the same key (see [Message queues](/learn/message-queues)) |
+
+The rule the table keeps applying: <mark>anything that can be regenerated in four seconds is allowed to be lost; anything that is money is not</mark>.
+
+## Security
+
+- **Authentication:** riders and drivers hold device-bound tokens (see [Authentication](/learn/authentication)); location frames are accepted only on a connection authenticated as that driver, because spoofed positions are the easiest way to game dispatch and surge.
+- **Authorisation:** a trip's state and position stream are visible only to its two parties, and driver positions are never exposed as a feed.
+- **Abuse the design invites:** GPS spoofing into a surge zone (plausibility checks against speed and the road graph at ingest), fake requests to inflate surge (per-account limits and a payment-method check before dispatch, see [Rate limiting](/learn/rate-limiting)), and the accept race, which the conditional transaction closes.
+- **Data protection:** position traces are personal data; the log is partitioned by driver so it can be deleted on request and detached from identity after retention (see [Logging at scale](/learn/logging)).
+
+## Observability
+
+Six numbers (see [Metrics and monitoring](/learn/metrics-monitoring)): **location sample age p99 per region**, the freshness promise; **request-to-match p95 and offer acceptance rate**, the product; **double-assignment count**, which must read zero and alerts at one; **ETA latency and error rate**, the hidden hot path; **surge job lag**; and **geo index memory and replication lag**, the only state that is hard to rebuild. The trace to keep (see [Distributed tracing](/learn/tracing)): one `POST /v1/trips` through dispatch, every offer and its outcome, and the assignment transaction, because a slow match is almost always a chain of declines.
+
+## Trade-offs and bottlenecks
+
+<Comparison>
+
+<ComparisonItem title="Sequential offers (this design)">
+
+Offer the best candidate, wait up to 15 s, move to the next. A trip is never offered to two drivers, so no driver is told "sorry, taken", and the transaction has no contention. The cost is wait time: three declines is 45 s.
+
+</ComparisonItem>
+
+<ComparisonItem title="Broadcast offers">
+
+Offer the top five at once and the first accept wins. Matches are fast and acceptance rises, but four drivers lose every race, which drivers hate, and the assignment transaction must arbitrate real races rather than defend against rare duplicates.
+
+</ComparisonItem>
+
+</Comparison>
+
+The condition that decides: <mark>how long the rider will wait versus how often drivers decline</mark>. At a 90% acceptance rate sequential offers match in one round; at 40%, broadcast to a small set and accept the arbitration. Next to break, in order: **hot cells**, an airport rank with 3,000 idle drivers in one hexagon (deep dive 1); **the ETA service**, whose in-trip refreshes no cache can serve; **city-boundary trips**, where the one-shard assumption fails; and **dispatch quality**, when matching must become an optimisation across many trips rather than one at a time. Not taken: positions in SQL (250k writes a second to protect nothing), a quadtree for moving points (deep dive 1), straight-line ranking (wrong on every river and motorway), and a lock held across the offer (15 s on a driver row per offer would serialise dispatch).
+
+<Callout type="interview" title="Say the ratio, then split the design in two">
+
+"A quarter of a million position writes a second and six hundred ride requests: four hundred to one. So two systems: a lossy in-memory geo index on H3 or geohash cells for positions, sharded by city, and a small transactional core for trips where the match is one conditional transaction on the trip and driver rows, so exactly one driver is ever assigned. Dispatch ranks by road ETA from a separate service, surge is a stream job per cell frozen into a two-minute quote, and riders watch the car over the same WebSocket the driver reports on." Then name the box you refuse to build: a durable store for positions.
+
+</Callout>
+
+## How it evolves
+
+At **10×** (2.5M position updates a second, 6,000 requests a second) the geo index outgrows one machine per region and shards by cell, so a k-ring query touches a few shards and the airport cell gets its own; the ETA service gets its own fleet and a precomputed matrix for browsing; and dispatch moves to **batch matching**, assigning every open request in a city every few seconds as one optimisation, which raises utilisation and makes pooling possible. The trip store moves to a globally consistent database so the one-shard-per-city rule stops being a constraint, the step Uber describes taking when it rebuilt its fulfilment platform on a store handling billions of transactions a day.
+
+At **100×** the platform generalises: the same supply and demand abstractions carry food, parcels and people, the geo index becomes a shared service, and prediction replaces reaction, with drivers nudged towards forecast demand before the surge appears. The small-scale version of this design, where the trip state machine becomes classes, is [LLD: Ride booking](/learn/lld-ride-booking).
+
+## Deep dive 1: the geospatial index
+
+"Which drivers are within 2 km of this pickup?" must be answered in milliseconds against a million points that all move every 4 s. The index is a **grid**: the earth is divided into cells, each position maps to a cell id, and the index is a hash map from cell to the drivers in it. A query computes the cells covering the radius (the pickup's cell and its rings of neighbours, a **k-ring**), reads those sets and filters by exact distance: about 17 cells for 2 km at H3 resolution 8, and one more ring when too few drivers are found.
+
+| Index | How it handles motion | Query | Where it fits |
+| --- | --- | --- | --- |
+| Fixed grid (geohash, S2, H3) | A move is one delete and one insert, O(1); most moves stay in the same cell | Cover the radius with cells, read their sets | Points that move constantly, which is every driver |
+| Quadtree | Adapts cell size to density, but every move may split or merge nodes, and a hot node is rebalanced under 250k writes/s | Descend to the leaves overlapping the radius | Points that rarely move with uneven density: restaurants, shops |
+| Database spatial index (R-tree) | A B-tree-like structure updated on every write | A range query inside the database | Persisted, moderately changing data with other predicates |
+
+The condition that decides is <mark>how often the points move relative to how often they are queried</mark>: a grid pays nothing extra for motion and a quadtree pays on every write, so moving points get a grid and static points with uneven density get a quadtree. Which grid is a second decision. **Geohash** interleaves latitude and longitude bits into a string, so a longer shared prefix means closer, and a 6-character geohash is a cell about 1.2 km by 0.6 km; but its cells are rectangles with two neighbour distances, and the prefix promise breaks at cell edges, where two points metres apart can share no prefix, so queries must always read the neighbours. Google's **S2** is a 31-level hierarchy of roughly square cells on a cube projected onto the sphere; Uber's 2015 dispatch used its level-12 cells of 3 to 6 km² as a sharding key. Uber's **H3** divides the earth into hexagons at 16 resolutions, each child one seventh of its parent, because a hexagon has one neighbour distance where a square has two and a triangle three, which makes k-rings and smoothing honest and minimises the quantisation error of people moving through a city. The clincher: <mark>the same cells drive surge</mark>, since Uber says it measures supply and demand in hexagons, so dispatch, pricing and analytics share one vocabulary.
+
+The hard case is the hot cell: an airport rank puts 3,000 idle drivers in one resolution-8 hexagon, so a 2-km query hands the ETA ranker 3,000 candidates. Because H3 cells nest, the fix is to index that cell's drivers at resolution 9 or 10 as well, query the finer level first and cap candidates at a few dozen; a quadtree would have given this adaptivity for free, at the price of paying for it on every one of 250k writes a second.
+
+## Deep dive 2: exactly one driver
+
+The trip must move from requested to matched exactly once, the driver from available to assigned exactly once, and the two must agree. The threats are ordinary: a dispatch worker retries after a timeout and offers the trip twice; a driver taps accept as the 15-second offer expires and the next driver is being offered; two trips' dispatchers race for the same idle driver.
+
+<Mermaid caption="The trip lifecycle. Every arrow is a conditional update that names the state it leaves, so a stale or duplicate command finds the wrong state and fails with 409 instead of corrupting the trip." chart={`stateDiagram-v2
+    state "En route to pickup" as EnRoute
+    state "In trip" as InTrip
+    [*] --> Requested: rider confirms the quote
+    Requested --> Matched: a driver accepts the offer
+    Requested --> Cancelled: rider cancels or no driver within 2 min
+    Matched --> EnRoute: driver starts navigation
+    Matched --> Requested: driver cancels, re-dispatch
+    EnRoute --> Arrived: driver reaches the pickup
+    EnRoute --> Cancelled: rider cancels, fee may apply
+    Arrived --> InTrip: driver taps start
+    Arrived --> Cancelled: rider no-show after 5 min
+    InTrip --> Completed: driver taps end
+    Completed --> [*]: fare charged with trip_id as the key
+    Cancelled --> [*]
+`} />
+
+The mechanism is one transaction with two conditional updates on the same shard:
+
+```sql
+BEGIN;
+UPDATE drivers SET status = 'assigned', current_trip_id = 42, version = version + 1
+  WHERE driver_id = 7 AND status IN ('available', 'offered');
+UPDATE trips SET state = 'matched', driver_id = 7, matched_at = now()
+  WHERE trip_id = 42 AND state = 'requested';
+-- commit only if both statements changed exactly one row, otherwise ROLLBACK and answer 409
+COMMIT;
+```
+
+Each `WHERE` names the state the command expects to leave, the optimistic concurrency pattern from [MVCC and isolation levels](/learn/mvcc-isolation). A duplicate accept finds `state = 'matched'` and changes zero rows; a rival's accept finds the driver already assigned; a late accept carries an `offer_id` already marked expired and is rejected before the transaction starts. Every later command, `arrived`, `start`, `end`, `cancel`, has the same shape, which is why the state diagram's arrows are the API.
+
+Where this transaction can run is decided by the shard key. With trips and drivers both sharded by `region_id` the rows share a shard and an ordinary transaction suffices: that is the reason for the sharding choice, not a lucky consequence. When a trip crosses regions, or a driver must hold a delivery and a ride at once, the rows live on different shards and there are two honest options: a **saga** (see [Sagas and compensating actions](/learn/sagas)), assign the driver then match the trip with a compensating release if the second step fails, accepting a window in which a driver is assigned to nothing; or a **globally consistent store** that runs the transaction across shards at the price of cross-region latency on every match (see [Distributed transactions](/learn/distributed-transactions)). Uber's rebuild is a data point for the second: its earlier system used sagas over an availability-first in-memory store, reports entities left inconsistent and repaired by hand, and made consistency the lead criterion for the replacement. <mark>Choose the shard key so the invariant lives on one shard, and reach for distributed transactions only when the product makes that impossible</mark>.
+
+## Deep dive 3: surge and ETA as services of their own
+
+Both numbers appear in every quote, and neither belongs in the trip service.
+
+**Surge** is a stream aggregation. Every 30 s a job reads, per cell, recent demand (requests, and app opens as a leading indicator) and supply (available drivers in the cell and its ring), computes the ratio, smooths it across neighbouring hexagons so a one-cell spike does not create a price cliff at a street, maps it to a multiplier by policy, and writes `cell → multiplier` to a cache with a 60-second TTL (see [Stream processing](/learn/stream-processing)): 17k writes a second for 500k active cells, read at every quote. The hard rule is that <mark>surge is frozen into the quote</mark>: the multiplier the rider saw is written into `trips.surge_multiplier` when they tap, so a recomputation a minute later changes the next rider's price, not this one's. Uber's public description matches: surge is specific to areas of a city, rises when there are not enough cars for the requests, updates in real time, and appears as a multiplier or an upfront fare.
+
+**ETA** is a model service with a routing engine behind it. The engine sums segment traversal times along the best path over a road graph weighted with live traffic; a learned model then predicts the residual between that estimate and what trips actually took, from origin, destination, time and request type. That is how Uber describes DeepETA, with a budget of a few milliseconds per call and the highest query rate of any model it runs. ETA is therefore the hot read path: 120k calls a second at peak, the browsing half cacheable by (origin cell, destination cell, time bucket), the in-trip half not. Dispatch depends on it for ranking, so it must degrade rather than fail: a straight-line estimate with a wide range keeps matches flowing when the model is down, and the quote says so. <mark>What makes something its own service here is a different failure mode</mark>: a stale surge value is a pricing error, a slow ETA is a product error, a wrong assignment is a liability, and the three must be allowed to fail separately.

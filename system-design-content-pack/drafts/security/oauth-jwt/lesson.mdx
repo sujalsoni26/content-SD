@@ -1,0 +1,124 @@
+**OAuth 2.0** lets a user grant one application limited access to their data held by another, without handing over a password. **OpenID Connect** adds a signed statement of who logged in. A **JSON Web Token** is the signed format both usually travel in.
+
+## The four roles
+
+RFC 6749 names four parties. Suppose a photo-book app wants to print your Instagram pictures.
+
+| Role | Does what | In the example |
+| --- | --- | --- |
+| Resource owner | Grants access | You |
+| Client | Asks for access | The photo-book app |
+| Authorization server | Authenticates the user, records consent, issues tokens | Instagram's login and token endpoints |
+| Resource server | Holds the data | Instagram's media API |
+
+The output is an **access token**, a **bearer** credential (RFC 6750): whoever holds it can use it, so it travels only over TLS in the `Authorization: Bearer` header and expires quickly, within an hour by the RFC's suggestion.
+
+## Authorization code with PKCE
+
+The default flow for web and mobile apps is the **authorization code grant** hardened with **PKCE** (RFC 7636). On a phone, a malicious app can register the same redirect URL and catch the authorization code as it comes back; PKCE binds the code to the client that started the flow.
+
+<Mermaid caption="The code travels through the browser; the verifier never does. Only the client that generated the verifier can redeem the code." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant U as Browser
+    participant C as Client app
+    participant AS as Authorization server
+    participant RS as Resource server
+    C->>C: verifier = random 43 to 128 chars, challenge = base64url(SHA-256(verifier))
+    C->>U: redirect to /authorize with client id, redirect URI, scope, state, challenge, method S256
+    U->>AS: GET /authorize
+    AS->>U: login page, then consent screen
+    AS-->>U: 302 to redirect URI with code and state
+    U->>C: code, state
+    C->>C: state matches the one we sent?
+    C->>AS: POST /token with code and verifier
+    AS->>AS: SHA-256(verifier) equals the stored challenge?
+    AS-->>C: access token, refresh token, ID token
+    C->>RS: GET /media with Authorization: Bearer token
+    RS-->>C: 200 photos
+`} />
+
+RFC 9700 (January 2025) says public clients MUST use PKCE and confidential clients SHOULD, authorization servers MUST support it, the implicit grant SHOULD NOT be used and the password grant MUST NOT.
+
+**Client credentials** covers service-to-service calls with no user: the client authenticates with its own secret or certificate (see [Secrets management](/learn/secrets-management)) and receives a token for itself. A **refresh token** obtains a new access token without involving the user; it goes only to the authorization server, never to a resource server, and public clients must rotate it on each use.
+
+## OpenID Connect: who logged in
+
+OAuth says nothing about identity: an access token is a key, not a passport. OIDC adds it: request the `openid` scope and the response also carries an **ID token**, a signed JWT with `iss`, `sub` (a stable user id), `aud` (your client id), `exp`, `iat` and the `nonce` you sent, which defeats replay. A discovery document at `/.well-known/openid-configuration` lists the endpoints and the signing keys.
+
+## Reading a JWT
+
+A JWT is three base64url strings joined by dots: header, payload, signature.
+
+```json
+{"alg": "RS256", "typ": "JWT", "kid": "2026-11-a"}
+{"iss": "https://auth.example.com", "sub": "user-42", "aud": "photos-api",
+ "exp": 1795366800, "nbf": 1795363200, "iat": 1795363200, "jti": "f3a9c1",
+ "scope": "media:read"}
+```
+
+The signature covers header and payload. **HS256** is an HMAC under a shared secret, so anyone who can verify can also forge; use it only inside one trust domain. With **RS256** or **ES256** the authorization server signs with a private key and every resource server verifies with the public key, without calling anyone.
+
+Two historical bugs explain the stern rules: libraries that accepted `"alg": "none"` and skipped verification, and libraries configured for RSA that a header claiming HS256 tricked into using the RSA *public* key as the HMAC secret (**algorithm confusion**). RFC 8725, the JWT best-practices document, draws the lesson: <mark>the verifier decides which algorithms are acceptable for which keys; the token's header is input, not instruction</mark>.
+
+## The validation checklist
+
+<Steps>
+
+1. Parse the three parts; reject anything malformed or an unexpected `typ`.
+2. Find the key named by `kid` in the issuer's **JWKS**, fetched from a URL you configured, never one in the token.
+3. Verify the signature with an algorithm from your allow-list for that key.
+4. Check `iss` is the issuer you expect and `aud` includes you; a token minted for another API is not yours.
+5. Check `exp` and `nbf`, allowing a minute or two of clock skew.
+6. Only now read `sub` and `scope` and hand them to authorisation (see [Authorisation](/learn/authorization)).
+
+</Steps>
+
+Skip the audience check and a token stolen from a low-value service unlocks a high-value one; RFC 8725 calls this cross-JWT confusion.
+
+## Keys, rotation and the revocation problem
+
+A **JWKS**, or JSON Web Key Set (RFC 7517), lists the issuer's public keys, each with a `kid`. Rotation is gentle: the issuer adds a new key and signs with it, verifiers that meet an unfamiliar `kid` re-fetch the set.
+
+Signatures create the hard problem: a signed token is valid until `exp` wherever it is, and RFC 7009's revocation endpoint notes that self-contained tokens need a non-standard back channel to be recalled immediately. The practical design is access tokens that live minutes and revocable refresh tokens that live days, so log-out or account disablement bites at the next refresh; for an instant kill switch keep a small deny-list of `jti` values at the gateway, or use **opaque tokens**.
+
+<Comparison>
+
+<ComparisonItem title="JWT access token">
+
+- Verified locally with a cached public key; no shared store needed.
+- Cannot be recalled before `exp`, and the payload is readable by anyone holding it.
+
+</ComparisonItem>
+
+<ComparisonItem title="Opaque token">
+
+- The resource server asks the authorization server what it means (introspection, RFC 7662), so revocation is immediate and nothing is exposed.
+- One extra call per request, or a cache that brings staleness back.
+
+</ComparisonItem>
+
+</Comparison>
+
+<Callout type="analogy" title="The valet key">
+
+A valet key starts the engine but will not open the boot. You hand the valet (the client) that key (the access token) instead of your master key (the password), and the dealer (the authorization server) can cut one that only works tonight. Where it stops: a metal key never expires by itself, the one property a token must have.
+
+</Callout>
+
+<Callout type="interview" title="One sentence that covers the module">
+
+"Browser and mobile clients use authorization code with PKCE; services use client credentials. Access tokens are short-lived RS256 JWTs validated at the gateway against the issuer's JWKS for signature, issuer, audience and expiry; refresh tokens are rotated and revocable."
+
+</Callout>
+
+<DeepDive title="Go deeper: where a browser app should keep tokens">
+
+A single-page app that stores tokens in `localStorage` hands them to any script that runs on the page, which is why OWASP's session guidance says not to. The usual cure is a **backend for frontend**: a thin server holds the tokens and gives the browser an ordinary HttpOnly session cookie (see [Authentication](/learn/authentication)), while the API behind it still receives standard bearer JWTs.
+
+</DeepDive>

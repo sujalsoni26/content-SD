@@ -1,0 +1,297 @@
+Press play and the picture should appear within about two seconds, on thousands of device types, at the best bitrate the connection can carry. The design splits along one line: a **control plane** that decides what you may watch and where to fetch it, and a **data plane** that moves the bytes. The first is a large but ordinary web system in a few cloud regions; the second is owned hardware inside internet providers, filled the night before. The order is that of [How to work a case study](/learn/case-study-method); where this study says "Netflix does", a source in the metadata backs it, and "a system like Netflix would" is this study's choice.
+
+## Requirements
+
+- **Functional:** a personalised home page per profile; search; play with adaptive bitrate on TVs, phones, browsers and set-top boxes; resume on another device; several profiles per account; subtitles and alternate audio.
+- **Out of scope:** sign-up and billing, offline downloads, live events and advertising (both return under *How it evolves*), and the recommendation models.
+- **Non-functional:**
+  - **Start fast and never stall:** first frame in about two seconds and a rebuffer ratio near zero, because a stall is when a viewer gives up.
+  - **Video served from inside the viewer's ISP**, because a country's prime-time peak cannot cross transit links or be paid for at transit prices.
+  - **Play survives the loss of a cloud region**, because the play button is the product: a less personal home page is acceptable, a dead play button is not.
+  - **Correct authorisation and content protection**, because licensors require that only paying members in licensed countries decrypt a title, within the plan's stream limit.
+  - **Freshness in minutes:** a new title, a changed row or a bookmark may lag by seconds to minutes.
+
+## Estimation
+
+Assume 300M accounts; two hours watched per account per day; a 45-minute average play; 5 Mbps average bitrate across the ladder; a catalogue of 20,000 hours, each encoding to about 50 GB across codecs, rungs and audio tracks; 1% of the catalogue added or re-encoded per day; the home page opened three times a day per account and built from 30 service calls; one 500 B telemetry event every 10 seconds per stream; peaks of three times the average. For the appliance, use Netflix's published figures: about 200 Gbps and up to 120 TB per storage appliance.
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Hours streamed per day | 3 × 10⁸ × 2 h | 6 × 10⁸ h |
+| Concurrent streams | 6 × 10⁸ h ÷ 24 h, ×3 at peak | 25M average, \~75M peak |
+| Video egress | 25M × 5 Mbps, ×3 at peak | 125 Tbps average, \~375 Tbps peak |
+| Bytes delivered per day | 125 Tbps × 86,400 s ÷ 8 | \~1.35 EB |
+| Appliances at peak | 375 Tbps ÷ 200 Gbps, then ×2 for headroom | \~1,900 flat out, \~4,000 provisioned |
+| Catalogue, every rendition | 20,000 h × 50 GB | 1 PB |
+| Share of the catalogue one appliance holds | 120 TB ÷ 1 PB | 12% |
+| Daily content change | 1% × 1 PB | 10 TB |
+| Fill rate per appliance | 10 TB in a 10-hour off-peak window | 278 MB/s ≈ 2.2 Gbps |
+| Plays per second | 6 × 10⁸ h ÷ 0.75 h ÷ 86,400 s, ×3 at peak | \~9.3k average, \~28k peak |
+| Control-plane calls per play | 28k × 3 (authorise, steer, licence) | \~84k/s at peak |
+| Home pages and their fan-out | 3 × 10⁸ × 3 ÷ 86,400, ×3 at peak, × 30 calls | \~31k pages/s, \~940k internal calls/s |
+| Telemetry events | 25M ÷ 10 s, ×3 at peak | 2.5M/s average, \~7.5M/s peak |
+| Telemetry volume | 2.5M/s × 500 B × 86,400 s | \~108 TB/day |
+
+→ <mark>375 Tbps of video against a 1 PB catalogue</mark>: every byte of the catalogue is delivered about 1,300 times a day (1.35 EB ÷ 1 PB), while the whole control plane answers roughly 100k external requests a second, a large but ordinary web workload. In the terms of [Three system shapes](/learn/system-shapes): a bandwidth-heavy data plane with a small, *predictable* data set, and a read-heavy control plane. The predictability is the design: tonight's catalogue is known today, so it can be copied to thousands of places before anyone asks.
+
+## API
+
+| Endpoint | Request | Success | Errors |
+| --- | --- | --- | --- |
+| `GET /home` | bearer token, profile header | 200 + rows of title ids and artwork keys, personalised | 401 · 503 degraded to unpersonalised rows |
+| `POST /playback/sessions` | `{ "title_id", "device_type", "drm_system" }` | 201 + `{ "session_id", "manifest", "appliances": [ … ] }`, the appliances ranked | 403 not licensed in this country · 409 concurrent-stream limit reached |
+| `POST /drm/licences` | `{ "session_id", "challenge" }`, signed by the device | 200 + licence bound to this device and session | 403 device not trusted · 410 session expired |
+| `GET https://<appliance>/{title}/{rung}/{segment}` | `Range` header | 206 bytes | 404 not on this appliance, so the client tries the next one |
+| `PUT /profiles/{id}/bookmarks/{title_id}` | `{ "position_s" }` | 204 | – |
+| `POST /playback/events` | a batch of events | 202 | – (dropped on failure, never retried into the play path) |
+
+The **manifest** lists the title's bitrate ladder and segment layout; the **appliance list** is ranked for this client right now.
+
+## Data model
+
+```text
+-- relational, one writer region per account (where billing lives)
+account(account_id, email, plan, stream_limit, country, status)
+profile(profile_id, account_id, name, maturity, language)
+
+-- catalogue: written by editors and the encoding pipeline, read by everyone
+title(title_id, type, parent_id, synopsis, artwork_keys[], release_at)
+rendition(title_id, codec, rung, width, height, bitrate_kbps, segments, origin_key)
+rights(title_id, country, licensed_from, licensed_until)
+
+-- per-profile state: wide-column, partitioned by profile_id, replicated to every region
+bookmark(profile_id, title_id)        -> position_s, updated_at     -- last writer wins
+history(profile_id, watched_at desc)  -> title_id, seconds, device  -- append-only
+allocation(profile_id, experiment_id) -> cell, allocated_at         -- sticky per experiment
+
+-- data-plane inventory, owned by the control plane
+appliance(appliance_id, site, isp_asn, prefixes[], health, free_tb)
+placement(appliance_id, title_id, rung) -> filled_at                -- what each box holds tonight
+
+-- a firehose, not a table: playback_event(session_id, ts, type, rung, buffer_s, ...) into Kafka
+```
+
+Accounts are relational because plans and payments need transactions. The catalogue is a few hundred megabytes read millions of times, so one copy per region with TTL caches. The per-profile tables are the big ones, 300M partitions with no cross-profile queries, so a wide-column store partitioned by `profile_id` fits and no partition is ever hot.
+
+## High-level design
+
+Everything before play goes to the nearest of three cloud regions; the bytes come from an appliance inside the viewer's ISP. Netflix's account of the split is blunt: the service has run on AWS since completing its migration in January 2016, and "video is delivered through Netflix Open Connect", its own content delivery network.
+
+<Mermaid caption="Two planes. The control plane is three active-active cloud regions behind a gateway; the data plane is appliances inside ISPs, filled overnight from appliances at exchange points, which are filled from the encoding origin." chart={`flowchart LR
+    D["Devices: TVs, phones, browsers"]
+    subgraph CP["Control plane: three cloud regions, active-active"]
+        GW["API gateway: auth, routing, shedding"]
+        HP["Home page and personalisation"]
+        PB["Playback: authorise, steer, manifest"]
+        LIC["DRM licence service"]
+        CA["Cache tier"]
+        WC["Wide-column store, replicated across regions"]
+        EV["Event ingest"]
+        K["Kafka"]
+        FL["Stream jobs: QoE, recommendation features"]
+        GW --> HP
+        GW --> PB
+        GW --> LIC
+        GW --> EV
+        HP --> CA
+        PB --> CA
+        CA --> WC
+        EV --> K
+        K --> FL
+    end
+    subgraph DP["Data plane: owned CDN"]
+        OCA["Appliance inside the viewer's ISP"]
+        IX["Appliances at exchange points: whole catalogue"]
+        OR["Origin: encoded renditions in object storage"]
+        ENC["Encoding pipeline"]
+        IX -. "nightly fill" .-> OCA
+        OR -. "fill" .-> IX
+        ENC --> OR
+    end
+    D --> GW
+    D --> OCA
+`} />
+
+- **API gateway, one per region:** terminates TLS, checks the token, routes by device and experiment cell and sheds load by category. Netflix's Zuul calls itself the front door for all requests from devices and web sites, with filters for authentication, routing, load shedding and multi-region resiliency.
+- **Home page and personalisation:** assembles about 30 service calls into one response so that a weak TV makes one request.
+- **Playback service:** the call that must not fail: rights by country, streams against the plan, the manifest for the device, and a ranked appliance list from `placement` and health, because the device, not the appliance, has to fail over in under a second.
+- **Licence service:** releases the decryption key bound to a device certificate and a session, so that a copied stream is useless without a copied device; stateless in every region because it has no degraded mode.
+- **Cache tier and wide-column store:** per-profile state in every region behind a memcached-style cache (Netflix's EVCache is memcached-based), because rows are read on every app open and rewritten rarely.
+- **Event ingest, Kafka, stream jobs:** devices report what they play, at which rung, with how much buffer; the jobs turn 7.5M events a second into quality dashboards and recommendation features (see [Stream processing](/learn/stream-processing)).
+- **Appliances:** the exchange-point tier holds the whole catalogue; the embedded tier holds tonight's slice for its ISP. Netflix states that embedded appliances sit inside over a thousand partner ISPs, receive nightly fills, ship pre-filled with content suited to the region, and are steered by BGP sessions the ISP configures.
+
+<Mermaid caption="Pressing play. Three control-plane calls, then bytes from the ISP appliance; the device chooses the rung per segment from measured throughput and buffer, and telemetry never sits on the play path." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant Dv as Device
+    participant GW as Gateway
+    participant PB as Playback service
+    participant LIC as Licence service
+    participant OCA as ISP appliance
+    Dv->>GW: POST /playback/sessions, title 42
+    GW->>PB: authorise and steer
+    Note over PB: Plan has a free stream, title licensed here
+    Note over PB: Rank appliances: holds title, healthy, nearest by BGP
+    PB-->>Dv: manifest, ladder, ranked appliance list
+    Dv->>LIC: licence request with device challenge
+    LIC-->>Dv: licence bound to this device
+    Dv->>OCA: GET segment 1, 3 Mbps rung
+    OCA-->>Dv: bytes, first frame inside 2 s
+    Note over Dv: Throughput measured, buffer growing
+    Dv->>OCA: GET segment 2, 5.8 Mbps rung
+    OCA-->>Dv: bytes
+    Dv->>GW: playback events every 10 s, fire and forget
+`} />
+
+## Storage and caching
+
+| Data | Where | Why |
+| --- | --- | --- |
+| Encoded renditions, 1 PB | Object storage in one region, replicated to a second | Written once per encode, read only by exchange-point appliances during fill |
+| The catalogue on appliances | Local SSDs, 120 TB per storage appliance | The top 12% of titles by predicted plays, refreshed nightly; the exchange-point tier keeps everything |
+| Account and billing | Relational, single writer | Transactions and small size; a region failover promotes a replica |
+| Bookmarks, history, allocations | Wide-column, partitioned by `profile_id`, every region | 300M partitions with no cross-partition reads; append-only history and last-writer-wins bookmarks replicate without coordination |
+| Hot per-profile reads | Memcached-style tier in each region, TTL minutes | The home page reads a profile's state 30 times; a miss costs a cross-zone read, a stale row costs nothing |
+| Catalogue rows and rights | In-process cache per service, TTL 60 s, behind a regional cache | A few hundred megabytes everyone reads; a minute of staleness is within the requirement |
+| Placement and appliance health | In memory in the playback service, refreshed every few seconds | Steering runs on every play and must not wait on a database |
+| Playback events | Kafka, hours of retention, then a lake | A firehose that is consumed, not queried |
+
+The video bytes are never cached in the cloud or by a commercial CDN: the appliance is not a pull-through cache in the sense of [CDN internals](/learn/cdn-internals) but a **pre-filled replica**.
+
+## Scaling
+
+### The control plane
+
+Services are stateless and autoscale within each region. Each region is provisioned at half of global peak rather than a third, so that when one fails the other two absorb its share without a scaling delay (see [Autoscaling](/learn/autoscaling)); idle capacity is the price of a failover that needs no new machines. What grows faster than users is the **fan-out**: 30 calls per page at 31k pages a second is nearly a million internal requests a second, and the page waits for the slowest.
+
+<Interactive name="tail-latency" />
+
+Set the backends to 30 and the slow rate to 1 in 100: about a quarter of pages wait on a slow call. That number decides the per-call timeout budget and which calls may be skipped (deep dive 3).
+
+### The data plane
+
+Appliances are added where the traffic is, ISP by ISP. The other lever is the bitstream: encoding 20% more efficiently removes 75 Tbps from the peak, about 375 appliances, without a new box (deep dive 2).
+
+## Consistency and availability
+
+[Multi-region architecture](/learn/multi-region) says to choose a strategy per data class; the rule throughout is that the play path never waits on another region.
+
+| Data class | Regions | Strategy | Why |
+| --- | --- | --- | --- |
+| Account, plan, billing | One writer, async replicas | Single-writer, RPO seconds on failover | Money needs one order of events; a plan change may take a minute to reach a distant region |
+| Catalogue and rights | One writer, async replicas, 60 s caches | Eventual, minutes | Written by hundreds, read by hundreds of millions |
+| Bookmarks | Every region writes | Multi-leader, last writer wins | Two devices pausing the same title a second apart: the later position wins and nobody is harmed |
+| Viewing history | Every region writes | Append-only, commutative | Two regions appending different rows never conflict |
+| Concurrent-stream count | Each region counts locally | Approximate, lean towards allowing | A fourth stream slipping through for a minute during a failover is cheaper than refusing a legitimate one (see [CAP](/learn/cap)) |
+| Experiment allocation | Written once, read everywhere | Sticky; derived deterministically from profile and experiment if the row is missing | A member must see the same cell on every device, and a missing row must not change their experience |
+| DRM licence | Stateless signing in every region | No shared state | Nothing to replicate, so nothing to disagree |
+
+None of this is strongly consistent in the sense of [Consistency](/learn/consistency); there is no seat to sell twice.
+
+<Callout type="analogy" title="A cinema chain that prints the reels overnight">
+
+The head office (control plane) decides what each cinema shows, sells tickets and checks membership cards. The reels (data plane) are driven to every cinema the night before, so at 9 p.m. no lorry is on the motorway; a cinema missing tonight's film sends you to the next town (the exchange-point tier). Where it breaks: a reel is one quality; here every film is printed at ten and the projector switches between them as the room fills.
+
+</Callout>
+
+## Failure and recovery
+
+| Failure | What users see | How it heals |
+| --- | --- | --- |
+| One appliance dies | A second of stall for streams on it | The device moves to the next appliance in its ranked list; steering stops ranking the box; Netflix describes failover to another embedded site or to its exchange-point appliances |
+| ISP link congested at prime time | Picture softens | Adaptive bitrate steps down a rung before the buffer empties; the quality metrics show it per ISP |
+| A title missing from the local appliance | Nothing, if the exchange-point tier is close | Served from the exchange-point tier over transit; the nightly plan is corrected |
+| Fill window missed (link down overnight) | More transit the next day | The appliance keeps serving yesterday's content; tonight's plan carries over |
+| A cloud region fails | Nothing, if rehearsed; otherwise minutes of failed plays | DNS and the gateways steer to the other regions, already running at half of global peak; per-profile data is already there (see [Disaster recovery](/learn/disaster-recovery) on rehearsals) |
+| Personalisation service slow | Rows are less personal | Breaker opens, the home page falls back to cached or unpersonalised rows, nobody is paged for the page (deep dive 3) |
+| Licence service down in a region | New plays fail there, playing streams continue | No degraded mode exists, so it runs in every region with the most headroom and the fewest dependencies |
+| Kafka backlog | Dashboards and recommendations lag | Events are fire-and-forget from the device, so playback is untouched; consumers catch up |
+| A bad encode of one rung | Devices avoid that rung | The manifest is withdrawn for the rung; the quality metrics per title find it first |
+
+<mark>The data plane fails towards worse pictures, the control plane fails towards a less personal page, and only the licence and playback services have nowhere to fall back to</mark>, which is why they are the smallest, most replicated and least dependent boxes in the diagram.
+
+## Security
+
+- **Authentication and devices:** members hold tokens as in [OAuth 2.0 and JWT](/learn/oauth-jwt); devices also hold a certificate from manufacture that the licence service checks, because a stolen token must not be enough to decrypt a stream.
+- **Content protection:** segments are encrypted on disk and in flight; keys come only from the licence service, bound to device and session. An appliance sits in a third party's building, so it holds ciphertext and no keys, and authenticates with mutual TLS (see [Encryption](/learn/encryption)).
+- **Authorization:** rights are checked by country at play time, because the catalogue is cached for a minute and rights windows end at midnight.
+- **Abuse this design invites:** credential stuffing against 300M accounts (gateway rate limits, see [API security](/learn/api-security)), and a device claiming a better device type to obtain a higher rung, which is why the licence, not the manifest, is the control.
+
+## Observability
+
+Five numbers prove health (see [Metrics and monitoring](/learn/metrics-monitoring)): **successful play starts per second** by region and device, the curve every failure bends first; **time to first frame and rebuffer ratio** per ISP and title; **share of bytes served by embedded appliances**, the cost of a bad forecast; **fill completion by the end of the window**; and **breaker-open minutes per dependency**. The trace to keep (see [Distributed tracing](/learn/tracing)) is `POST /playback/sessions` with spans for rights, stream count, steering and licence, so that a slow play start names which was slow.
+
+## Trade-offs and bottlenecks
+
+<Comparison>
+
+<ComparisonItem title="Owned, pre-filled CDN (this design)">
+
+The catalogue is pushed to appliances inside ISPs before it is wanted, so prime-time bytes never cross transit and a miss is a planning error rather than a request-time event. The cost is capital, a thousand ISP relationships and a planning problem solved every night.
+
+</ComparisonItem>
+
+<ComparisonItem title="Commercial pull-through CDN">
+
+Edges fetch on a miss, tiered through an origin shield, with nothing to plan and nothing to own. The cost is that the first viewer of every object at every edge waits on the origin, and that terabits of egress are paid for at a provider's price.
+
+</ComparisonItem>
+
+</Comparison>
+
+The condition that decides: <mark>are tonight's bytes known this morning?</mark> A catalogue that changes 1% a day is; the long tail of user uploads in [Design YouTube](/learn/design-youtube) is not, and that study has to pull. Next to break, in order: the **licence and playback services**, the two boxes without a fallback; the **fill window**, when daily change outgrows 2.2 Gbps per appliance; **fan-out tail latency** past 30 calls; and the **event pipeline** if a consumer falls a day behind. Not taken: one global region (every play pays a cross-continent round trip, and one failure is total); synchronous cross-region replication for bookmarks; caching video in the cloud (paying twice for bytes already in the ISP); retrying failed personalisation calls (deep dive 3 shows why a retry storm is worse than a plain page).
+
+<Callout type="interview" title="Say the two planes, then the number that forces them">
+
+"Three hundred and seventy-five terabits a second from a one-petabyte catalogue: the bytes dominate and they are predictable, so I pre-fill appliances inside ISPs every night by forecast popularity and keep the whole catalogue at exchange points. Everything before play, the home page, authorisation, steering and the DRM licence, is a stateless control plane in three active-active regions, each sized for half the peak. Bookmarks are last-writer-wins, history is append-only, and the only strong-ish thing is the stream count, where I choose to allow rather than refuse." Then name the box you refuse to let fail: the licence service, because it has no degraded mode.
+
+</Callout>
+
+## How it evolves
+
+At **10× the hours** (more viewing per account and a 4K share that lifts the average bitrate) egress approaches 1,250 Tbps at peak; appliances grow, but the cheaper lever is codec efficiency, where a 30% saving is thousands of boxes not bought. **Live events** are the one thing this design cannot pre-fill: the bytes exist seconds before they are watched, so the exchange-point tier and ISP links carry a live peak in real time; an **advertising tier** adds a decision at play time.
+
+At **100×** the shape changes, not the size. User-generated content would remove the predictability and with it the pre-filled data plane, converging on YouTube's design. Staying with a catalogue, placement moves from nightly batches to continuous fills driven by the same playback events that feed recommendations.
+
+## Deep dive 1: filling appliances before anyone presses play
+
+The data plane works only if the right 12% of the catalogue is on each appliance when prime time starts. Netflix's partner site gives the shape (nightly fills, appliances pre-filled before shipping, steering by BGP); the rest is how a system like Netflix would run it.
+
+<Steps>
+
+1. **Forecast.** For each region and title, predict tomorrow's plays from the playback-event stream, the release calendar and the rights windows.
+2. **Plan placement.** Per appliance, rank titles by predicted plays in its ISP and take rungs from the top until the 120 TB is spent. The output is tonight's `placement` rows.
+3. **Fill in the window.** In the ISP's off-peak hours each appliance pulls the difference between what it holds and the plan, about 10 TB at 2.2 Gbps, first from same-site peers, then from the exchange-point tier; only that tier pulls from the origin, so 4,000 appliances copying 40 PB a night do not touch the cloud 4,000 times.
+4. **Report.** Each appliance reports contents and health every few seconds; the playback service keeps that in memory.
+5. **Steer.** At play time, rank the healthy appliances that hold the title by proximity to the client, learned from the prefixes the ISP announces over BGP, and return the top few so the device can fail over without another call.
+
+</Steps>
+
+Two numbers make this a design rather than a wish. The fill fits the window with room to spare (2.2 Gbps on a box that serves 200 Gbps). And the hit ratio comes from the forecast, not the cache: assume the top 12% of titles carry 80% of plays; every point the forecast is wrong by is a point of transit bought at prime time. <mark>The appliance is not a cache that learns, it is a replica that was told</mark>, by a nightly batch job whose quality is a line on tomorrow evening's graph.
+
+## Deep dive 2: one ladder per title, one rung per segment
+
+A **bitrate ladder** is the set of renditions a title is encoded into, say ten rungs from 235 kbps at 320 pixels wide to 16 Mbps at 4K. The device picks a rung per segment of a few seconds from measured throughput and the buffer it holds: start low for a fast first frame, climb while the buffer grows, step down before it empties.
+
+The expensive mistake is one ladder for every title. A flat cartoon and a rain-soaked action scene need very different bits for the same perceived quality: at a fixed 5.8 Mbps rung the cartoon wastes most of its bits while the action scene is blocky. A system like Netflix would build the ladder **per title**: encode at many resolution and bitrate points, measure perceptual quality at each, and keep only the upper convex hull of quality against bitrate, so that every rung is the cheapest way to reach its quality for *this* title.
+
+The estimate shows why this is a data-plane decision. The 5 Mbps average drives the 375 Tbps peak; a 20% saving is 75 Tbps, about 375 appliances, and the same again on the ISP's links. The cost is compute: 200 new content hours a day, each encoded dozens of times to find the hull, is thousands of CPU-hours a day, run as chunked parallel jobs over a work queue (see [Message queues](/learn/message-queues)).
+
+## Deep dive 3: hundreds of services and one play button
+
+The home page touches about 30 services and the play path four; across the company the count is in the hundreds (see [Microservices](/learn/microservices)). At that number a dependency is always slow somewhere, and the toolkit this forces is the one in [Circuit breakers](/learn/circuit-breaker) and [Bulkheads](/learn/bulkheads-degradation), under one ordering rule: <mark>the play path depends on as little as possible, and everything else degrades</mark>.
+
+<Interactive name="circuit-breaker" />
+
+- **Timeouts and breakers per dependency.** Each call has a budget set from the tail and a breaker that opens after a window of failures. Netflix's Hystrix made the pattern famous, with thread and semaphore isolation, circuit breakers and fallbacks; it is in maintenance mode and Netflix recommends Resilience4j, but the pattern is unchanged.
+- **Bulkheads.** Each dependency gets its own bounded pool, so a slow ranking service pins only the ranking pool.
+- **Fallbacks that are real.** Cached rows, then unpersonalised popular rows, for the home page; the device's own last position for continue-watching; none for the play path, which is why its four calls get the most capacity and the fewest hops. A fallback that never runs is a hope, so breakers are tripped on purpose in production on a schedule.
+- **Chaos.** Netflix's Chaos Monkey randomly terminates instances in production so that engineers build services that survive instance failure; a system like Netflix would extend the habit to a region, evacuating one on a schedule to prove the other two carry it.
+- **Experiments as the change mechanism.** An allocation service assigns each profile to a cell, and the stream jobs compute per-cell play starts and stalls from the same telemetry; a change that moves the play-start curve down is rolled back by reallocation.
+
+When personalisation times out for 2% of pages, retrying doubles that service's load at its weakest moment and turns a 2% degradation into an outage; opening the breaker keeps the page at 100% while the dependency recovers. <mark>Retry what is idempotent and cheap; fall back on what is optional; fail only the thing with no fallback, and make that thing small.</mark>

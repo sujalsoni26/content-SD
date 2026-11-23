@@ -1,0 +1,72 @@
+The **strangler fig** pattern replaces a system gradually: put a routing facade in front of the old one, build one capability afresh behind the facade, move that capability's traffic across, and repeat until the old system serves nothing. Martin Fowler named it after figs he saw in Queensland in 2001: vines that germinate in a nook of a tree, grow around the host, and are still standing when it dies.
+
+## Why not a rewrite
+
+A big-bang rewrite takes years during which features are frozen; the old system's real behaviour is specified nowhere but in its code, and much of it is unwanted; and it ends on one cut-over night when everything changes at once. Replacing one capability at a time delivers value early, lets the first slice teach you how to do the second, and makes rollback as cheap as a routing change. Investment and return happen, in Fowler's words, "gradually and visibly". The lines you cut along are the bounded contexts from [Monolith, modular monolith, SOA and microservices](/learn/modular-monolith-soa).
+
+## The facade
+
+<Mermaid caption="A routing facade sends each capability to whichever implementation currently owns it; a canary share of order traffic is already on the new side, and the new store is kept in step with the legacy database by CDC until the writers move." chart={`flowchart LR
+    U["Clients"] --> F["Routing facade"]
+    F -->|"menu, search"| N["New services"]
+    F -->|"orders, 10 percent"| N
+    F -->|"orders, 90 percent"| L["Legacy monolith"]
+    F -->|"payments, refunds"| L
+    L --> D[("Legacy DB")]
+    N --> ND[("New DB")]
+    D -.->|"CDC sync"| ND
+`} />
+
+<Steps>
+
+1. Put a facade in front: an API gateway or reverse proxy (see [API gateway and backend-for-frontend](/learn/api-gateway)) that at first routes everything to the legacy system. Nothing else changes, and every request is now visible and steerable.
+2. Pick a **seam**: a capability with clear inputs and outputs and few tangled dependencies. Menu search before payments. Build it anew.
+3. Route a slice of its traffic to the new implementation, shadow first, then a small percentage, then all, keeping the switch that sends it back.
+4. Move the data the capability owns (below).
+5. Delete the old code path, then choose the next seam. The facade's special rules are **transitional architecture**, code that must go away once the migration is complete.
+
+</Steps>
+
+## Branch by abstraction: the same move inside the code
+
+When the thing to replace is a module or library with no network seam, use **branch by abstraction**, Paul Hammant's name for a technique he credits to Stacy Curl. Introduce an interface over the old implementation; move every caller onto it; build the new implementation behind it; switch with a flag; delete the old one, and the interface too if it no longer earns its keep. Trunk stays releasable throughout, which a long-lived branch cannot offer. Shopify's module isolation made exactly this possible when it swapped out its legacy tax engine.
+
+## Verify before you switch: parallel run
+
+Send the same request to old and new, serve the old answer, and compare the new answer afterwards, logging mismatches. GitHub's Scientist library does this in Ruby: the `use` block is the control, the `try` block the candidate; both run and are timed, and the caller always receives the control's result. At the network level the same idea is **shadow traffic**: the facade mirrors requests to the new service and discards its responses, which Envoy calls request shadowing. Two cautions: the candidate must have no side effects (no second charge, no second email), and comparisons need tolerance for timestamps and generated ids.
+
+## Feature flags as the switch
+
+Pete Hodgson's taxonomy names release toggles (ship code dark), ops toggles (a kill switch), experiment toggles and permission toggles. A migration uses a release toggle per capability, widened by cohort (staff, then 1 percent, then everyone), plus an ops toggle that falls back to the old path instantly. Toggles are, in his phrase, "inventory which comes with a carrying cost": every live flag doubles the paths to test, so delete each one when its slice is done.
+
+<Callout type="analogy" title="Renovating a shop while trading">
+
+You do not close for a year. You fence off one aisle, fit out the new aisle behind the fence, open it, move the stock, then take the old aisle down and move the fence. The fence is the facade; moving the stock is the data migration. Where the analogy fails: in a shop you can watch customers use the new aisle; in software you need the parallel run to know.
+
+</Callout>
+
+## Data: expand and contract, never dual writes
+
+The shortcut everyone reaches for is the **dual write**: the new service writes each change to its own database and to the legacy one. No transaction spans both, so one write succeeds while the other fails, the copies diverge silently, and retries make it worse. The safe route is **parallel change**, better known as expand and contract, written up by Danilo Sato in 2014:
+
+- **Expand.** Add the new store or columns beside the old. The legacy system stays the single writer of record.
+- **Migrate.** Backfill, then keep the new store in step by change data capture from the legacy database's log (see [CDC](/learn/cdc)) or an outbox (see [Pub/sub](/learn/pubsub)). Move readers, then writers, one writer of record at a time, with CDC flowing the other way while the old system still reads.
+- **Contract.** Remove the old columns and code once nothing uses them.
+
+<mark>One writer of record at a time; let a log, not your application code, keep the copies in step.</mark>
+
+## Knowing when to stop
+
+Stop when what remains is cheap to run and rarely changes; a wrapped legacy module that works is not a problem to solve. Stop when the next slice costs more than it returns. And when you stop, remove the facade's transitional rules and the dead flags, or the strangler becomes a second legacy system wrapped around the first.
+
+<Callout type="interview" title="Say the loop, including the exit">
+
+"Facade in front; one capability at a time behind a flag; shadow traffic to compare before switching; expand and contract for the data, with CDC keeping the copies in sync and never dual writes; delete the old path before starting the next slice; stop when the remainder is cheap." The last clause is the one most candidates forget.
+
+</Callout>
+
+<DeepDive title="Go deeper: changing a column while the app runs">
+
+Inside one database, writing both versions is safe because both writes share a transaction. To rename `addr` to `address_line1`: add the new column (expand); deploy code that writes both and reads the new one with a fallback; backfill in batches; stop writing the old column; drop it (contract). Each step deploys alone and reverses cleanly. The dual-write hazard is specific to two stores without a shared transaction, where a log must do the copying.
+
+</DeepDive>

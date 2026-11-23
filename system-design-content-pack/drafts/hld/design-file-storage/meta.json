@@ -1,0 +1,108 @@
+{
+  "slug": "design-file-storage",
+  "title": "Design Google Drive / Dropbox",
+  "moduleId": "hld",
+  "level": "advanced",
+  "minutes": 17,
+  "problem": "Fifty terabytes of new files a day must be uploaded once, kept forever, synced to every device within seconds, and never point at bytes that do not exist.",
+  "summary": "Files become content-hashed 4 MB blocks in object storage, uploaded through pre-signed URLs; a sharded SQL database holds names, versions, permissions and a per-namespace change journal that devices follow with a cursor, and a janitor reconciles the two stores because no transaction spans them.",
+  "catTip": "I shred every file into 4 MB biscuits and label each by its taste. Biscuits tasted before are not baked twice, and a dropped upload only re-sends the biscuits that fell. The recipe card lives in another cupboard, so I check both cupboards nightly.",
+  "recall": {
+    "q": "A 2 GB upload dies at 90 percent and, separately, two laptops edit the same spreadsheet offline. How does one design handle both without special cases?",
+    "a": "The file is a blocklist of 4 MB content hashes: re-offering the blocklist makes the server list only the blocks still missing, so resumption is dedup against the half-finished upload. Each commit carries the parent version, and a compare-and-set on current_ver rejects the second laptop, which saves its work as a conflicted copy instead of overwriting."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Whole-file uploads through application servers double the bandwidth bill, cannot resume or deduplicate, and a crash between writing the bytes and writing the metadata leaves files that point at nothing.",
+    "tradeoffs": "Chunking adds a block index with a hundred million new rows a day, devices must keep cursors and merge conflicts themselves, and the database and object store can only be kept honest by an ordering rule plus a background reconciler.",
+    "explainSimply": "Think of a file as a recipe listing numbered ingredients kept in a warehouse. If the warehouse already has an ingredient nobody sends it again, a delivery that stops halfway only resumes the missing ones, and the recipe card is only written once every ingredient is on the shelf. Every night someone checks that no recipe mentions an ingredient the warehouse does not have.",
+    "hint": "Think about what the client sends first, the hashes or the bytes, and what the server can therefore refuse to write."
+  },
+  "meow": "Four-megabyte biscuits named by taste. Tasted before? Skip. Dropped? Re-send the fallen ones. Recipe card written last, meow.",
+  "quiz": [
+    {
+      "prompt": "A sync client crashes after uploading 400 of a video's 512 blocks and never calls commit. What happens when it restarts, and what is left behind on the server?",
+      "options": [
+        "It must restart the upload from the first block, and nothing is left behind because uncommitted blocks are rejected",
+        "It re-offers the same blocklist, is told it needs 112 blocks, and the 400 stored blocks would be orphans only if it never committed",
+        "The server auto-commits the partial file as a new version so that nothing is lost",
+        "The pre-signed URLs are reissued and all 512 blocks are re-uploaded, because object storage cannot verify partial uploads"
+      ],
+      "answer": 1,
+      "explanation": "Blocks are content-addressed, so re-offering the blocklist makes need_blocks list only the 112 missing hashes, and the stored blocks become orphans for the janitor only if no commit ever references them. The server cannot auto-commit, because a version must point only at a complete blocklist."
+    },
+    {
+      "prompt": "A design deletes a block's object the moment its refcount reaches zero. Which failure does this invite, and what is the fix?",
+      "options": [
+        "Orphan blocks accumulate, fixed by a nightly inventory of object storage",
+        "A concurrent upload that was told 'block already present' commits a version pointing at a block being deleted, fixed by a grace period longer than the upload window plus a refcount re-check before deletion",
+        "The journal and the version table drift apart, fixed by writing them in one transaction",
+        "Pre-signed download URLs stop working early, fixed by signing them for seven days"
+      ],
+      "answer": 1,
+      "explanation": "The race is between dedup saying 'already have it' and the deleter removing the object, which creates a dangling reference, the one inconsistency that loses data; a grace period bounded by the longest possible upload and a re-check close it. Orphans are the harmless direction of inconsistency and are not caused by deleting too early."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: uploads from phones fail halfway, identical files are uploaded by thousands of users, and a one-line edit to a 100 MB file should not re-send 100 MB. Decision and why?",
+      "a": "Split every file into fixed 4 MB blocks named by their SHA-256 hash and let the client offer the blocklist before any bytes. The server answers with the blocks it lacks, so dedup, delta upload and resumption are the same mechanism; the cost is a block index that grows by about a hundred million rows a day."
+    },
+    {
+      "q": "Problem: the metadata lives in SQL and the bytes in object storage, and no transaction spans the two. Decision and why?",
+      "a": "Order the writes so the only possible inconsistency is harmless: blocks first, then a commit that verifies every hash exists before writing the version row. That leaves orphans (bytes nobody references) but never dangling references (versions pointing at missing bytes); a janitor removes orphans after a grace period longer than the maximum upload window and re-checks refcounts before deleting."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    {
+      "title": "Dropbox Tech Blog, \"Streaming File Synchronization\" (Nipunn Koorapati, 10 July 2014)",
+      "url": "https://dropbox.tech/infrastructure/streaming-file-synchronization",
+      "accessed": "2026-11-22",
+      "supports": "every file is split into 4 MB blocks with the last block smaller; blocks are hashed with SHA-256; a file's contents are identified by its ordered list of hashes, the blocklist; the metadata server reports which blocks it still needs so only those are uploaded; separate metadata server and block server; rsync used to minimise transfer sizes",
+      "status": "verified"
+    },
+    {
+      "title": "Dropbox Tech Blog, \"Inside the Magic Pocket\" (James Cowling, 6 May 2016)",
+      "url": "https://dropbox.tech/infrastructure/inside-the-magic-pocket",
+      "accessed": "2026-11-22",
+      "supports": "blocks of up to 4 MB keyed by SHA-256 hash; blocks are immutable once written; a Block Index maps each block to the bucket holding it; each block stored in at least two zones; older data erasure-coded across regions",
+      "status": "verified"
+    },
+    {
+      "title": "Dropbox Help Center, \"What's a conflicted copy?\"",
+      "url": "https://help.dropbox.com/organize/conflicted-copy",
+      "accessed": "2026-11-22",
+      "supports": "a conflicted copy is created when the same file is edited at the same time or offline by two people; it is named with the editor's name, the words 'conflicted copy' and the date; the last version saved appears as the conflicted copy",
+      "status": "verified"
+    },
+    {
+      "title": "Amazon S3 User Guide, \"Sharing objects with presigned URLs\"",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html",
+      "accessed": "2026-11-22",
+      "supports": "a presigned URL grants time-limited access with the signer's credentials; maximum expiry of 7 days when created with the AWS CLI and 12 hours from the console",
+      "status": "verified"
+    },
+    {
+      "title": "Amazon S3 User Guide, \"Amazon S3 multipart upload limits\"",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html",
+      "accessed": "2026-11-22",
+      "supports": "background for 'whole-file uploads' as an alternative: multipart parts of 5 MiB to 5 GiB, at most 10,000 parts per upload; not quoted in the lesson",
+      "status": "reference"
+    },
+    {
+      "title": "Wikipedia, \"Google File System\"",
+      "url": "https://en.wikipedia.org/wiki/Google_File_System",
+      "accessed": "2026-11-22",
+      "supports": "files divided into fixed 64 MB chunks; a single master holding the metadata; chunks replicated three times by default; original paper by Ghemawat, Gobioff and Leung at SOSP 2003",
+      "status": "secondary"
+    },
+    {
+      "title": "Ghemawat, Gobioff and Leung, \"The Google File System\", SOSP 2003",
+      "url": "https://research.google.com/archive/gfs-sosp2003.pdf",
+      "accessed": "2026-11-22",
+      "supports": "the master-plus-chunkserver shape with lazy garbage collection of chunks; named as the origin, read via the secondary above rather than re-read today",
+      "status": "reference"
+    }
+  ]
+}

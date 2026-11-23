@@ -1,0 +1,71 @@
+[Sharding](/learn/sharding) chose a shard key and a strategy. Four problems remain once the data is split, and they are where partitioned systems really differ: how to query by anything other than the key, how to add a node without moving everything, how a request finds its partition, and what to do when one key draws all the traffic.
+
+## Secondary indexes across partitions
+
+A secondary index on a partitioned table has to live somewhere, and there are exactly two choices.
+
+A **local secondary index** is partitioned the same way as the data: each partition indexes only its own rows. Writes stay cheap, because a row and its index entries land on one partition. Reads by the indexed attribute pay instead: the query goes to every partition and the results are merged, a **scatter-gather** whose latency is the slowest partition's (the tail-latency effect from [Latency](/learn/latency)). DynamoDB's local secondary index is the textbook case: it keeps the table's partition key and adds an alternative sort key, must be declared when the table is created, allows strongly consistent reads, and is capped at five per table and 10 GB of items per partition-key value. Cassandra's original secondary indexes are also local to each node, so its documentation recommends them only with a partition-key restriction.
+
+A **global secondary index** is partitioned by the indexed value instead. A query by that value goes to one index partition, but a write now touches the row's partition and the index's partition, often on different machines. Keeping both in step synchronously needs a [distributed transaction](/learn/distributed-transactions), so most systems update the index asynchronously. DynamoDB's global secondary index has its own key schema and throughput, can be added at any time, propagates base-table writes asynchronously, so reads from it are eventually consistent only.
+
+| | Local index | Global index |
+| --- | --- | --- |
+| Partitioned by | The table's partition key | The indexed attribute |
+| Write cost | One partition | Base partition plus index partition |
+| Read by indexed value | Scatter-gather across all partitions | One index partition |
+| Consistency | Can be strong | Usually eventual |
+
+An Instagram-style photo table partitioned by user fits the local model for "my photos by date" and needs a global index for "every photo tagged #ipl", accepting that a tag search may lag a fresh post by a moment.
+
+## Rebalancing without moving everything
+
+Adding a node should move a fair share of data, once, while the system keeps serving. Three strategies manage it.
+
+| Strategy | How it works | Examples | Weak spot |
+| --- | --- | --- | --- |
+| Fixed number of partitions | Create far more partitions than nodes at the start; a new node takes whole partitions from others | Riak (a ring of 64 partitions by default, a power of two fixed at creation), Elasticsearch (shard count fixed when the index is created) | The count is a one-time guess: too few and you cannot grow, too many and each carries overhead |
+| Dynamic range splitting | A partition splits when it exceeds a size or load threshold and merges when it shrinks | HBase regions; CockroachDB ranges (512 MiB by default, also split under heavy load) | A new table starts as one partition, so it is hot until it splits; pre-splitting is the usual fix |
+| Proportional to nodes | Each node owns a fixed number of partitions; a new node takes small slices from many others | Cassandra virtual nodes (16 tokens per node by default) | Slice boundaries are random, so balance is statistical rather than exact |
+
+Rebalancing competes with user traffic for disk and network, so production systems throttle it, and a rebalancer that reacts to a transient failure moves data away from a node about to recover.
+
+## Finding the right partition
+
+The mapping from key to partition changes as partitions split and move, so someone must hold the current map.
+
+<Mermaid caption="Three places the key-to-partition map can live: a coordination service, every node via gossip, or a dedicated routing tier." chart={`flowchart LR
+    C["Client"] --> Z["Coordination service holds the map"]
+    C --> N["Any node, map learned by gossip"]
+    C --> T["Routing tier holds the map"]
+    Z --> P1["Correct partition"]
+    N -- "forward if needed" --> P2["Correct partition"]
+    T --> P3["Correct partition"]
+`} />
+
+HBase keeps the list of regions and their servers in a catalogue table, `hbase:meta`, whose own location is stored in ZooKeeper; a client looks it up once and caches it until a region moves. Cassandra has no coordinator service: nodes exchange ring state by **gossip** (each node picks a random peer every second), and the node a client connects to coordinates the request, forwarding to the replicas and collecting the read or write quorum described in [Quorums](/learn/quorums). MongoDB puts the map in config servers and the routing in `mongos`, a tier clients talk to instead of the shards.
+
+<Interactive name="shard-router" />
+
+## Hot spots and salting
+
+Even a perfect hash cannot spread a single key. A celebrity's post, today's date as the partition key for time-series writes, or the one match on sale during an IPL ticket release all land on one partition, and each partition has a ceiling: in DynamoDB, 3,000 read units and 1,000 write units per second.
+
+The fix is **salting** (DynamoDB calls it write sharding): append a suffix to the key, say a number from 1 to 200, so writes for one date become 200 keys on 200 partitions. Reads must then query all 200 suffixes and merge, so the design trades read cost for write throughput. A **calculated suffix** (a hash of an attribute you know at read time, such as the order ID) keeps single-item reads cheap while still spreading writes. For read-heavy hot keys, [caching](/learn/caching) is the other half of the answer.
+
+<Callout type="analogy" title="Branch libraries">
+
+A city library shelves books by author across branches, so finding Rushdie means one branch. Finding every book about cricket means phoning every branch (a local index, scatter-gather) or keeping one central subject catalogue (a global index) that lags a day behind new arrivals. When a new branch opens you can hand it whole shelves (fixed partitions), split the busiest shelf (dynamic splitting), or give it a few shelves from every branch (proportional). The analogy breaks on salting: no library shelves one bestseller in 200 places on purpose, but a database will.
+
+</Callout>
+
+<Callout type="interview" title="Three questions after the shard key">
+
+Once you have named a shard key, continue: "Queries on other attributes use a local index with scatter-gather or a global index that is eventually consistent; I'd pre-create many partitions or rely on range splitting so adding nodes moves a fraction of the data; routing goes through a routing tier or a cached map; and the hot key gets a salted suffix."
+
+</Callout>
+
+<DeepDive title="Go deeper: why a DynamoDB local index stops at 10 GB">
+
+DynamoDB stores a table item and all its local-index entries for one partition-key value together as an item collection, and an item collection lives on a single partition. The index must stay local for its strongly consistent reads and single-partition writes to work, so the collection can never outgrow one partition: hence the 10 GB cap and the advice to use a global secondary index for anything unbounded.
+
+</DeepDive>

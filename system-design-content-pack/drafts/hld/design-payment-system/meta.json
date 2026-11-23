@@ -1,0 +1,126 @@
+{
+  "slug": "design-payment-system",
+  "title": "Design a payment system",
+  "moduleId": "hld",
+  "level": "advanced",
+  "minutes": 17,
+  "problem": "A charge call times out after the PSP has taken ₹1,500, the retry charges it again, and nobody can say which of three systems is right.",
+  "summary": "A payment system wraps a PSP in idempotency keys, drives a versioned state machine from API calls and signed webhooks, records every movement in an append-only double-entry ledger, and reconciles daily against the PSP's settlement report, replacing exactly-once with idempotent retries plus reconciliation.",
+  "catTip": "I never chase the same mouse twice: every pounce has a number, and if I lose sight of it I check the number before pouncing again. My food ledger only grows; a wrong line gets a new line that cancels it, never a scratch-out.",
+  "recall": {
+    "q": "A call to the PSP to authorise ₹1,500 times out. What is the key insight of the payment design, and what follows from it?",
+    "a": "You cannot call the PSP exactly once, so every call is idempotent and every day is reconciled: the attempt row with its own idempotency key is committed before the call, the retry reuses that key so the PSP replays its first answer, an unresolved attempt is left as unknown rather than failed and resolved by querying the PSP or by its webhook, and the append-only double-entry ledger plus the settlement report catch whatever slipped past."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without idempotent attempts and a ledger, a timeout followed by a retry charges a customer twice, a crash between the PSP's answer and our database loses a payment, and a mutable balance column cannot say where the missing ₹24 went.",
+    "tradeoffs": "Every PSP call costs a committed row before and after, payments sit in a pending state instead of failing fast, the ledger grows forever and is never edited, and a daily reconciliation job and an exceptions queue become permanent parts of the system.",
+    "explainSimply": "You write a cheque and cannot remember whether you dropped it in the postbox. You do not write a second cheque; you keep the stub, ask the bank using the cheque number, and wait for the statement if you must. The payment system keeps a stub for every call it makes and reads the statement every day.",
+    "hint": "Ask what you can know for certain right after a timeout, what you wrote down before the call, and who can tell you later what really happened."
+  },
+  "meow": "Pounce number 9001, same number on every retry. Did it land? Check the stub, ask the PSP, read the statement. Ledger only grows. Meow.",
+  "quiz": [
+    {
+      "prompt": "Your call to the PSP to authorise a ₹1,500 payment times out after 10 seconds with no response. What should the payment service do next?",
+      "options": [
+        "Generate a fresh idempotency key and retry, so the PSP does not reject the retry as a duplicate",
+        "Retry with the same per-attempt idempotency key using backoff, and if the outcome is still unknown after the budget, leave the attempt unresolved and have a reconciler query the PSP by that key",
+        "Mark the payment as failed and ask the customer to try again, since the customer is waiting",
+        "Wrap the PSP call and the local database write in a two-phase commit so both succeed or neither does"
+      ],
+      "answer": 1,
+      "explanation": "The first call may have succeeded, so only a retry with the same key is safe, and an unknown outcome is a state to resolve, not a failure to declare. Marking it failed is the strongest distractor: the customer retries, a second charge lands, and the first one is only discovered at reconciliation."
+    },
+    {
+      "prompt": "A 'payment captured' webhook arrives twice three seconds apart; both carry valid signatures with different timestamps. How should the receiver handle the second delivery?",
+      "options": [
+        "Reject it as a replay attack because the timestamp differs from the first delivery",
+        "Process both, because the signatures are valid and the state machine will sort it out",
+        "Verify the signature, then recognise the PSP's event id as already recorded and do nothing",
+        "Stop trusting webhooks for this payment and poll the PSP instead"
+      ],
+      "answer": 2,
+      "explanation": "Deduplication by the PSP's event id, inside the same transaction as processing, is what makes at-least-once delivery harmless. Rejecting it as a replay is the strongest distractor: the PSP signs each delivery afresh, so a new timestamp on a retry is normal, and a replay is detected by a stale timestamp, not a different one."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: the PSP call to authorise a payment times out, and the service cannot tell whether the money moved. Decision and why?",
+      "a": "Before any PSP call, commit a payment_attempt row with its own idempotency key and outcome NULL, then call with that key; on timeout retry with the same key and backoff, because the PSP replays its saved answer for a repeated key; after the retry budget, leave the outcome NULL and the payment pending, and let a reconciler query the PSP by that key or wait for the webhook. Never mint a new key for the same intent, because a new key is a new charge, and resolve unknowns before the PSP prunes keys (24 hours at Stripe)."
+    },
+    {
+      "q": "Problem: the PSP's settlement report and the payments table disagree by ₹24 on one payment, and a mutable balance column cannot say why. Decision and why?",
+      "a": "Keep an append-only double-entry ledger where every journal sums to zero and corrections are new reversing entries, with a psp_clearing account that records what the PSP owes: capture debits clearing and credits merchant payable, the fee debits fees and credits clearing, settlement debits bank and credits clearing. Reconcile daily by matching settlement lines to journals by PSP reference, sort leftovers into three kinds of break (at the PSP only, in the ledger only, amounts differ), and treat a non-zero clearing balance for settled payments as the day's alarm."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "PSP",
+      "full": "Payment Service Provider",
+      "note": "The company (Stripe, Razorpay, Adyen) that authorises, captures, refunds and settles payments on a merchant's behalf and tokenises card details so they never reach the merchant's servers."
+    },
+    {
+      "term": "HMAC",
+      "full": "Hash-based Message Authentication Code",
+      "note": "A keyed hash (HMAC with SHA-256 at Stripe and Razorpay) that proves a webhook body came from a party holding the shared secret and was not altered."
+    }
+  ],
+  "sources": [
+    {
+      "title": "Stripe API reference, \"Idempotent requests\"",
+      "url": "https://docs.stripe.com/api/idempotent_requests",
+      "accessed": "2026-11-22",
+      "supports": "the Idempotency-Key header; Stripe saves the status code and body of the first request and returns them on a retry with the same key; keys are pruned after at least 24 hours; a reused key with different parameters is an error; keys up to 255 characters, random strings recommended, no sensitive data in keys",
+      "status": "verified"
+    },
+    {
+      "title": "Stripe documentation, \"Receive Stripe events in your webhook endpoint\"",
+      "url": "https://docs.stripe.com/webhooks",
+      "accessed": "2026-11-22",
+      "supports": "the Stripe-Signature header with t and v1 entries; v1 is an HMAC with SHA-256 over the timestamp, a dot and the raw payload using the endpoint secret; constant-time comparison; a default tolerance of 5 minutes on the timestamp; each retry is signed afresh; events are retried for up to three days with exponential backoff in live mode; event ordering is not guaranteed; deduplicate by event id; return a 2xx quickly; IP allowlisting",
+      "status": "verified"
+    },
+    {
+      "title": "Stripe documentation, \"How Payment Intents and Setup Intents work\" (lifecycle)",
+      "url": "https://docs.stripe.com/payments/paymentintents/lifecycle",
+      "accessed": "2026-11-22",
+      "supports": "the PaymentIntent statuses requires_payment_method, requires_confirmation, requires_action, processing, requires_capture, succeeded and canceled; a failed attempt returns the intent to requires_payment_method; cancellation releases held funds",
+      "status": "verified"
+    },
+    {
+      "title": "Stripe documentation, \"Place a hold on a payment method\"",
+      "url": "https://docs.stripe.com/payments/place-a-hold-on-a-payment-method",
+      "accessed": "2026-11-22",
+      "supports": "separate authorisation and capture with capture_method manual; the status requires_capture after authorisation; an online card authorisation is usually valid for 7 days; partial capture releases the remainder",
+      "status": "verified"
+    },
+    {
+      "title": "Stripe documentation, \"Integration security guide\"",
+      "url": "https://docs.stripe.com/security/guide",
+      "accessed": "2026-11-22",
+      "supports": "PCI DSS applies to anyone who stores, processes or transmits cardholder data; low-risk integrations collect and transmit payment information directly to Stripe without it passing through your servers, reducing PCI obligations; card type, last four digits and expiry are not subject to PCI compliance and may be stored",
+      "status": "verified"
+    },
+    {
+      "title": "Stripe documentation, \"Payout reconciliation report\"",
+      "url": "https://docs.stripe.com/reports/payout-reconciliation",
+      "accessed": "2026-11-22",
+      "supports": "the report matches payouts to the batch of transactions they settle; an itemised file lists every payment, refund, dispute and fee with gross, fee and net; custom metadata can be included to match Stripe transactions with records in your own system",
+      "status": "verified"
+    },
+    {
+      "title": "Square Developer blog, \"Books, an immutable double-entry accounting database service\"",
+      "url": "https://developer.squareup.com/blog/books-an-immutable-double-entry-accounting-database-service/",
+      "accessed": "2026-11-22",
+      "supports": "journal entries must balance to 0; book and journal entries are immutable and corrections are made by writing a new entry so there is always a trace; balances are cached so a payout reads one row rather than an aggregate; the service held about 20 TB on a horizontally scaled database at the time of writing",
+      "status": "verified"
+    },
+    {
+      "title": "Razorpay documentation, \"Validate webhooks\"",
+      "url": "https://razorpay.com/docs/webhooks/validate-test/",
+      "accessed": "2026-11-22",
+      "supports": "the X-Razorpay-Signature header is an HMAC with SHA-256 over the raw request body using the webhook secret; the body must not be parsed before verification; retried older requests may need the previous secret after rotation",
+      "status": "verified"
+    }
+  ]
+}

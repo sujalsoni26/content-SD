@@ -1,0 +1,119 @@
+**Dependency injection (DI)** means a class receives the collaborators it needs from outside, through its constructor, instead of creating them itself. It is the dependency inversion principle from [SOLID](/learn/solid) turned into a habit, and it decides whether a class can be unit-tested without a database, a network or the real time.
+
+## Program to an interface, and let the consumer own it
+
+"Program to an interface, not an implementation" is the oldest advice in the Gang of Four book: the type a caller names is the contract, so the implementation can change unnoticed. The less-quoted half is *who declares the interface*. Putting `OrderRepository` next to `JdbcOrderRepository` in the persistence package feels natural, but it leaves the arrow pointing the wrong way: the ordering module still imports persistence.
+
+Dependency inversion says the consumer owns the abstraction: `OrderRepository` lives in the ordering module, in the consumer's vocabulary (`save(Order)`, never `executeSql`), and the persistence module implements it. Persistence now depends on ordering, and the interface is exactly as wide as the consumer's needs, which is interface segregation for free.
+
+```java
+// in the ordering module: the consumer's contract, in the consumer's words
+public interface OrderRepository {
+    void save(Order order);
+    Optional<Order> find(OrderId id);
+}
+```
+
+## Constructor injection
+
+The class states what it needs in its constructor and keeps it in `final` fields; nothing else in the class says `new` for a collaborator.
+
+```java
+public final class OrderService {
+    private final OrderRepository orders;
+    private final Clock clock;
+    public OrderService(OrderRepository orders, Clock clock) {   // every dependency is visible here
+        this.orders = Objects.requireNonNull(orders);
+        this.clock = Objects.requireNonNull(clock);
+    }
+    public Order place(Cart cart) {
+        var order = Order.from(cart, clock.instant());
+        orders.save(order);
+        return order;
+    }
+}
+```
+
+Three properties follow. The object is **valid once constructed**: no half-wired state, no null check at every use. Its dependencies are **explicit**: the constructor signature is the documentation. And it is **container-agnostic**: a test, a script or a framework can build it with plain `new`. Injecting `java.time.Clock` makes time testable; the JDK's own documentation recommends passing a `Clock` in so a fixed or offset clock can stand in during tests.
+
+Martin Fowler's 2004 article names **setter injection** too: dependencies set after construction, which suits optional collaborators and otherwise leaves a window where the object is incomplete. **Field injection**, where a framework writes straight into a private field, hides the dependency list and makes the class unusable without the framework. The Spring team's own guidance is constructors for mandatory dependencies, setters only for optional ones.
+
+## Inversion of control
+
+Before DI, `OrderService` controlled its own supply chain: it decided *which* repository to build and *when*. With DI that control moves outward to whoever builds the service; the reversal is **inversion of control (IoC)**. Fowler coined "dependency injection" because inversion of control is far more general (any framework that calls your code rather than the reverse) and the generic name confused people; DI is the specific inversion where object construction leaves the class that uses the object.
+
+## The composition root
+
+If classes no longer build their collaborators, something must: the **composition root**, one location as close to `main` as possible where the whole object graph is assembled from concrete classes. Mark Seemann, who named the pattern, defines it as a preferably unique location where modules are composed; one per application is the rule.
+
+```java
+public static void main(String[] args) {
+    var dataSource = DataSources.fromEnvironment();
+    OrderRepository orders = new JdbcOrderRepository(dataSource);
+    var service = new OrderService(orders, Clock.systemUTC());
+    new HttpServer(new OrderController(service)).start();
+}
+```
+
+Only this method knows the concrete types. The graph reads top to bottom, the compiler checks every wire, and a missing dependency is a compile error rather than a surprise.
+
+<Mermaid caption="Only the composition root and the test know concrete classes. Everything else points at the interface the consumer owns." chart={`classDiagram
+    class OrderRepository {
+        <<interface>>
+        +save(Order order)
+        +find(OrderId id) Optional
+    }
+    class OrderService {
+        -OrderRepository orders
+        -Clock clock
+        +place(Cart cart) Order
+    }
+    OrderService --> OrderRepository : owns the contract
+    JdbcOrderRepository ..|> OrderRepository
+    InMemoryOrderRepository ..|> OrderRepository
+    Main ..> JdbcOrderRepository : creates
+    Main ..> OrderService : creates and wires
+    OrderServiceTest ..> InMemoryOrderRepository : creates
+`} />
+
+<Callout type="analogy" title="A fitted kitchen">
+
+A chef does not build the oven. The kitchen is fitted out before service, from one plan, by people whose job that is; the chef walks in, finds an oven that matches the recipe's needs, and cooks. Swap the oven for another make and the recipes do not change. That fitting-out is the composition root, and the oven's "what I need" is the interface the recipe owns. Where the analogy stops: a chef can see the oven and knows where it came from. With a container doing the fitting, nobody can point at the line that chose this oven, which is the cost the next section is about.
+
+</Callout>
+
+## DI containers and what they cost
+
+A hand-written root is fine for dozens of classes. At hundreds, teams reach for a **DI container** such as Spring or Guice: you annotate constructors (`@Inject`, `@Autowired`) and the container scans the classes, builds the graph by reflection and manages scopes (one instance per application, or per request). Containers earn their place with large graphs, lifecycles and cross-cutting features such as transactions.
+
+The costs are worth saying aloud in an interview.
+
+| Cost | What it looks like |
+| --- | --- |
+| The graph is hidden | No `main` to read: you learn what gets built by starting the application, and nobody can say where a `Clock` comes from without knowing the framework's rules |
+| Failures move to runtime | A missing binding, two candidates for one interface or a circular dependency fails at startup (or later, for lazily created objects), never at compile time |
+| Classes bend to the container | No-argument constructors, non-final classes for proxies, field injection, framework annotations in domain code |
+
+The discipline that keeps those costs down: inject by constructor, so every class works with or without the container, and keep the container at the edge doing the composition root's job and nothing more.
+
+## Testability is the payoff
+
+Everything above exists so this line can be written:
+
+```java
+var service = new OrderService(new InMemoryOrderRepository(), Clock.fixed(T0, ZoneOffset.UTC));
+```
+
+No database, no container, a clock frozen at a known instant, and a repository you can inspect after the call. [Unit testing and designing for extensibility](/learn/testing-extensibility) builds on exactly this: fakes stand in for the interfaces the consumer owns.
+
+<Callout type="warning" title="The over-application smell">
+
+An interface with one implementation that is not a boundary (no I/O, time or randomness, nothing you would ever fake) is ceremony: `PriceCalculator` does not need a `PriceCalculatorImpl`. A twelve-parameter constructor is DI telling you the class has twelve responsibilities. Inject at boundaries; call pure code directly.
+
+</Callout>
+
+<Callout type="interview" title="Say where the wiring lives">
+
+"`ParkingLot` takes a `SpotAssignmentStrategy` and a `Clock` in its constructor; `main` wires the real ones, and the test wires a fixed clock and a stub strategy." One sentence shows dependency inversion, injection, a composition root and a test plan.
+
+</Callout>

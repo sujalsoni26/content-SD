@@ -1,0 +1,76 @@
+Every card below names a problem from the advanced tracks, modules 7 to 13. Say the building block that solves it before you flip, and mark the ones you missed as "Again" so they come back. The table underneath is the same map in reading order, one row per lesson, so a miss tells you exactly which lesson to reread.
+
+<Interactive name="recall-cards" variant="advanced" />
+
+<DeepDive title="Show the full table">
+
+| Problem | Building block |
+| --- | --- |
+| **Distributed systems** | |
+| Two machines, one truth, and a network that lies | [What makes a system distributed](/learn/distributed-fundamentals) |
+| Which event happened first, across machines? | [Clocks, time and ordering](/learn/time-and-ordering) |
+| Reads and writes that overlap without a leader | [Quorums and leaderless replication](/learn/quorums) |
+| Many nodes must agree on one value, through crashes | [Consensus: Raft in one picture](/learn/consensus) |
+| Two nodes both believe they are the leader | [Leader election, split-brain and fencing](/learn/leader-election) |
+| Only one worker may run this job at a time | [Distributed locking](/learn/distributed-locks) |
+| One commit across two databases | [Distributed transactions and two-phase commit](/learn/distributed-transactions) |
+| A multi-step business flow with no global lock | [Sagas and compensating actions](/learn/sagas) |
+| What "consistent" promises, exactly | [Linearizability, serializability and the consistency zoo](/learn/linearizability) |
+| **Database internals** | |
+| One row costs a whole page | [How a database stores data](/learn/storage-engines) |
+| Committed, then the power failed | [Write-ahead logging and crash recovery](/learn/wal) |
+| A firehose of writes, or predictable reads | [B-trees vs LSM trees](/learn/btree-vs-lsm) |
+| Readers blocking writers; two transactions breaking one rule | [MVCC and isolation levels](/learn/mvcc-isolation) |
+| A query that ignores its index | [Indexes and query execution](/learn/query-execution) |
+| What crosses the wire to a replica, and what is lost on failover | [Replication strategies in depth](/learn/replication-internals) |
+| Queries by anything but the shard key; adding a node | [Partitioning and rebalancing](/learn/partitioning-internals) |
+| SQL transactions across regions | [Distributed SQL and NewSQL](/learn/distributed-sql) |
+| **Messaging and streaming** | |
+| A durable, replayable log of events | [Kafka: a distributed log](/learn/kafka-architecture) |
+| Ordering per key with many consumers | [Partitions, consumer groups and ordering](/learn/partitions-consumer-groups) |
+| Lost, duplicated, or exactly once | [Delivery semantics and exactly-once](/learn/delivery-semantics) |
+| Every row change as an event, without dual writes | [Change data capture](/learn/cdc) |
+| Queue or log, Kafka or RabbitMQ | [Choosing a broker](/learn/brokers-compared) |
+| Aggregating an endless stream with late data | [Stream processing](/learn/stream-processing) |
+| Services reacting to events instead of calling each other | [Event-driven architecture in practice](/learn/eda-patterns) |
+| **Reliability and observability** | |
+| Redundant copies that fail together | [Fault tolerance: how systems fail](/learn/failure-modes) |
+| One slow dependency eating every thread | [Bulkheads and graceful degradation](/learn/bulkheads-degradation) |
+| How much failure is allowed this month | [SLIs, SLOs and error budgets](/learn/slos-error-budgets) |
+| Averaged percentiles; a page about CPU | [Metrics and monitoring](/learn/metrics-monitoring) |
+| Fifty services' logs, one request | [Logging at scale](/learn/logging) |
+| Which hop spent the two seconds? | [Distributed tracing](/learn/tracing) |
+| The region is gone, or the table is | [Disaster recovery and backups](/learn/disaster-recovery) |
+| How many servers, at what utilisation | [Capacity planning and load testing](/learn/capacity-planning) |
+| 3 a.m., the pager, and the week after | [Incidents, postmortems and chaos engineering](/learn/incident-response) |
+| **Security** | |
+| Where every request gets checked | [Security fundamentals for system design](/learn/security-fundamentals) |
+| Proving who is asking, across many servers | [Authentication: sessions, tokens and passwords](/learn/authentication) |
+| May user 42 see order 10024? | [Authorisation: RBAC, ABAC and policy](/learn/authorization) |
+| Log in with Google; a token you must verify | [OAuth 2.0, OpenID Connect and JWT](/learn/oauth-jwt) |
+| Encrypted at rest, against whom? | [Encryption in transit and at rest](/learn/encryption) |
+| A forged request, an injected query, a replayed webhook | [API security](/learn/api-security) |
+| Passwords in git, keys in images | [Secrets management](/learn/secrets-management) |
+| What can go wrong, boundary by boundary | [Threat modelling and security boundaries](/learn/threat-modelling) |
+| **Cloud and infrastructure** | |
+| "Works on my machine" | [Containers and images](/learn/containers) |
+| Hundreds of containers to place, restart and route | [Kubernetes fundamentals](/learn/kubernetes) |
+| Where is the pricing service right now? | [Service discovery and internal DNS](/learn/service-discovery) |
+| Capacity that arrives minutes after the spike | [Autoscaling](/learn/autoscaling) |
+| Users on two continents, a region that can vanish | [Multi-region deployment](/learn/multi-region) |
+| A viral object melting the origin | [CDN architecture in depth](/learn/cdn-internals) |
+| Public and private subnets, and what may talk to what | [Cloud networking: VPCs, subnets and load balancers](/learn/cloud-networking) |
+| An environment nobody can rebuild | [Infrastructure as Code and delivery pipelines](/learn/iac) |
+| **Architecture patterns** | |
+| One deployable, or many | [Monolith, modular monolith, SOA and microservices](/learn/modular-monolith-soa) |
+| One front door for fifty services | [API gateway and backend-for-frontend](/learn/api-gateway) |
+| mTLS, retries and routing without touching code | [Service mesh](/learn/service-mesh) |
+| Reads and writes that want different models | [CQRS](/learn/cqrs) |
+| The history of changes as the source of truth | [Event sourcing](/learn/event-sourcing) |
+| Replacing a system that cannot stop | [Migrating safely: strangler fig and friends](/learn/strangler-fig) |
+| Code that runs only when called, billed by the millisecond | [Serverless architecture](/learn/serverless) |
+| Many customers on one system | [Multi-tenant architecture](/learn/multi-tenancy) |
+
+</DeepDive>
+
+Two habits make the deck work. Answer with the mechanism, not the lesson title: "a fencing token checked by the storage layer" beats "leader election". And when a whole module keeps coming back, reread its first lesson rather than the one you missed, because the misses cluster where the foundation is thin. The case studies in [How to work a case study](/learn/case-study-method) are where these blocks get combined; go there once this deck stays green for a week.

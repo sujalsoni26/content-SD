@@ -1,0 +1,85 @@
+A **fault** is the thing that is wrong: a bad disk sector, a bug, a cable pulled by a cleaner. It becomes an **error** when it corrupts some state inside the system, and a **failure** when what the system delivers stops matching what it promised, as seen by a user or a caller. The vocabulary comes from the dependability literature, and its point is the chain: faults are constant, and **fault tolerance** is everything you do to stop them travelling down the chain to a failure.
+
+The chain also climbs: a bad sector (fault) corrupts a database page (error), a query returns garbage (the database's failure), and that failure is a fault for the API that called it, all the way up to a blank screen. Every layer can break the chain with a checksum, a validation step or a fallback. [Availability](/learn/availability) measured the outcome; this lesson is about what produces it.
+
+## Fault classes, and what each costs to tolerate
+
+[Distributed fundamentals](/learn/distributed-fundamentals) listed the ways a node or a network misbehaves. Grouped by what they demand of a design:
+
+- **Crash faults** (a process dies, a VM is terminated): a second copy and a way to move traffic to it.
+- **Omission faults** (a message is dropped): acknowledgements and retries, with the duplicate-work problems that [timeouts and retries](/learn/timeouts-retries) cover.
+- **Timing faults** (the message arrives, but late): the most common in practice and the hardest to see, because nothing is down; deadlines and the grey-failure detection below are the tools.
+- **Byzantine faults** (a component lies or behaves arbitrarily), named after Lamport, Shostak and Pease's 1982 paper: most systems inside one organisation assume they do not happen, and should say so.
+
+## Correlated failure: redundancy is not independence
+
+Two copies in parallel are far more available than one, but only if they fail independently, as the nines calculator in the availability lesson assumes. Real copies share things, and whatever they share is a way for both to fail at once:
+
+- **Power and network:** two servers in one rack share a power strip and a switch.
+- **A dependency:** both regions read configuration from one service, or validate tokens against one identity provider.
+- **The same deploy:** one bad config pushed everywhere in the same minute is the most common correlated failure of all; nothing is more identical than two copies of the same bug.
+- **The same clock:** certificates that expire together, a cron job that fires everywhere at midnight.
+
+The question to ask of a redundant design is not "how many copies?" but "what do the copies share?"
+
+<Callout type="analogy" title="Two keys on one keyring">
+
+A spare house key is redundancy. A spare key on the same keyring is not: lose the ring and you have lost both. A spare with a neighbour sits in a different failure domain. Where the analogy stops: the neighbour may be out when you need them, which is the failover problem and the reason standbys are tested.
+
+</Callout>
+
+## Failure domains
+
+A **failure domain** is a set of components that fail together. Cloud infrastructure is built as nested domains, each more expensive to span than the last:
+
+<Mermaid caption="Nested failure domains. A deploy pipeline that pushes to every zone at once is a failure domain of its own, cutting across the physical ones." chart={`flowchart TB
+    subgraph R["Region: shared control plane, DNS, identity"]
+        subgraph ZA["Availability zone A: own power, cooling, network"]
+            subgraph RA["Rack: shared switch and power strip"]
+                H1["Host 1"]
+                H2["Host 2"]
+            end
+            RB["Rack 2"]
+        end
+        subgraph ZB["Availability zone B"]
+            RC["Rack 3"]
+            RD["Rack 4"]
+        end
+    end
+    D["One deploy pushed everywhere at once"] -.-> ZA
+    D -.-> ZB
+`} />
+
+A rack shares power and a switch, so it takes every host in it. An **availability zone** is one or more data centres with their own power, cooling and network; AWS places a region's zones up to about 100 km apart so that floods and utility outages do not take two at once, close enough for synchronous replication, and staggers its own deployments across zones in time. A region still shares a control plane; spanning regions is the subject of [multi-region](/learn/multi-region). The rule: place copies across the domain whose failure you want to survive, and no further than you need. Three replicas in three zones survive a zone, not the region, and pay a few milliseconds of cross-zone latency on every synchronous write (see [replication](/learn/replication)).
+
+## Redundancy shapes
+
+| Shape | How it works | Protects against | Weakness |
+| --- | --- | --- | --- |
+| Active-active | All copies serve traffic; losing one shifts its load to the rest | A host or zone, with no failover delay | Survivors need headroom for the extra load; writes in two places need conflict handling |
+| Active-passive | One copy serves; a standby is promoted on failure | A host or zone, at the cost of a failover pause (RTO) and possibly stale data (RPO) | The standby is exactly as reliable as its last test |
+| N+1, N+2 | N units carry the peak; one or two spares stand ready | One or two units lost, or taken down for maintenance | Spares are paid for and idle |
+
+Google's SRE book sizes services at N+2, so that one unit can be down for an upgrade while another fails. Across zones, "N+1" means each zone must absorb its share of a lost zone's traffic, a [capacity planning](/learn/capacity-planning) question.
+
+## Blast radius
+
+**Blast radius** is the share of users or requests that one failure can reach, and it matters most where redundancy cannot help, as with a bad deploy or a poison request. The lever is the size of the unit you deploy to and route to: ten independent cells lose 10% of users to a cell failure rather than all of them, and a release pushed to one host, then one zone, then one region turns a correlated-deploy failure into a sequence you can stop. Cells are covered in [bulkheads and graceful degradation](/learn/bulkheads-degradation).
+
+## Grey failure: alive, and failing
+
+A **grey failure** is a component that works badly without being down: a network card dropping a third of its packets, a disk that stalls for ten seconds, a node that answers its health check in two milliseconds and times out real queries. Huang and colleagues named it in a 2017 HotOS paper and identified its defining feature as *differential observability*: the system's failure detector sees the component as healthy while the applications using it see it failing.
+
+Health checks miss it because of what they test: a liveness check asks only whether the process is up and the port open, which a half-dead node answers perfectly. Deeper checks that exercise dependencies catch more but add a risk: when a shared dependency hiccups, every server fails the check at once and the balancer removes the whole fleet, which is why Amazon's guidance keeps fast-acting checks local and has balancers fail open when every target looks unhealthy. The reliable signal is the caller's: compare each host's error rate and latency with its peers and route around the outlier, as outlier detection in a [service mesh](/learn/service-mesh) does.
+
+<Callout type="interview" title="Name the domain you survive">
+
+"Three replicas across three availability zones, so we survive a zone and a rolling deploy; a region loss is a disaster-recovery event with a defined RTO. The replicas still share the config service and the deploy pipeline, so config is cached locally and deploys go one zone at a time." Naming what you do not survive makes the rest credible.
+
+</Callout>
+
+<DeepDive title="Go deeper: when Byzantine faults are not theoretical">
+
+Assuming no Byzantine faults is reasonable when one organisation writes and runs every component: a lying node is a bug, and you fix bugs rather than vote around them. The assumption fails when participants do not trust each other (public blockchains, cross-company settlement), and Byzantine fault-tolerant protocols need 3f + 1 replicas to tolerate f liars, against 2f + 1 for crashes, which is why ordinary [consensus](/learn/consensus) protocols do not use them.
+
+</DeepDive>

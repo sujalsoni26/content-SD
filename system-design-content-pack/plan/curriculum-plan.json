@@ -1,0 +1,3805 @@
+{
+ "generated": "2026-11-22",
+ "repo_head": "e508232",
+ "existing_modules": [
+  {
+   "id": "foundations",
+   "number": 1,
+   "title": "Foundations",
+   "tagline": "How a client talks to a server",
+   "stage": "1 user · 1 server",
+   "description": "Addresses, packets, protocols and the numbers that explain where time goes. One app, one server, one database.",
+   "lessons": [
+    "big-idea",
+    "client-server",
+    "dns",
+    "tcp-udp",
+    "http",
+    "latency"
+   ]
+  },
+  {
+   "id": "scaling",
+   "number": 2,
+   "title": "Scaling and Traffic",
+   "tagline": "Handling more traffic",
+   "stage": "10k users",
+   "description": "One server is no longer enough. Proxies, load balancers, horizontal scaling and CDNs turn one machine into many.",
+   "lessons": [
+    "proxy",
+    "load-balancing",
+    "scaling",
+    "cdn"
+   ]
+  },
+  {
+   "id": "communication",
+   "number": 3,
+   "title": "Communication",
+   "tagline": "How components talk",
+   "stage": "Many services",
+   "description": "REST for clients, gRPC inside, WebSockets for real time, and when to stop waiting for an answer.",
+   "lessons": [
+    "rest",
+    "grpc",
+    "websockets",
+    "microservices",
+    "sync-async"
+   ]
+  },
+  {
+   "id": "data",
+   "number": 4,
+   "title": "Data",
+   "tagline": "Storing, copying and splitting data",
+   "stage": "Millions of rows",
+   "description": "Choose the right store, keep it correct, make it fast, then copy and split it when one machine is not enough.",
+   "lessons": [
+    "sql-nosql",
+    "acid",
+    "indexing",
+    "normalization",
+    "replication",
+    "sharding",
+    "consistency",
+    "cap",
+    "object-storage"
+   ]
+  },
+  {
+   "id": "reliability",
+   "number": 5,
+   "title": "Performance and Reliability",
+   "tagline": "Fast, and still standing when things fail",
+   "stage": "Failure is normal",
+   "description": "Serve hot reads from memory, smooth spikes with queues, and stop one failure from spreading.",
+   "lessons": [
+    "caching",
+    "message-queues",
+    "pubsub",
+    "availability",
+    "timeouts-retries",
+    "circuit-breaker",
+    "backpressure",
+    "rate-limiting",
+    "idempotency"
+   ]
+  },
+  {
+   "id": "practice",
+   "number": 6,
+   "title": "System Design Practice",
+   "tagline": "Estimate, assemble, interview",
+   "stage": "Design it yourself",
+   "description": "Size a system with back-of-the-envelope maths, assemble the full architecture, then design a URL shortener end to end.",
+   "lessons": [
+    "estimation-numbers",
+    "estimation-formulas",
+    "estimation-examples",
+    "system-shapes",
+    "final-architecture",
+    "revision-map",
+    "playbook",
+    "test-yourself"
+   ]
+  }
+ ],
+ "existing_lessons": {
+  "big-idea": {
+   "title": "The big idea",
+   "module": "foundations",
+   "level": "basic",
+   "minutes": 4,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Reword step 6 of the 'growing up' list (microservices is taught in module 3); add one paragraph introducing the advanced tracks (modules 7–16) and the HLD/LLD practice.",
+   "resources": []
+  },
+  "client-server": {
+   "title": "Client–server architecture",
+   "module": "foundations",
+   "level": "basic",
+   "minutes": 3,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "None beyond a quiz question.",
+   "resources": [
+    "quiz +1 (check-foundations)"
+   ]
+  },
+  "dns": {
+   "title": "DNS",
+   "module": "foundations",
+   "level": "basic",
+   "minutes": 5,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "Add a quiz question; link forward to cdn-internals and service-discovery once they exist.",
+   "resources": [
+    "quiz +1 (check-foundations)"
+   ]
+  },
+  "tcp-udp": {
+   "title": "IP, TCP and UDP",
+   "module": "foundations",
+   "level": "basic",
+   "minutes": 6,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "DeepDive: mention fast retransmit on duplicate ACKs (the sim shows duplicate ACKs but retransmits on RTO only).",
+   "resources": []
+  },
+  "http": {
+   "title": "HTTP and HTTPS",
+   "module": "foundations",
+   "level": "basic",
+   "minutes": 6,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a quiz question; link forward to authentication (cookies/tokens) and encryption lessons.",
+   "resources": [
+    "quiz +1 (check-foundations)"
+   ]
+  },
+  "latency": {
+   "title": "Latency, throughput and the numbers to know",
+   "module": "foundations",
+   "level": "intermediate",
+   "minutes": 10,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Fix the RAM-vs-SSD inconsistency (table says ~1,000×, latency-scale preset computes ≈1,500×): quote both and keep 'ratios matter'. Note the index-scan sim's pessimistic disk-per-level assumption where linked.",
+   "resources": []
+  },
+  "proxy": {
+   "title": "Proxy and reverse proxy",
+   "module": "scaling",
+   "level": "basic",
+   "minutes": 4,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a quiz question; link forward to api-gateway and service-mesh.",
+   "resources": [
+    "quiz +1 (check-scaling)"
+   ]
+  },
+  "load-balancing": {
+   "title": "Load balancing",
+   "module": "scaling",
+   "level": "basic",
+   "minutes": 6,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "None.",
+   "resources": []
+  },
+  "scaling": {
+   "title": "Vertical vs horizontal scaling",
+   "module": "scaling",
+   "level": "basic",
+   "minutes": 6,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Link the Elasticity section to autoscaling and capacity-planning.",
+   "resources": []
+  },
+  "cdn": {
+   "title": "CDN",
+   "module": "scaling",
+   "level": "basic",
+   "minutes": 5,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a Callout (none today); link to cdn-internals.",
+   "resources": []
+  },
+  "rest": {
+   "title": "REST APIs",
+   "module": "communication",
+   "level": "basic",
+   "minutes": 5,
+   "status": "improve",
+   "reclassify": null,
+   "actions": "Add status-code design, versioning, PUT vs POST idempotency, error payloads; add a Callout and a quiz question; link to api-security.",
+   "resources": [
+    "Mermaid: flowchart of resource/verb mapping (optional)",
+    "quiz +1 (check-communication)"
+   ]
+  },
+  "grpc": {
+   "title": "gRPC",
+   "module": "communication",
+   "level": "intermediate",
+   "minutes": 5,
+   "status": "improve",
+   "reclassify": null,
+   "actions": "Add the four call types (unary, server/client/bidi streaming), deadlines and cancellation, status codes; keep the protobuf DeepDive.",
+   "resources": [
+    "Mermaid: sequence for deadline propagation"
+   ]
+  },
+  "websockets": {
+   "title": "WebSockets (real-time)",
+   "module": "communication",
+   "level": "intermediate",
+   "minutes": 6,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "None.",
+   "resources": []
+  },
+  "microservices": {
+   "title": "Monolith vs microservices",
+   "module": "communication",
+   "level": "intermediate",
+   "minutes": 6,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Link to modular-monolith-soa, api-gateway, service-mesh, strangler-fig; verify the Prime Video citation.",
+   "resources": [
+    "source check"
+   ]
+  },
+  "sync-async": {
+   "title": "Synchronous vs asynchronous communication",
+   "module": "communication",
+   "level": "basic",
+   "minutes": 4,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "None.",
+   "resources": []
+  },
+  "sql-nosql": {
+   "title": "SQL vs NoSQL",
+   "module": "data",
+   "level": "basic",
+   "minutes": 6,
+   "status": "improve",
+   "reclassify": null,
+   "actions": "Add an access-pattern-first worked example (design the table for the query), a NewSQL/distributed SQL note, and a quiz question; link to distributed-sql.",
+   "resources": [
+    "Mermaid: flowchart decision tree",
+    "quiz +1 (check-data-modeling)"
+   ]
+  },
+  "acid": {
+   "title": "Transactions and ACID",
+   "module": "data",
+   "level": "intermediate",
+   "minutes": 6,
+   "status": "improve",
+   "reclassify": null,
+   "actions": "Name the write-ahead log under Durability; add a lost-update example under Isolation; link to wal and mvcc-isolation.",
+   "resources": [
+    "Mermaid: sequence of a lost update"
+   ]
+  },
+  "indexing": {
+   "title": "Database indexing",
+   "module": "data",
+   "level": "basic",
+   "minutes": 5,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "Link to query-execution and btree-vs-lsm.",
+   "resources": []
+  },
+  "normalization": {
+   "title": "Normalization vs denormalization",
+   "module": "data",
+   "level": "basic",
+   "minutes": 4,
+   "status": "improve",
+   "reclassify": null,
+   "actions": "Add section headings, the actual feed JOIN, the measurement-first rule, and how denormalised copies are kept in sync (async fan-out of renames); add a diagram.",
+   "resources": [
+    "static diagram spec: normalized-vs-denormalized",
+    "quiz exists"
+   ]
+  },
+  "replication": {
+   "title": "Database replication",
+   "module": "data",
+   "level": "intermediate",
+   "minutes": 7,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a quiz question; link to replication-internals and quorums.",
+   "resources": [
+    "quiz +1 (check-distributed-data)"
+   ]
+  },
+  "sharding": {
+   "title": "Sharding and partitioning",
+   "module": "data",
+   "level": "advanced",
+   "minutes": 8,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "Link to partitioning-internals.",
+   "resources": []
+  },
+  "consistency": {
+   "title": "Consistency: strong vs eventual",
+   "module": "data",
+   "level": "intermediate",
+   "minutes": 5,
+   "status": "improve",
+   "reclassify": null,
+   "actions": "Deepen: add monotonic reads, a timeline example for causal vs eventual (Mermaid sequence), how read-your-writes and causal consistency are implemented (sticky routing, version tracking), and a quiz question; link to linearizability.",
+   "resources": [
+    "Mermaid: sequence timeline",
+    "quiz +1 (check-distributed-data)"
+   ]
+  },
+  "cap": {
+   "title": "CAP and PACELC",
+   "module": "data",
+   "level": "advanced",
+   "minutes": 10,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "Link to consensus and quorums; note the two-replica limitation of the simulation in one clause.",
+   "resources": []
+  },
+  "object-storage": {
+   "title": "Object storage",
+   "module": "data",
+   "level": "basic",
+   "minutes": 4,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a Callout (none today); link to design-file-storage.",
+   "resources": []
+  },
+  "caching": {
+   "title": "Caching",
+   "module": "reliability",
+   "level": "intermediate",
+   "minutes": 7,
+   "status": "improve",
+   "reclassify": null,
+   "actions": "Add a short section on stampede mechanics (request coalescing / single-flight, TTL jitter, early refresh) and on cache topologies (local + distributed tiers); reference the cache-stampede simulation spec.",
+   "resources": [
+    "new sim spec: cache-stampede"
+   ]
+  },
+  "message-queues": {
+   "title": "Message queues",
+   "module": "reliability",
+   "level": "intermediate",
+   "minutes": 5,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a quiz question; link to kafka-architecture and brokers-compared.",
+   "resources": [
+    "quiz +1 (check-async)"
+   ]
+  },
+  "pubsub": {
+   "title": "Pub/sub and event-driven architecture",
+   "module": "reliability",
+   "level": "intermediate",
+   "minutes": 5,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a Callout (none today); link to eda-patterns, cqrs, event-sourcing.",
+   "resources": []
+  },
+  "availability": {
+   "title": "Availability and the nines",
+   "module": "reliability",
+   "level": "intermediate",
+   "minutes": 6,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "Link to slos-error-budgets and disaster-recovery.",
+   "resources": []
+  },
+  "timeouts-retries": {
+   "title": "Timeouts and retries",
+   "module": "reliability",
+   "level": "intermediate",
+   "minutes": 5,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "None.",
+   "resources": []
+  },
+  "circuit-breaker": {
+   "title": "Circuit breaker",
+   "module": "reliability",
+   "level": "advanced",
+   "minutes": 5,
+   "status": "improve",
+   "reclassify": "intermediate",
+   "actions": "Reclassify to intermediate. Add failure-rate windows vs consecutive-count thresholds, per-endpoint breakers, and a quiz question; keep the bulkheads DeepDive but link to bulkheads-degradation.",
+   "resources": [
+    "quiz +1 (check-reliability)"
+   ]
+  },
+  "backpressure": {
+   "title": "Backpressure and load shedding",
+   "module": "reliability",
+   "level": "advanced",
+   "minutes": 7,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "Verify the Facebook and Google SRE citations.",
+   "resources": [
+    "source check"
+   ]
+  },
+  "rate-limiting": {
+   "title": "Rate limiting",
+   "module": "reliability",
+   "level": "intermediate",
+   "minutes": 7,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a Callout (none today) and a quiz question; link to design-rate-limiter and api-security.",
+   "resources": [
+    "quiz +1 (check-reliability)"
+   ]
+  },
+  "idempotency": {
+   "title": "Idempotency",
+   "module": "reliability",
+   "level": "advanced",
+   "minutes": 6,
+   "status": "polish",
+   "reclassify": "intermediate",
+   "actions": "Reclassify to intermediate; add a quiz question; link to delivery-semantics and sagas.",
+   "resources": [
+    "quiz +1 (check-reliability)"
+   ]
+  },
+  "estimation-numbers": {
+   "title": "Numbers to memorize",
+   "module": "practice",
+   "level": "basic",
+   "minutes": 4,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "Add a quiz question.",
+   "resources": [
+    "quiz +1 (check-estimation)"
+   ]
+  },
+  "estimation-formulas": {
+   "title": "The formulas",
+   "module": "practice",
+   "level": "basic",
+   "minutes": 5,
+   "status": "improve",
+   "reclassify": null,
+   "actions": "Explain why cache ≈ 20% of daily reads, where the peak multipliers come from, and narrate one example end to end before the estimator.",
+   "resources": []
+  },
+  "estimation-examples": {
+   "title": "Worked examples",
+   "module": "practice",
+   "level": "intermediate",
+   "minutes": 6,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "Link to design-file-storage and design-pastebin.",
+   "resources": []
+  },
+  "system-shapes": {
+   "title": "Three system shapes",
+   "module": "practice",
+   "level": "intermediate",
+   "minutes": 3,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a 'classify these systems' exercise (list of ten systems with answers in a DeepDive) and a quiz question.",
+   "resources": [
+    "quiz +1 (check-estimation)"
+   ]
+  },
+  "final-architecture": {
+   "title": "The final architecture",
+   "module": "practice",
+   "level": "intermediate",
+   "minutes": 4,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Fix the prose/behaviour mismatch ('click any box to jump there' → 'select a box to see its lessons').",
+   "resources": []
+  },
+  "revision-map": {
+   "title": "Revision: problem to building block",
+   "module": "practice",
+   "level": "basic",
+   "minutes": 6,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "None.",
+   "resources": []
+  },
+  "playbook": {
+   "title": "The interview playbook",
+   "module": "practice",
+   "level": "basic",
+   "minutes": 4,
+   "status": "polish",
+   "reclassify": null,
+   "actions": "Add a pointer to the HLD case-study module and the 18-section case-study template.",
+   "resources": []
+  },
+  "url-shortener": {
+   "title": "Design a URL shortener",
+   "module": "practice",
+   "level": "intermediate",
+   "minutes": 12,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "Reference lesson for every HLD case study; add a 'what the other case studies change' closing Callout.",
+   "resources": []
+  },
+  "test-yourself": {
+   "title": "Test yourself",
+   "module": "practice",
+   "level": "intermediate",
+   "minutes": 15,
+   "status": "keep",
+   "reclassify": null,
+   "actions": "None (deck is append-only).",
+   "resources": []
+  }
+ },
+ "new_modules": [
+  {
+   "id": "distributed",
+   "number": 7,
+   "title": "Distributed Systems",
+   "tagline": "Many machines, one truth",
+   "stage": "Advanced track",
+   "description": "How independent machines agree, order events and share state when the network lies: clocks, quorums, consensus, locks and transactions across services.",
+   "lessons": [
+    {
+     "slug": "distributed-fundamentals",
+     "title": "What makes a system distributed",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "cap",
+      "replication",
+      "timeouts-retries"
+     ],
+     "objectives": [
+      "Name the failure modes a distributed system must tolerate (crash, omission, partition, grey failure)",
+      "Explain why there is no global clock and why timeouts are a guess",
+      "Recognise the fallacies of distributed computing in a design"
+     ],
+     "concepts": [
+      "unreliable network",
+      "partial failure",
+      "failure detectors",
+      "fallacies of distributed computing",
+      "two generals"
+     ],
+     "resources": [
+      "Mermaid: sequence showing an ambiguous timeout",
+      "quiz: check-distributed-1",
+      "recall ×2",
+      "glossary: P2P (if used)"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "time-and-ordering",
+     "title": "Clocks, time and ordering",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "distributed-fundamentals",
+      "consistency"
+     ],
+     "objectives": [
+      "Distinguish wall clocks, monotonic clocks and logical clocks",
+      "Order events with Lamport and vector clocks",
+      "Explain what Spanner's TrueTime buys and costs"
+     ],
+     "concepts": [
+      "NTP drift",
+      "monotonic vs wall clock",
+      "happens-before",
+      "Lamport clock",
+      "vector clock",
+      "hybrid logical clock",
+      "TrueTime"
+     ],
+     "resources": [
+      "Mermaid: sequence with Lamport timestamps",
+      "static diagram spec: vector-clock-example",
+      "quiz: check-distributed-1",
+      "recall ×2",
+      "glossary: NTP, HLC"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "quorums",
+     "title": "Quorums and leaderless replication",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "replication",
+      "consistency",
+      "time-and-ordering"
+     ],
+     "objectives": [
+      "Apply R + W > N and explain when it still returns stale data",
+      "Describe sloppy quorums, hinted handoff, read repair and anti-entropy",
+      "Compare last-write-wins with version vectors for conflict resolution"
+     ],
+     "concepts": [
+      "N/R/W",
+      "strict vs sloppy quorum",
+      "hinted handoff",
+      "read repair",
+      "anti-entropy (Merkle trees)",
+      "LWW",
+      "version vectors",
+      "Dynamo"
+     ],
+     "resources": [
+      "new sim spec: quorum-reads-writes",
+      "Mermaid: flowchart of a quorum write",
+      "quiz: check-distributed-1",
+      "recall ×2",
+      "glossary: LWW"
+     ],
+     "archNodes": [
+      "db"
+     ]
+    },
+    {
+     "slug": "consensus",
+     "title": "Consensus: Raft in one picture",
+     "level": "advanced",
+     "minutes": 12,
+     "priority": "P1",
+     "prereqs": [
+      "distributed-fundamentals",
+      "quorums"
+     ],
+     "objectives": [
+      "State the consensus problem and why a majority is needed",
+      "Walk through Raft leader election and log replication",
+      "Explain where ZooKeeper, etcd and Kafka's controller use consensus"
+     ],
+     "concepts": [
+      "consensus",
+      "Raft terms and heartbeats",
+      "log replication",
+      "majority commit",
+      "Paxos (named)",
+      "ZooKeeper/etcd",
+      "Zab"
+     ],
+     "resources": [
+      "Mermaid: stateDiagram-v2 follower/candidate/leader",
+      "Mermaid: sequence of an election",
+      "new sim spec: raft-election",
+      "quiz: check-distributed-2",
+      "recall ×2",
+      "glossary: Raft (not an acronym; prose only)"
+     ],
+     "archNodes": [
+      "db"
+     ]
+    },
+    {
+     "slug": "leader-election",
+     "title": "Leader election, split-brain and fencing",
+     "level": "advanced",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "consensus"
+     ],
+     "objectives": [
+      "Implement leader election with a lease in a coordination service",
+      "Explain how split-brain arises and how fencing tokens prevent damage",
+      "Choose between single-leader, multi-leader and leaderless designs"
+     ],
+     "concepts": [
+      "lease",
+      "session/ephemeral node",
+      "split-brain",
+      "fencing token",
+      "STONITH (named)",
+      "failover automation"
+     ],
+     "resources": [
+      "Mermaid: sequence of a fenced write",
+      "quiz: check-distributed-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "distributed-locks",
+     "title": "Distributed locking",
+     "level": "advanced",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "leader-election",
+      "idempotency"
+     ],
+     "objectives": [
+      "Build a lock with Redis SET NX PX and explain its failure cases",
+      "Summarise the Redlock debate and what a correct lock needs",
+      "Replace locks with idempotency or unique constraints where possible"
+     ],
+     "concepts": [
+      "mutual exclusion",
+      "TTL and lock expiry",
+      "Redlock controversy",
+      "ZooKeeper ephemeral sequential nodes",
+      "fencing",
+      "lock-free alternatives"
+     ],
+     "resources": [
+      "new sim spec: distributed-lock",
+      "Mermaid: sequence of an expired lock causing a double write",
+      "quiz: check-distributed-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "distributed-transactions",
+     "title": "Distributed transactions and two-phase commit",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "acid",
+      "consensus"
+     ],
+     "objectives": [
+      "Explain atomic commit across services and why it is hard",
+      "Trace a two-phase commit including coordinator failure",
+      "Describe how Spanner-style systems combine 2PC with consensus"
+     ],
+     "concepts": [
+      "atomic commitment",
+      "2PC prepare/commit",
+      "blocking on coordinator failure",
+      "3PC (named)",
+      "XA",
+      "Percolator/Spanner 2PC over Paxos groups"
+     ],
+     "resources": [
+      "Mermaid: sequence of 2PC with a coordinator crash",
+      "quiz: check-distributed-3",
+      "recall ×2",
+      "glossary: 2PC, XA"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "sagas",
+     "title": "Sagas and compensating actions",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "distributed-transactions",
+      "pubsub",
+      "idempotency"
+     ],
+     "objectives": [
+      "Model a multi-service business transaction as a saga",
+      "Compare choreography and orchestration",
+      "Design compensations and handle partial failure"
+     ],
+     "concepts": [
+      "saga",
+      "compensating transaction",
+      "choreography vs orchestration",
+      "semantic lock",
+      "outbox",
+      "idempotent steps"
+     ],
+     "resources": [
+      "Mermaid: sequence of an order saga with compensation",
+      "quiz: check-distributed-3",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "linearizability",
+     "title": "Linearizability, serializability and the consistency zoo",
+     "level": "advanced",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "consistency",
+      "acid",
+      "time-and-ordering"
+     ],
+     "objectives": [
+      "Define linearizability and distinguish it from serializability",
+      "Place strong, causal, eventual and snapshot models on one map",
+      "Decide which guarantee a feature actually needs and what it costs"
+     ],
+     "concepts": [
+      "linearizability",
+      "serializability",
+      "strict serializability",
+      "sequential consistency",
+      "causal",
+      "Jepsen (named)"
+     ],
+     "resources": [
+      "static diagram spec: consistency-model-map",
+      "quiz: check-distributed-3",
+      "recall ×2"
+     ],
+     "archNodes": []
+    }
+   ]
+  },
+  {
+   "id": "internals",
+   "number": 8,
+   "title": "Database Internals",
+   "tagline": "Inside the box labelled DB",
+   "stage": "Advanced track",
+   "description": "What happens between a query and a disk: storage engines, logs, trees, versions, planners, and how replication and partitioning are really implemented.",
+   "lessons": [
+    {
+     "slug": "storage-engines",
+     "title": "How a database stores data",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "indexing",
+      "latency"
+     ],
+     "objectives": [
+      "Describe pages, heap files and the buffer pool",
+      "Contrast row and column stores and when each wins",
+      "Name the storage engine beneath common databases"
+     ],
+     "concepts": [
+      "page",
+      "heap file",
+      "buffer pool",
+      "row store vs column store",
+      "storage engine abstraction",
+      "InnoDB, RocksDB"
+     ],
+     "resources": [
+      "static diagram spec: page-and-buffer-pool",
+      "quiz: check-internals-1",
+      "recall ×2",
+      "glossary: OLTP, OLAP"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "wal",
+     "title": "Write-ahead logging and crash recovery",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "acid",
+      "storage-engines"
+     ],
+     "objectives": [
+      "Explain why writes go to a log before data pages",
+      "Trace crash recovery with redo and checkpoints",
+      "Connect the WAL to replication streams and change data capture"
+     ],
+     "concepts": [
+      "WAL",
+      "fsync",
+      "checkpoint",
+      "redo/undo",
+      "group commit",
+      "durability vs latency"
+     ],
+     "resources": [
+      "Mermaid: sequence of commit → WAL → ack",
+      "quiz: check-internals-1",
+      "recall ×2",
+      "glossary: WAL"
+     ],
+     "archNodes": [
+      "db"
+     ]
+    },
+    {
+     "slug": "btree-vs-lsm",
+     "title": "B-trees vs LSM trees",
+     "level": "advanced",
+     "minutes": 11,
+     "priority": "P1",
+     "prereqs": [
+      "storage-engines",
+      "indexing"
+     ],
+     "objectives": [
+      "Explain B-tree page splits and in-place updates",
+      "Trace an LSM write through memtable, SSTables and compaction",
+      "Compare read, write and space amplification and pick an engine for a workload"
+     ],
+     "concepts": [
+      "B-tree",
+      "write amplification",
+      "memtable",
+      "SSTable",
+      "compaction (size-tiered vs leveled)",
+      "bloom filter",
+      "read/write/space amplification"
+     ],
+     "resources": [
+      "new sim spec: btree-vs-lsm",
+      "static diagram spec: lsm-levels",
+      "quiz: check-internals-1",
+      "recall ×2",
+      "glossary: SSTable"
+     ],
+     "archNodes": [
+      "db"
+     ]
+    },
+    {
+     "slug": "mvcc-isolation",
+     "title": "MVCC and isolation levels",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "acid",
+      "wal"
+     ],
+     "objectives": [
+      "Explain how multi-version concurrency control lets readers avoid blocking writers",
+      "Map read committed, repeatable read, snapshot isolation and serializable to the anomalies they allow",
+      "Recognise write skew and choose SSI or locks to prevent it"
+     ],
+     "concepts": [
+      "MVCC",
+      "snapshot",
+      "visibility rules",
+      "write skew",
+      "phantoms",
+      "serializable snapshot isolation",
+      "vacuum/garbage collection"
+     ],
+     "resources": [
+      "Mermaid: sequence showing write skew",
+      "quiz: check-internals-2",
+      "recall ×2",
+      "glossary: MVCC, SSI"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "query-execution",
+     "title": "Indexes and query execution",
+     "level": "intermediate",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "indexing",
+      "storage-engines"
+     ],
+     "objectives": [
+      "Read an EXPLAIN plan and identify scans, index scans and joins",
+      "Design composite and covering indexes for real queries",
+      "Spot the N+1 problem and selectivity traps"
+     ],
+     "concepts": [
+      "planner/optimiser",
+      "EXPLAIN",
+      "seq scan vs index scan vs index-only",
+      "covering index",
+      "selectivity",
+      "nested loop / hash / merge join",
+      "N+1"
+     ],
+     "resources": [
+      "reuse sim: index-scan",
+      "quiz: check-internals-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "replication-internals",
+     "title": "Replication strategies in depth",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "replication",
+      "wal",
+      "quorums"
+     ],
+     "objectives": [
+      "Compare statement-based, WAL-shipping and logical replication",
+      "Explain failover mechanics and the data-loss window",
+      "Describe multi-leader conflict handling and CDC"
+     ],
+     "concepts": [
+      "statement vs physical vs logical replication",
+      "replication slot",
+      "failover and promotion",
+      "multi-leader conflicts",
+      "CRDT (named)",
+      "change data capture"
+     ],
+     "resources": [
+      "reuse sim: replication-lag",
+      "Mermaid: flowchart of replication modes",
+      "quiz: check-internals-2",
+      "recall ×2",
+      "glossary: CDC, CRDT"
+     ],
+     "archNodes": [
+      "db"
+     ]
+    },
+    {
+     "slug": "partitioning-internals",
+     "title": "Partitioning and rebalancing",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "sharding",
+      "quorums"
+     ],
+     "objectives": [
+      "Compare local and global secondary indexes in a partitioned store",
+      "Choose a rebalancing strategy (fixed, dynamic, proportional) and explain its data movement",
+      "Explain how requests find the right partition"
+     ],
+     "concepts": [
+      "local vs global secondary index",
+      "rebalancing",
+      "fixed vs dynamic partitions",
+      "request routing",
+      "coordination service vs gossip",
+      "hot spots"
+     ],
+     "resources": [
+      "reuse sim: shard-router",
+      "quiz: check-internals-3",
+      "recall ×2"
+     ],
+     "archNodes": [
+      "db"
+     ]
+    },
+    {
+     "slug": "distributed-sql",
+     "title": "Distributed SQL and NewSQL",
+     "level": "advanced",
+     "minutes": 9,
+     "priority": "P2",
+     "prereqs": [
+      "consensus",
+      "distributed-transactions",
+      "partitioning-internals"
+     ],
+     "objectives": [
+      "Explain how Spanner, CockroachDB and TiDB combine ranges, Raft and 2PC",
+      "State what they give up and what they cost",
+      "Decide when a single PostgreSQL still wins"
+     ],
+     "concepts": [
+      "range-partitioned Raft groups",
+      "distributed 2PC",
+      "clock-based ordering",
+      "Vitess/Citus-style sharding middleware",
+      "NewSQL"
+     ],
+     "resources": [
+      "static diagram spec: distributed-sql-architecture",
+      "quiz: check-internals-3",
+      "recall ×2"
+     ],
+     "archNodes": []
+    }
+   ]
+  },
+  {
+   "id": "streaming",
+   "number": 9,
+   "title": "Messaging and Streaming",
+   "tagline": "Data in motion",
+   "stage": "Advanced track",
+   "description": "From a queue to a distributed log: Kafka's design, partitions and consumer groups, delivery guarantees, change data capture and processing streams while they flow.",
+   "lessons": [
+    {
+     "slug": "kafka-architecture",
+     "title": "Kafka: a distributed log",
+     "level": "intermediate",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "message-queues",
+      "pubsub"
+     ],
+     "objectives": [
+      "Describe topics, partitions, offsets, brokers and replication",
+      "Explain producer acks and in-sync replicas",
+      "Contrast a log with a traditional queue (retention, replay, consumers)"
+     ],
+     "concepts": [
+      "topic",
+      "partition",
+      "offset",
+      "broker",
+      "leader/follower and ISR",
+      "acks=all",
+      "retention and log compaction",
+      "controller"
+     ],
+     "resources": [
+      "static diagram spec: kafka-cluster",
+      "Mermaid: sequence of a produce with acks=all",
+      "quiz: check-streaming-1",
+      "recall ×2",
+      "glossary: ISR"
+     ],
+     "archNodes": [
+      "queue"
+     ]
+    },
+    {
+     "slug": "partitions-consumer-groups",
+     "title": "Partitions, consumer groups and ordering",
+     "level": "intermediate",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "kafka-architecture"
+     ],
+     "objectives": [
+      "Explain why a partition is the unit of both parallelism and ordering",
+      "Predict what happens when consumers join or leave a group",
+      "Pick a partition key that keeps order where it matters and avoids hot partitions"
+     ],
+     "concepts": [
+      "partition key",
+      "consumer group",
+      "rebalance",
+      "consumer lag",
+      "max parallelism = partitions",
+      "per-key ordering",
+      "hot partition"
+     ],
+     "resources": [
+      "new sim spec: kafka-partitions",
+      "quiz: check-streaming-1",
+      "recall ×2"
+     ],
+     "archNodes": [
+      "queue"
+     ]
+    },
+    {
+     "slug": "delivery-semantics",
+     "title": "Delivery semantics and exactly-once",
+     "level": "advanced",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "partitions-consumer-groups",
+      "idempotency",
+      "message-queues"
+     ],
+     "objectives": [
+      "Define at-most-once, at-least-once and exactly-once in terms of what can go wrong",
+      "Explain the idempotent producer, transactions and offset-commit strategies",
+      "Build effectively-once end to end with outbox and idempotent consumers"
+     ],
+     "concepts": [
+      "commit before vs after processing",
+      "idempotent producer",
+      "transactional outbox",
+      "consumer dedup",
+      "effectively once",
+      "Kafka transactions"
+     ],
+     "resources": [
+      "Mermaid: sequence of commit-after-processing with a crash",
+      "quiz: check-streaming-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "cdc",
+     "title": "Change data capture",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P2",
+     "prereqs": [
+      "wal",
+      "kafka-architecture"
+     ],
+     "objectives": [
+      "Explain log-based CDC and why it beats dual writes",
+      "Use CDC for cache invalidation, search indexing and analytics feeds",
+      "Handle schema changes and initial snapshots"
+     ],
+     "concepts": [
+      "dual-write problem",
+      "log-based CDC (Debezium)",
+      "snapshot + stream",
+      "downstream consumers",
+      "schema evolution"
+     ],
+     "resources": [
+      "Mermaid: flowchart DB → CDC → consumers",
+      "quiz: check-streaming-2",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "brokers-compared",
+     "title": "Choosing a broker",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P2",
+     "prereqs": [
+      "message-queues",
+      "kafka-architecture"
+     ],
+     "objectives": [
+      "Compare queue semantics (RabbitMQ, SQS) with log semantics (Kafka, Pulsar)",
+      "Match delivery, ordering, retention and routing needs to a broker",
+      "Explain push vs pull consumption"
+     ],
+     "concepts": [
+      "AMQP routing",
+      "visibility timeout",
+      "FIFO queues",
+      "log vs queue",
+      "push vs pull",
+      "Pulsar tiered storage"
+     ],
+     "resources": [
+      "comparison table",
+      "quiz: check-streaming-2",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "stream-processing",
+     "title": "Stream processing",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "delivery-semantics"
+     ],
+     "objectives": [
+      "Distinguish event time from processing time and explain watermarks",
+      "Choose tumbling, sliding or session windows for a metric",
+      "Explain state, checkpointing and stream-table joins"
+     ],
+     "concepts": [
+      "event time vs processing time",
+      "watermark",
+      "windows",
+      "stateful operators",
+      "checkpointing",
+      "Kafka Streams / Flink",
+      "lambda vs kappa"
+     ],
+     "resources": [
+      "static diagram spec: windows-and-watermarks",
+      "quiz: check-streaming-3",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "eda-patterns",
+     "title": "Event-driven architecture in practice",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "pubsub",
+      "kafka-architecture"
+     ],
+     "objectives": [
+      "Distinguish events from commands and design event payloads",
+      "Evolve schemas safely with a registry and compatibility rules",
+      "Avoid the common failure modes of choreography"
+     ],
+     "concepts": [
+      "event vs command",
+      "thin vs fat events",
+      "event-carried state transfer",
+      "schema registry",
+      "backward/forward compatibility",
+      "choreography pitfalls"
+     ],
+     "resources": [
+      "Mermaid: flowchart of an event flow",
+      "quiz: check-streaming-3",
+      "recall ×2"
+     ],
+     "archNodes": []
+    }
+   ]
+  },
+  {
+   "id": "operations",
+   "number": 10,
+   "title": "Reliability and Observability",
+   "tagline": "Running it in production",
+   "stage": "Advanced track",
+   "description": "Failure is normal; knowing is optional. How systems fail, how to contain it, how to measure what users feel, and how to recover when a region disappears.",
+   "lessons": [
+    {
+     "slug": "failure-modes",
+     "title": "Fault tolerance: how systems fail",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "availability",
+      "timeouts-retries"
+     ],
+     "objectives": [
+      "Distinguish faults from failures and list the common fault classes",
+      "Explain correlated failure and failure domains (host, zone, region)",
+      "Choose redundancy shapes and reason about blast radius"
+     ],
+     "concepts": [
+      "fault vs failure",
+      "crash/omission/timing faults",
+      "grey failure",
+      "failure domain",
+      "active-active vs active-passive",
+      "blast radius"
+     ],
+     "resources": [
+      "static diagram spec: failure-domains",
+      "quiz: check-operations-1",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "bulkheads-degradation",
+     "title": "Bulkheads and graceful degradation",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "circuit-breaker",
+      "backpressure"
+     ],
+     "objectives": [
+      "Isolate dependencies with pools, cells and shuffle sharding",
+      "Design degraded modes and kill switches",
+      "Tier features by criticality and decide what fails first"
+     ],
+     "concepts": [
+      "bulkhead",
+      "cell-based architecture",
+      "shuffle sharding",
+      "feature flag / kill switch",
+      "fallback",
+      "dependency tiers"
+     ],
+     "resources": [
+      "static diagram spec: bulkheads-and-cells",
+      "quiz: check-operations-1",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "slos-error-budgets",
+     "title": "SLIs, SLOs and error budgets",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "availability",
+      "latency"
+     ],
+     "objectives": [
+      "Choose SLIs that reflect user experience",
+      "Set an SLO window and target and derive the error budget",
+      "Alert on burn rate instead of raw thresholds"
+     ],
+     "concepts": [
+      "SLI types (availability, latency, correctness)",
+      "SLO window",
+      "error budget",
+      "burn rate alerting",
+      "error budget policy"
+     ],
+     "resources": [
+      "reuse sim: nines",
+      "quiz: check-operations-1",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "metrics-monitoring",
+     "title": "Metrics and monitoring",
+     "level": "intermediate",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "latency",
+      "slos-error-budgets"
+     ],
+     "objectives": [
+      "Use counters, gauges and histograms correctly",
+      "Apply the RED and USE methods to a service and a resource",
+      "Avoid cardinality explosions and alert on symptoms"
+     ],
+     "concepts": [
+      "counter/gauge/histogram",
+      "percentiles from histograms",
+      "RED method",
+      "USE method",
+      "cardinality",
+      "pull vs push (Prometheus)",
+      "alerting on symptoms"
+     ],
+     "resources": [
+      "static diagram spec: metrics-pipeline",
+      "quiz: check-operations-2",
+      "recall ×2",
+      "glossary: RED, USE"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "logging",
+     "title": "Logging at scale",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "metrics-monitoring"
+     ],
+     "objectives": [
+      "Design structured logs with correlation ids",
+      "Build a log pipeline and control its cost with sampling and retention",
+      "Keep secrets and personal data out of logs"
+     ],
+     "concepts": [
+      "structured logging",
+      "log levels",
+      "correlation id",
+      "agents → broker → store",
+      "sampling",
+      "retention and cost",
+      "PII"
+     ],
+     "resources": [
+      "Mermaid: flowchart of a log pipeline",
+      "quiz: check-operations-2",
+      "recall ×1",
+      "glossary: PII"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "tracing",
+     "title": "Distributed tracing",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "metrics-monitoring",
+      "microservices"
+     ],
+     "objectives": [
+      "Explain spans, traces and context propagation",
+      "Read a trace waterfall to find the slow hop",
+      "Choose a sampling strategy"
+     ],
+     "concepts": [
+      "span",
+      "trace context (W3C traceparent)",
+      "head vs tail sampling",
+      "OpenTelemetry",
+      "waterfall view"
+     ],
+     "resources": [
+      "new sim spec: trace-waterfall",
+      "Mermaid: sequence with propagated trace id",
+      "quiz: check-operations-2",
+      "recall ×2",
+      "glossary: OTel"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "disaster-recovery",
+     "title": "Disaster recovery and backups",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "availability",
+      "replication",
+      "dns"
+     ],
+     "objectives": [
+      "Map RPO/RTO targets to DR tiers (backup-restore, pilot light, warm standby, active-active)",
+      "Design backups that can actually be restored",
+      "Run a region failover and know what breaks"
+     ],
+     "concepts": [
+      "DR tiers",
+      "backup types and testing",
+      "region failover",
+      "DNS/global LB switch",
+      "data residency",
+      "runbooks"
+     ],
+     "resources": [
+      "reuse diagram: rpo-rto-timeline",
+      "static diagram spec: dr-tiers",
+      "quiz: check-operations-3",
+      "recall ×2",
+      "glossary: DR"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "capacity-planning",
+     "title": "Capacity planning and load testing",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "estimation-formulas",
+      "latency",
+      "scaling"
+     ],
+     "objectives": [
+      "Set utilisation targets and headroom per resource",
+      "Plan a load test and read its results",
+      "Translate forecasts into autoscaling policies and cost"
+     ],
+     "concepts": [
+      "utilisation target",
+      "headroom",
+      "Little's Law revisited",
+      "load/stress/soak tests",
+      "forecasting",
+      "cost per request"
+     ],
+     "resources": [
+      "reuse sim: littles-law",
+      "quiz: check-operations-3",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "incident-response",
+     "title": "Incidents, postmortems and chaos engineering",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P2",
+     "prereqs": [
+      "slos-error-budgets"
+     ],
+     "objectives": [
+      "Run an incident with roles and a timeline",
+      "Write a blameless postmortem that produces fixes",
+      "Use chaos experiments and game days to find weaknesses early"
+     ],
+     "concepts": [
+      "on-call",
+      "runbook",
+      "incident commander",
+      "blameless postmortem",
+      "chaos engineering",
+      "game day"
+     ],
+     "resources": [
+      "quiz: check-operations-3",
+      "recall ×1"
+     ],
+     "archNodes": []
+    }
+   ]
+  },
+  {
+   "id": "security",
+   "number": 11,
+   "title": "Security",
+   "tagline": "Keeping it safe",
+   "stage": "Advanced track",
+   "description": "Who is asking, what are they allowed to do, and who else can see it: identity, tokens, encryption, API hardening, secrets and threat modelling for the systems you have built so far.",
+   "lessons": [
+    {
+     "slug": "security-fundamentals",
+     "title": "Security fundamentals for system design",
+     "level": "basic",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "http"
+     ],
+     "objectives": [
+      "State the CIA triad and defence in depth",
+      "Identify trust boundaries and attack surface in an architecture",
+      "Apply least privilege to services and data"
+     ],
+     "concepts": [
+      "confidentiality/integrity/availability",
+      "defence in depth",
+      "least privilege",
+      "trust boundary",
+      "attack surface"
+     ],
+     "resources": [
+      "static diagram spec: trust-boundaries",
+      "quiz: check-security-1",
+      "recall ×2",
+      "glossary: CIA"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "authentication",
+     "title": "Authentication: sessions, tokens and passwords",
+     "level": "intermediate",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "http",
+      "scaling"
+     ],
+     "objectives": [
+      "Store passwords safely (salted adaptive hashing)",
+      "Compare session cookies with bearer tokens for stateless servers",
+      "Add MFA and SSO without breaking the design"
+     ],
+     "concepts": [
+      "password hashing (bcrypt/argon2)",
+      "session vs token",
+      "cookie flags (HttpOnly, Secure, SameSite)",
+      "MFA",
+      "SSO"
+     ],
+     "resources": [
+      "Mermaid: sequence of login and session",
+      "quiz: check-security-1",
+      "recall ×2",
+      "glossary: MFA, SSO"
+     ],
+     "archNodes": [
+      "gateway"
+     ]
+    },
+    {
+     "slug": "authorization",
+     "title": "Authorisation: RBAC, ABAC and policy",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "authentication"
+     ],
+     "objectives": [
+      "Model permissions with roles, attributes and relationships",
+      "Place enforcement at the gateway versus inside services",
+      "Handle multi-tenant data access"
+     ],
+     "concepts": [
+      "RBAC",
+      "ABAC",
+      "ReBAC",
+      "policy decision vs enforcement point",
+      "OPA (named)",
+      "tenant isolation"
+     ],
+     "resources": [
+      "static diagram spec: authz-enforcement-points",
+      "quiz: check-security-1",
+      "recall ×2",
+      "glossary: RBAC, ABAC"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "oauth-jwt",
+     "title": "OAuth 2.0, OpenID Connect and JWT",
+     "level": "intermediate",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "authentication"
+     ],
+     "objectives": [
+      "Walk through the authorization-code flow with PKCE",
+      "Read a JWT and validate it correctly",
+      "Handle refresh, expiry and revocation trade-offs"
+     ],
+     "concepts": [
+      "OAuth roles",
+      "authorization code + PKCE",
+      "client credentials",
+      "refresh token",
+      "OIDC id token",
+      "JWT header/payload/signature",
+      "JWKS",
+      "revocation problem"
+     ],
+     "resources": [
+      "Mermaid: sequence of authorization code + PKCE",
+      "new sim spec: jwt-inspector",
+      "quiz: check-security-2",
+      "recall ×2",
+      "glossary: OAuth, OIDC, JWT, PKCE, JWKS"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "encryption",
+     "title": "Encryption in transit and at rest",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "http"
+     ],
+     "objectives": [
+      "Explain certificates, PKI and mutual TLS",
+      "Choose disk, database or field-level encryption at rest",
+      "Use envelope encryption with a key management service and rotate keys"
+     ],
+     "concepts": [
+      "PKI and certificates",
+      "mTLS",
+      "encryption at rest layers",
+      "envelope encryption",
+      "KMS",
+      "key rotation"
+     ],
+     "resources": [
+      "static diagram spec: envelope-encryption",
+      "quiz: check-security-2",
+      "recall ×2",
+      "glossary: PKI, mTLS, KMS"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "api-security",
+     "title": "API security",
+     "level": "intermediate",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "rest",
+      "rate-limiting",
+      "oauth-jwt"
+     ],
+     "objectives": [
+      "Validate input and prevent injection, CSRF and CORS mistakes",
+      "Apply authentication, scopes, rate limits and idempotency to an API",
+      "Sign webhooks and handle replay"
+     ],
+     "concepts": [
+      "input validation",
+      "injection",
+      "CSRF",
+      "CORS",
+      "API keys vs tokens",
+      "scopes",
+      "webhook signing and replay protection",
+      "OWASP API Top 10 (named)"
+     ],
+     "resources": [
+      "quiz: check-security-2",
+      "recall ×2",
+      "glossary: CSRF, CORS, OWASP"
+     ],
+     "archNodes": [
+      "gateway"
+     ]
+    },
+    {
+     "slug": "secrets-management",
+     "title": "Secrets management",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "encryption"
+     ],
+     "objectives": [
+      "Explain why secrets must not live in code, images or env files",
+      "Use a secrets manager with dynamic, short-lived credentials",
+      "Rotate secrets and give workloads an identity"
+     ],
+     "concepts": [
+      "secret sprawl",
+      "vault / cloud secret manager",
+      "dynamic secrets",
+      "rotation",
+      "workload identity"
+     ],
+     "resources": [
+      "Mermaid: sequence of a service fetching a dynamic credential",
+      "quiz: check-security-3",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "threat-modelling",
+     "title": "Threat modelling and security boundaries",
+     "level": "advanced",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "security-fundamentals",
+      "authorization",
+      "api-security",
+      "encryption"
+     ],
+     "objectives": [
+      "Draw a data-flow diagram and mark trust boundaries",
+      "Apply STRIDE to each boundary",
+      "Combine network segmentation, zero trust and DDoS layers into a defence plan"
+     ],
+     "concepts": [
+      "data-flow diagram",
+      "STRIDE",
+      "zero trust",
+      "network segmentation",
+      "DDoS layers (link to cdn, rate-limiting)",
+      "abuse cases"
+     ],
+     "resources": [
+      "static diagram spec: dfd-with-boundaries",
+      "quiz: check-security-3",
+      "recall ×2",
+      "glossary: STRIDE"
+     ],
+     "archNodes": []
+    }
+   ]
+  },
+  {
+   "id": "infrastructure",
+   "number": 12,
+   "title": "Cloud and Infrastructure",
+   "tagline": "The platform underneath",
+   "stage": "Advanced track",
+   "description": "Where the boxes actually run: containers, Kubernetes, discovery, autoscaling, regions, networks, CDN internals and infrastructure described as code.",
+   "lessons": [
+    {
+     "slug": "containers",
+     "title": "Containers and images",
+     "level": "basic",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "scaling"
+     ],
+     "objectives": [
+      "Explain what a container isolates and how it differs from a VM",
+      "Describe images, layers and registries",
+      "Explain why immutable images make deployments repeatable"
+     ],
+     "concepts": [
+      "namespaces and cgroups",
+      "image and layers",
+      "registry",
+      "container vs VM",
+      "immutable deployment"
+     ],
+     "resources": [
+      "static diagram spec: container-vs-vm",
+      "quiz: check-infrastructure-1",
+      "recall ×2",
+      "glossary: OCI"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "kubernetes",
+     "title": "Kubernetes fundamentals",
+     "level": "intermediate",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "containers",
+      "load-balancing"
+     ],
+     "objectives": [
+      "Name the core objects (Pod, Deployment, Service, Ingress, ConfigMap, Secret) and what each solves",
+      "Explain scheduling, health probes and rolling updates",
+      "Connect Services and Ingress to the load-balancing lessons"
+     ],
+     "concepts": [
+      "Pod",
+      "Deployment and ReplicaSet",
+      "Service (ClusterIP/NodePort/LoadBalancer)",
+      "Ingress",
+      "liveness/readiness probes",
+      "rolling update",
+      "HPA (named)"
+     ],
+     "resources": [
+      "static diagram spec: kubernetes-objects",
+      "quiz: check-infrastructure-1",
+      "recall ×2",
+      "glossary: K8s, HPA"
+     ],
+     "archNodes": [
+      "gateway"
+     ]
+    },
+    {
+     "slug": "service-discovery",
+     "title": "Service discovery and internal DNS",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "microservices",
+      "dns",
+      "kubernetes"
+     ],
+     "objectives": [
+      "Compare client-side and server-side discovery",
+      "Explain registries, health-based membership and DNS-based discovery",
+      "Describe how Kubernetes Services implement it"
+     ],
+     "concepts": [
+      "service registry (Consul, etcd)",
+      "client-side vs server-side discovery",
+      "health checks and membership",
+      "Kubernetes DNS",
+      "gossip (named)"
+     ],
+     "resources": [
+      "Mermaid: flowchart of both discovery styles",
+      "quiz: check-infrastructure-1",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "autoscaling",
+     "title": "Autoscaling",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "scaling",
+      "kubernetes",
+      "capacity-planning"
+     ],
+     "objectives": [
+      "Pick scaling signals (CPU, RPS, queue depth, latency) and explain their lag",
+      "Configure cooldowns and limits to avoid flapping",
+      "Explain horizontal, vertical and cluster autoscaling and scale-to-zero"
+     ],
+     "concepts": [
+      "reactive vs predictive scaling",
+      "scaling signals",
+      "cooldown",
+      "flapping",
+      "HPA/VPA/cluster autoscaler",
+      "scale to zero"
+     ],
+     "resources": [
+      "reuse sim: scaling-compare",
+      "quiz: check-infrastructure-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "multi-region",
+     "title": "Multi-region deployment",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "cap",
+      "disaster-recovery",
+      "cdn"
+     ],
+     "objectives": [
+      "Compare active-passive and active-active across regions",
+      "Choose data replication and consistency per data class",
+      "Route users with GeoDNS, anycast or a global load balancer"
+     ],
+     "concepts": [
+      "region vs availability zone",
+      "active-active vs active-passive",
+      "data replication across regions",
+      "GeoDNS / anycast / global LB",
+      "latency vs consistency",
+      "cost"
+     ],
+     "resources": [
+      "static diagram spec: multi-region-active-active",
+      "quiz: check-infrastructure-2",
+      "recall ×2"
+     ],
+     "archNodes": [
+      "gateway",
+      "dns"
+     ]
+    },
+    {
+     "slug": "cdn-internals",
+     "title": "CDN architecture in depth",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "cdn",
+      "dns"
+     ],
+     "objectives": [
+      "Explain anycast routing, edge tiers and origin shields",
+      "Design cache keys, TTLs, purges and the Vary header",
+      "Use signed URLs and edge compute safely"
+     ],
+     "concepts": [
+      "anycast",
+      "edge / mid-tier / origin shield",
+      "cache key",
+      "Vary",
+      "purge vs TTL",
+      "signed URL",
+      "edge compute"
+     ],
+     "resources": [
+      "new sim spec: cdn-cache",
+      "reuse diagram: cdn-edges",
+      "quiz: check-infrastructure-2",
+      "recall ×2"
+     ],
+     "archNodes": [
+      "cdn"
+     ]
+    },
+    {
+     "slug": "cloud-networking",
+     "title": "Cloud networking: VPCs, subnets and load balancers",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P2",
+     "prereqs": [
+      "tcp-udp",
+      "load-balancing",
+      "proxy"
+     ],
+     "objectives": [
+      "Lay out a VPC with public and private subnets",
+      "Use security groups, NAT and private endpoints",
+      "Pick between managed L4 and L7 load balancers"
+     ],
+     "concepts": [
+      "VPC",
+      "public/private subnet",
+      "security group",
+      "NAT gateway",
+      "private link / endpoint",
+      "managed L4 vs L7 LB"
+     ],
+     "resources": [
+      "static diagram spec: vpc-layout",
+      "quiz: check-infrastructure-3",
+      "recall ×1",
+      "glossary: VPC, NAT"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "iac",
+     "title": "Infrastructure as Code and delivery pipelines",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "containers"
+     ],
+     "objectives": [
+      "Explain declarative infrastructure, state and drift",
+      "Structure environments and modules",
+      "Connect IaC to CI/CD and GitOps"
+     ],
+     "concepts": [
+      "declarative vs imperative",
+      "Terraform/CloudFormation/Pulumi (named)",
+      "state and drift",
+      "environments",
+      "CI/CD pipeline",
+      "GitOps"
+     ],
+     "resources": [
+      "Mermaid: flowchart of a deploy pipeline",
+      "quiz: check-infrastructure-3",
+      "recall ×2",
+      "glossary: IaC, CI/CD"
+     ],
+     "archNodes": []
+    }
+   ]
+  },
+  {
+   "id": "architecture",
+   "number": 13,
+   "title": "Architecture Patterns",
+   "tagline": "Shapes of systems",
+   "stage": "Advanced track",
+   "description": "Named shapes you will be asked about: from modular monoliths to meshes, from CQRS to event sourcing, and how to migrate between them without a big bang.",
+   "lessons": [
+    {
+     "slug": "modular-monolith-soa",
+     "title": "Monolith, modular monolith, SOA and microservices",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "microservices"
+     ],
+     "objectives": [
+      "Place SOA in history and extract what survived into microservices",
+      "Define bounded contexts and module boundaries",
+      "Decide when and how to split a monolith"
+     ],
+     "concepts": [
+      "SOA and the ESB",
+      "bounded context",
+      "module boundary",
+      "decomposition by capability vs subdomain",
+      "shared database anti-pattern"
+     ],
+     "resources": [
+      "reuse diagram: monolith-vs-microservices",
+      "quiz: check-architecture-1",
+      "recall ×2",
+      "glossary: SOA, ESB"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "api-gateway",
+     "title": "API gateway and backend-for-frontend",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "proxy",
+      "microservices",
+      "rate-limiting"
+     ],
+     "objectives": [
+      "List what belongs at the gateway (TLS, auth, rate limits, routing) and what does not",
+      "Use the BFF pattern for different clients",
+      "Avoid turning the gateway into a monolith"
+     ],
+     "concepts": [
+      "API gateway responsibilities",
+      "aggregation",
+      "BFF",
+      "gateway vs reverse proxy vs mesh",
+      "gateway as a bottleneck"
+     ],
+     "resources": [
+      "static diagram spec: api-gateway-bff",
+      "quiz: check-architecture-1",
+      "recall ×2",
+      "glossary: BFF"
+     ],
+     "archNodes": [
+      "gateway"
+     ]
+    },
+    {
+     "slug": "service-mesh",
+     "title": "Service mesh",
+     "level": "advanced",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "api-gateway",
+      "circuit-breaker",
+      "kubernetes"
+     ],
+     "objectives": [
+      "Explain the sidecar model and what it moves out of application code",
+      "Configure retries, timeouts, breakers and mTLS at the mesh",
+      "Weigh the operational cost"
+     ],
+     "concepts": [
+      "sidecar proxy (Envoy)",
+      "control plane vs data plane",
+      "mTLS by default",
+      "traffic shifting / canary",
+      "observability for free",
+      "cost and complexity"
+     ],
+     "resources": [
+      "static diagram spec: service-mesh-sidecars",
+      "quiz: check-architecture-1",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "cqrs",
+     "title": "CQRS",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "normalization",
+      "pubsub"
+     ],
+     "objectives": [
+      "Separate the write model from read models",
+      "Build read projections that are eventually consistent",
+      "Recognise when CQRS is overkill"
+     ],
+     "concepts": [
+      "command vs query",
+      "write model",
+      "read model / projection",
+      "eventual consistency of reads",
+      "when not to"
+     ],
+     "resources": [
+      "Mermaid: flowchart of command → event → projection",
+      "quiz: check-architecture-2",
+      "recall ×2",
+      "glossary: CQRS"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "event-sourcing",
+     "title": "Event sourcing",
+     "level": "advanced",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "cqrs",
+      "kafka-architecture"
+     ],
+     "objectives": [
+      "Store state as an append-only sequence of events and rebuild it",
+      "Use snapshots and projections for performance",
+      "Handle event versioning and the hard parts"
+     ],
+     "concepts": [
+      "event store",
+      "replay",
+      "snapshot",
+      "projection",
+      "upcasting / versioning",
+      "pitfalls (deletes, GDPR, schema drift)"
+     ],
+     "resources": [
+      "Mermaid: sequence of append → project",
+      "quiz: check-architecture-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "strangler-fig",
+     "title": "Migrating safely: strangler fig and friends",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "modular-monolith-soa"
+     ],
+     "objectives": [
+      "Route traffic incrementally from an old system to a new one",
+      "Use branch by abstraction, parallel run and feature flags",
+      "Migrate data with expand/contract instead of dual writes"
+     ],
+     "concepts": [
+      "strangler fig",
+      "branch by abstraction",
+      "parallel run / shadow traffic",
+      "feature flags",
+      "expand/contract schema migration",
+      "dual-write hazard"
+     ],
+     "resources": [
+      "Mermaid: flowchart of a strangler migration",
+      "quiz: check-architecture-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "serverless",
+     "title": "Serverless architecture",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "scaling",
+      "message-queues",
+      "containers"
+     ],
+     "objectives": [
+      "Explain the FaaS execution model, cold starts and limits",
+      "Compose functions with queues and events",
+      "Decide when serverless is cheaper and when it is a trap"
+     ],
+     "concepts": [
+      "FaaS",
+      "cold start",
+      "event triggers",
+      "statelessness and limits",
+      "cost model",
+      "BaaS",
+      "vendor lock-in"
+     ],
+     "resources": [
+      "static diagram spec: serverless-event-flow",
+      "quiz: check-architecture-3",
+      "recall ×2",
+      "glossary: FaaS, BaaS"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "multi-tenancy",
+     "title": "Multi-tenant architecture",
+     "level": "advanced",
+     "minutes": 8,
+     "priority": "P2",
+     "prereqs": [
+      "sharding",
+      "rate-limiting",
+      "authorization"
+     ],
+     "objectives": [
+      "Compare silo, pool and bridge tenancy models",
+      "Prevent noisy neighbours with per-tenant limits and sharding",
+      "Keep tenant data isolated at every layer"
+     ],
+     "concepts": [
+      "silo / pool / bridge",
+      "noisy neighbour",
+      "tenant-aware sharding",
+      "per-tenant quotas",
+      "tenant isolation in data and auth"
+     ],
+     "resources": [
+      "static diagram spec: tenancy-models",
+      "quiz: check-architecture-3",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "advanced-revision",
+     "title": "Revision: the advanced tracks",
+     "level": "basic",
+     "minutes": 8,
+     "priority": "P2",
+     "prereqs": [
+      "linearizability",
+      "stream-processing",
+      "threat-modelling",
+      "service-mesh"
+     ],
+     "objectives": [
+      "Recall the building block behind each advanced problem",
+      "Identify which track to reread"
+     ],
+     "concepts": [
+      "flashcards for modules 7–13"
+     ],
+     "resources": [
+      "recall-cards variant `advanced` (needs RecallDeckId extension) or reuse `test` deck",
+      "no quiz"
+     ],
+     "archNodes": []
+    }
+   ]
+  },
+  {
+   "id": "hld",
+   "number": 14,
+   "title": "High-Level Design Case Studies",
+   "tagline": "Design it end to end",
+   "stage": "Design practice",
+   "description": "Systems designed with the playbook, from a URL shortener to an e-commerce platform. Each follows the same template, states its assumptions and argues every box.",
+   "lessons": [
+    {
+     "slug": "case-study-method",
+     "title": "How to work a case study",
+     "level": "basic",
+     "minutes": 6,
+     "priority": "P1",
+     "prereqs": [
+      "playbook"
+     ],
+     "objectives": [
+      "Use the 18-section case-study template",
+      "Reuse the shortener as the worked example",
+      "Practise saying assumptions before numbers"
+     ],
+     "concepts": [
+      "template sections",
+      "assumption-first",
+      "evolution as scale grows"
+     ],
+     "resources": [
+      "recall ×1",
+      "no quiz"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "url-shortener",
+     "existing": true
+    },
+    {
+     "slug": "design-pastebin",
+     "title": "Design Pastebin",
+     "level": "intermediate",
+     "minutes": 14,
+     "priority": "P1",
+     "prereqs": [
+      "url-shortener",
+      "object-storage",
+      "caching"
+     ],
+     "objectives": [
+      "Adapt the shortener design for larger, expiring text objects",
+      "Decide where paste bodies live (database vs object storage) and why",
+      "Design expiry, cleanup and abuse controls"
+     ],
+     "concepts": [
+      "read-heavy",
+      "object storage for bodies",
+      "metadata DB",
+      "expiry and TTL cleanup",
+      "hot pastes and caching",
+      "abuse prevention"
+     ],
+     "resources": [
+      "Mermaid: flowchart architecture",
+      "Mermaid: sequence create/read",
+      "reuse sim: estimator",
+      "quiz: check-hld-1",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-rate-limiter",
+     "title": "Design a distributed rate limiter",
+     "level": "intermediate",
+     "minutes": 14,
+     "priority": "P1",
+     "prereqs": [
+      "rate-limiting",
+      "caching",
+      "api-gateway"
+     ],
+     "objectives": [
+      "Specify limits per client, per endpoint and per tenant",
+      "Compare local, gateway-centralised and Redis-backed designs",
+      "Handle Redis failure, clock skew and race conditions"
+     ],
+     "concepts": [
+      "token bucket / sliding window counter in Redis",
+      "Lua atomicity",
+      "local + global limiter",
+      "fail-open vs fail-closed",
+      "headers and 429"
+     ],
+     "resources": [
+      "reuse sim: token-bucket",
+      "Mermaid: sequence of a limited request",
+      "quiz: check-hld-1",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-notification-system",
+     "title": "Design a notification system",
+     "level": "intermediate",
+     "minutes": 15,
+     "priority": "P1",
+     "prereqs": [
+      "message-queues",
+      "pubsub",
+      "idempotency"
+     ],
+     "objectives": [
+      "Fan notifications out across push, SMS and email via providers",
+      "Dedupe, rate-limit and respect user preferences",
+      "Make retries safe and track delivery"
+     ],
+     "concepts": [
+      "event ingestion",
+      "priority queues",
+      "provider adapters",
+      "template rendering",
+      "dedup and preference checks",
+      "delivery tracking and DLQ"
+     ],
+     "resources": [
+      "Mermaid: flowchart architecture",
+      "Mermaid: sequence of a push notification",
+      "quiz: check-hld-1",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-key-value-store",
+     "title": "Design a distributed key-value store",
+     "level": "advanced",
+     "minutes": 18,
+     "priority": "P1",
+     "prereqs": [
+      "quorums",
+      "consensus",
+      "partitioning-internals",
+      "btree-vs-lsm"
+     ],
+     "objectives": [
+      "Partition keys with consistent hashing and replicate with quorums",
+      "Choose a storage engine and handle tombstones and compaction",
+      "Detect failures with gossip and heal with hinted handoff and Merkle trees"
+     ],
+     "concepts": [
+      "consistent hashing ring",
+      "N/R/W tuning",
+      "LSM storage",
+      "gossip membership",
+      "hinted handoff",
+      "read repair / Merkle trees",
+      "versioning"
+     ],
+     "resources": [
+      "reuse sim: shard-router",
+      "reuse sim: cap-partition",
+      "Mermaid: flowchart",
+      "quiz: check-hld-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-file-storage",
+     "title": "Design Google Drive / Dropbox",
+     "level": "advanced",
+     "minutes": 17,
+     "priority": "P1",
+     "prereqs": [
+      "object-storage",
+      "estimation-examples",
+      "sync-async"
+     ],
+     "objectives": [
+      "Design chunked, resumable, deduplicated uploads",
+      "Keep metadata, versions and sharing consistent",
+      "Sync changes across devices with conflict handling"
+     ],
+     "concepts": [
+      "chunking and content hashing",
+      "dedup",
+      "resumable upload",
+      "metadata DB and versioning",
+      "notification/sync service",
+      "conflict resolution"
+     ],
+     "resources": [
+      "reuse sim: estimator (drive)",
+      "reuse diagram: presigned-upload",
+      "Mermaid: sequence upload",
+      "quiz: check-hld-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-instagram",
+     "title": "Design Instagram",
+     "level": "advanced",
+     "minutes": 18,
+     "priority": "P1",
+     "prereqs": [
+      "final-architecture",
+      "caching",
+      "sharding",
+      "pubsub"
+     ],
+     "objectives": [
+      "Design the post, feed and media paths that the core course grew",
+      "Choose fan-out on write vs read for the feed and handle celebrities",
+      "Shard users and posts and keep counters cheap"
+     ],
+     "concepts": [
+      "media upload via pre-signed URL + CDN",
+      "feed fan-out on write vs read",
+      "hybrid for celebrities",
+      "feed cache",
+      "sharding by user",
+      "like/follow counters",
+      "ranking service"
+     ],
+     "resources": [
+      "reuse sim: architecture-map",
+      "Mermaid: flowchart",
+      "Mermaid: sequence post → fan-out",
+      "quiz: check-hld-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-whatsapp",
+     "title": "Design WhatsApp",
+     "level": "advanced",
+     "minutes": 18,
+     "priority": "P1",
+     "prereqs": [
+      "websockets",
+      "message-queues",
+      "consistency"
+     ],
+     "objectives": [
+      "Keep millions of persistent connections and route messages between servers",
+      "Guarantee ordering and delivery receipts per chat",
+      "Handle offline users, group chat fan-out and end-to-end encryption at the design level"
+     ],
+     "concepts": [
+      "connection gateways",
+      "presence",
+      "message ids and per-chat ordering",
+      "store-and-forward for offline",
+      "group fan-out",
+      "receipts",
+      "E2E encryption (design level)"
+     ],
+     "resources": [
+      "reuse sim: polling-vs-ws",
+      "Mermaid: sequence of a message",
+      "quiz: check-hld-3",
+      "recall ×2",
+      "glossary: E2E"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-youtube",
+     "title": "Design YouTube",
+     "level": "advanced",
+     "minutes": 18,
+     "priority": "P1",
+     "prereqs": [
+      "object-storage",
+      "cdn",
+      "message-queues"
+     ],
+     "objectives": [
+      "Design upload, transcoding pipeline and adaptive streaming",
+      "Serve video through a CDN and handle hot videos",
+      "Model metadata, views and recommendations at scale"
+     ],
+     "concepts": [
+      "upload and chunking",
+      "transcoding DAG",
+      "adaptive bitrate (HLS/DASH)",
+      "CDN and origin shield",
+      "view counting",
+      "metadata sharding"
+     ],
+     "resources": [
+      "Mermaid: flowchart pipeline",
+      "Mermaid: sequence upload → playback",
+      "quiz: check-hld-3",
+      "recall ×2",
+      "glossary: HLS, DASH, ABR"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-uber",
+     "title": "Design Uber",
+     "level": "advanced",
+     "minutes": 18,
+     "priority": "P1",
+     "prereqs": [
+      "websockets",
+      "sharding",
+      "consistency"
+     ],
+     "objectives": [
+      "Ingest driver locations and match riders at scale",
+      "Index locations with geohash / H3 and query nearby drivers",
+      "Design trip state, pricing and payments with the right consistency"
+     ],
+     "concepts": [
+      "location ingestion",
+      "geospatial index (geohash, H3, quadtree)",
+      "matching service",
+      "trip state machine",
+      "surge pricing",
+      "payments and idempotency"
+     ],
+     "resources": [
+      "Mermaid: stateDiagram-v2 of a trip",
+      "Mermaid: flowchart",
+      "quiz: check-hld-3",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-netflix",
+     "title": "Design Netflix",
+     "level": "advanced",
+     "minutes": 17,
+     "priority": "P1",
+     "prereqs": [
+      "cdn-internals",
+      "multi-region",
+      "stream-processing"
+     ],
+     "objectives": [
+      "Separate the control plane (catalogue, auth, recommendations) from the data plane (video delivery)",
+      "Explain Open Connect-style CDN placement",
+      "Design for region failure and A/B experimentation"
+     ],
+     "concepts": [
+      "control vs data plane",
+      "custom CDN appliances at ISPs",
+      "multi-region active-active",
+      "chaos engineering",
+      "recommendation pipeline",
+      "A/B platform"
+     ],
+     "resources": [
+      "Mermaid: flowchart",
+      "quiz: check-hld-4",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-ecommerce",
+     "title": "Design an e-commerce platform",
+     "level": "advanced",
+     "minutes": 18,
+     "priority": "P1",
+     "prereqs": [
+      "sagas",
+      "distributed-transactions",
+      "caching",
+      "idempotency"
+     ],
+     "objectives": [
+      "Model catalogue, cart, inventory, order and payment as services",
+      "Keep inventory correct under flash sales",
+      "Run checkout as a saga with idempotent payments"
+     ],
+     "concepts": [
+      "catalogue search",
+      "cart (session store)",
+      "inventory reservation and oversell",
+      "order saga",
+      "payment idempotency",
+      "flash-sale protections (queue, shedding)"
+     ],
+     "resources": [
+      "Mermaid: sequence checkout saga",
+      "Mermaid: flowchart",
+      "quiz: check-hld-4",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-ticket-booking",
+     "title": "Design a ticket booking system",
+     "level": "intermediate",
+     "minutes": 15,
+     "priority": "P2",
+     "prereqs": [
+      "idempotency",
+      "acid",
+      "caching"
+     ],
+     "objectives": [
+      "Prevent double booking with locks, holds and constraints",
+      "Handle a ticket drop (flash traffic) with queues and virtual waiting rooms",
+      "Model seats, holds and payments"
+     ],
+     "concepts": [
+      "seat hold with TTL",
+      "unique constraint / row lock",
+      "virtual waiting room",
+      "payment timeout and release",
+      "read-heavy seat map caching"
+     ],
+     "resources": [
+      "Mermaid: sequence hold → pay → confirm",
+      "quiz: check-hld-4",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-payment-system",
+     "title": "Design a payment system",
+     "level": "advanced",
+     "minutes": 17,
+     "priority": "P2",
+     "prereqs": [
+      "idempotency",
+      "distributed-transactions",
+      "sagas"
+     ],
+     "objectives": [
+      "Design a ledger with double-entry and exactly-once effects",
+      "Integrate with external PSPs using idempotency and reconciliation",
+      "Handle retries, timeouts and partial failures without losing money"
+     ],
+     "concepts": [
+      "double-entry ledger",
+      "idempotency keys end to end",
+      "PSP integration",
+      "reconciliation",
+      "retry with backoff",
+      "exactly-once effects"
+     ],
+     "resources": [
+      "Mermaid: sequence of a payment",
+      "quiz: check-hld-4",
+      "recall ×1",
+      "glossary: PSP"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-search-autocomplete",
+     "title": "Design search autocomplete",
+     "level": "intermediate",
+     "minutes": 14,
+     "priority": "P2",
+     "prereqs": [
+      "caching",
+      "cdn",
+      "stream-processing"
+     ],
+     "objectives": [
+      "Serve prefix suggestions in under 100 ms",
+      "Build the trie / top-k pipeline from query logs",
+      "Refresh rankings and handle trending terms"
+     ],
+     "concepts": [
+      "trie / prefix index",
+      "top-k per prefix",
+      "offline aggregation pipeline",
+      "cache and CDN for hot prefixes",
+      "trending detection"
+     ],
+     "resources": [
+      "Mermaid: flowchart",
+      "quiz: check-hld-4",
+      "recall ×1"
+     ],
+     "archNodes": []
+    }
+   ]
+  },
+  {
+   "id": "lld",
+   "number": 15,
+   "title": "Low-Level Design: Foundations",
+   "tagline": "Down to the code",
+   "stage": "Code level",
+   "description": "How to turn requirements into classes that are correct, testable and easy to change: object-oriented principles, UML, SOLID, design patterns, dependency injection, concurrency and clean code.",
+   "lessons": [
+    {
+     "slug": "lld-intro",
+     "title": "What low-level design is",
+     "level": "basic",
+     "minutes": 6,
+     "priority": "P1",
+     "prereqs": [],
+     "objectives": [
+      "Distinguish low-level design from high-level design",
+      "Follow the LLD workflow: requirements → entities → classes → interactions",
+      "Know what an LLD interviewer looks for"
+     ],
+     "concepts": [
+      "HLD vs LLD",
+      "entities and responsibilities",
+      "class diagram",
+      "sequence of interactions",
+      "trade-offs at code level"
+     ],
+     "resources": [
+      "recall ×1",
+      "no quiz"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "oop-pillars",
+     "title": "OOP: encapsulation, abstraction, inheritance, polymorphism",
+     "level": "basic",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "lld-intro"
+     ],
+     "objectives": [
+      "Explain each pillar with a small example",
+      "Spot broken encapsulation and leaky abstractions",
+      "Use polymorphism to remove conditionals"
+     ],
+     "concepts": [
+      "encapsulation",
+      "abstraction",
+      "inheritance",
+      "polymorphism",
+      "interfaces vs abstract classes"
+     ],
+     "resources": [
+      "code: Java/TypeScript snippets",
+      "quiz: check-lld-1",
+      "recall ×2",
+      "glossary: OOP"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "class-relationships-uml",
+     "title": "Class relationships and UML",
+     "level": "basic",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "oop-pillars"
+     ],
+     "objectives": [
+      "Read and draw class diagrams with association, aggregation, composition and dependency",
+      "Use multiplicity and visibility correctly",
+      "Draw a sequence diagram for one use case"
+     ],
+     "concepts": [
+      "association",
+      "aggregation vs composition",
+      "dependency",
+      "multiplicity",
+      "class diagram",
+      "sequence diagram"
+     ],
+     "resources": [
+      "Mermaid: classDiagram (needs validator change) else flowchart boxes",
+      "Mermaid: sequenceDiagram",
+      "quiz: check-lld-1",
+      "recall ×2",
+      "glossary: UML"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "composition-over-inheritance",
+     "title": "Composition over inheritance",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "class-relationships-uml"
+     ],
+     "objectives": [
+      "Explain the fragile base class problem",
+      "Replace deep hierarchies with composed behaviours",
+      "Know when inheritance is still right"
+     ],
+     "concepts": [
+      "fragile base class",
+      "is-a vs has-a",
+      "delegation",
+      "strategy as composition",
+      "when inheritance fits"
+     ],
+     "resources": [
+      "code: before/after refactor",
+      "quiz: check-lld-1",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "solid",
+     "title": "SOLID principles",
+     "level": "intermediate",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "composition-over-inheritance"
+     ],
+     "objectives": [
+      "State each SOLID principle and the smell it prevents",
+      "Refactor a violating class for each principle",
+      "Avoid over-applying SOLID"
+     ],
+     "concepts": [
+      "single responsibility",
+      "open/closed",
+      "Liskov substitution",
+      "interface segregation",
+      "dependency inversion"
+     ],
+     "resources": [
+      "code: five small refactors",
+      "quiz: check-lld-2",
+      "recall ×3",
+      "glossary: SOLID, SRP, LSP"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "interfaces-abstractions-di",
+     "title": "Interfaces, abstractions and dependency injection",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "solid"
+     ],
+     "objectives": [
+      "Program to interfaces and own them at the right layer",
+      "Inject dependencies by constructor and explain inversion of control",
+      "Use a DI container without hiding the object graph"
+     ],
+     "concepts": [
+      "interface ownership",
+      "dependency injection",
+      "inversion of control",
+      "constructor injection",
+      "composition root",
+      "DI container"
+     ],
+     "resources": [
+      "code: constructor injection example",
+      "quiz: check-lld-2",
+      "recall ×2",
+      "glossary: DI, IoC"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-patterns-creational",
+     "title": "Design patterns I: creational",
+     "level": "intermediate",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "interfaces-abstractions-di"
+     ],
+     "objectives": [
+      "Apply Factory Method, Abstract Factory, Builder and Singleton appropriately",
+      "Explain why Singleton is often a smell",
+      "Choose a pattern from the problem, not the catalogue"
+     ],
+     "concepts": [
+      "Factory Method",
+      "Abstract Factory",
+      "Builder",
+      "Singleton (and its problems)",
+      "Prototype (named)"
+     ],
+     "resources": [
+      "code snippets",
+      "Mermaid: classDiagram/flowchart for Builder",
+      "quiz: check-lld-2",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-patterns-structural",
+     "title": "Design patterns II: structural",
+     "level": "intermediate",
+     "minutes": 9,
+     "priority": "P1",
+     "prereqs": [
+      "design-patterns-creational"
+     ],
+     "objectives": [
+      "Apply Adapter, Decorator, Facade, Proxy and Composite",
+      "Distinguish Decorator from Proxy and Adapter",
+      "Use Composite for tree-shaped domains"
+     ],
+     "concepts": [
+      "Adapter",
+      "Decorator",
+      "Facade",
+      "Proxy",
+      "Composite"
+     ],
+     "resources": [
+      "code snippets",
+      "quiz: check-lld-3",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "design-patterns-behavioural",
+     "title": "Design patterns III: behavioural",
+     "level": "intermediate",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "design-patterns-structural"
+     ],
+     "objectives": [
+      "Apply Strategy, Observer, Command, State, Template Method and Chain of Responsibility",
+      "Model a workflow as a state machine",
+      "Decouple senders and receivers with Command and Observer"
+     ],
+     "concepts": [
+      "Strategy",
+      "Observer",
+      "Command",
+      "State",
+      "Template Method",
+      "Iterator",
+      "Chain of Responsibility"
+     ],
+     "resources": [
+      "code snippets",
+      "Mermaid: stateDiagram-v2 for State pattern",
+      "quiz: check-lld-3",
+      "recall ×3"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "concurrency-basics",
+     "title": "Concurrency and thread safety",
+     "level": "advanced",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "design-patterns-behavioural"
+     ],
+     "objectives": [
+      "Identify race conditions and shared mutable state",
+      "Use locks, atomics and immutability correctly",
+      "Design producer-consumer and thread pools; avoid deadlock"
+     ],
+     "concepts": [
+      "race condition",
+      "mutex / synchronized",
+      "atomic operations",
+      "immutability",
+      "thread pool",
+      "producer-consumer",
+      "deadlock and lock ordering"
+     ],
+     "resources": [
+      "code: thread-safe counter and bounded queue",
+      "Mermaid: sequence of a race",
+      "quiz: check-lld-3",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "error-handling",
+     "title": "Error handling and resilience in code",
+     "level": "intermediate",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "concurrency-basics"
+     ],
+     "objectives": [
+      "Choose between exceptions and result types",
+      "Validate at boundaries and fail fast",
+      "Make retries and timeouts explicit in code"
+     ],
+     "concepts": [
+      "exceptions vs result types",
+      "checked vs unchecked (named)",
+      "validation at boundaries",
+      "fail fast",
+      "retry/timeout in code",
+      "logging context"
+     ],
+     "resources": [
+      "code snippets",
+      "quiz: check-lld-4",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "clean-code",
+     "title": "Clean code and maintainability",
+     "level": "basic",
+     "minutes": 7,
+     "priority": "P1",
+     "prereqs": [
+      "oop-pillars"
+     ],
+     "objectives": [
+      "Name things so the code explains itself",
+      "Keep functions small and cohesive; reduce coupling",
+      "Recognise common code smells and refactor them"
+     ],
+     "concepts": [
+      "naming",
+      "small functions",
+      "cohesion and coupling",
+      "code smells",
+      "refactoring"
+     ],
+     "resources": [
+      "code: before/after",
+      "quiz: check-lld-4",
+      "recall ×2"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "testing-extensibility",
+     "title": "Unit testing and designing for extensibility",
+     "level": "intermediate",
+     "minutes": 8,
+     "priority": "P1",
+     "prereqs": [
+      "interfaces-abstractions-di",
+      "error-handling"
+     ],
+     "objectives": [
+      "Write unit tests with test doubles",
+      "Design for testability with DI and pure functions",
+      "Extend behaviour without modifying tested code"
+     ],
+     "concepts": [
+      "unit test",
+      "test double (stub, mock, fake)",
+      "testability via DI",
+      "open/closed in practice",
+      "API evolution"
+     ],
+     "resources": [
+      "code: test with a fake",
+      "quiz: check-lld-4",
+      "recall ×2"
+     ],
+     "archNodes": []
+    }
+   ]
+  },
+  {
+   "id": "lld-practice",
+   "number": 16,
+   "title": "Low-Level Design: Case Studies",
+   "tagline": "Model it in code",
+   "stage": "Code level",
+   "description": "Fourteen classic problems worked from requirements to classes, interactions, edge cases and extensibility, each with UML and pseudocode.",
+   "lessons": [
+    {
+     "slug": "lld-parking-lot",
+     "title": "LLD: Parking lot",
+     "level": "intermediate",
+     "minutes": 13,
+     "priority": "P1",
+     "prereqs": [
+      "solid",
+      "design-patterns-creational"
+     ],
+     "objectives": [
+      "Model vehicles, spots, floors and tickets",
+      "Assign spots with a strategy and handle payments",
+      "Extend to new vehicle types without rewriting"
+     ],
+     "concepts": [
+      "entities",
+      "Strategy for spot allocation",
+      "Factory for vehicles",
+      "ticket lifecycle",
+      "payment",
+      "extensibility"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "Mermaid: sequence park → pay → exit",
+      "pseudocode",
+      "quiz: check-lld-practice-1",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-vending-machine",
+     "title": "LLD: Vending machine",
+     "level": "intermediate",
+     "minutes": 12,
+     "priority": "P1",
+     "prereqs": [
+      "design-patterns-behavioural"
+     ],
+     "objectives": [
+      "Model states (idle, has money, dispensing, out of stock) with the State pattern",
+      "Handle change, refunds and failures",
+      "Keep inventory consistent"
+     ],
+     "concepts": [
+      "State pattern",
+      "inventory",
+      "payment and change",
+      "error states",
+      "transactions at code level"
+     ],
+     "resources": [
+      "Mermaid: stateDiagram-v2",
+      "Mermaid: classDiagram/flowchart",
+      "pseudocode",
+      "quiz: check-lld-practice-1",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-elevator",
+     "title": "LLD: Elevator system",
+     "level": "intermediate",
+     "minutes": 13,
+     "priority": "P1",
+     "prereqs": [
+      "design-patterns-behavioural",
+      "concurrency-basics"
+     ],
+     "objectives": [
+      "Model elevators, requests and a dispatcher",
+      "Implement a scheduling strategy (SCAN/LOOK) and swap it",
+      "Handle concurrency of requests and safety states"
+     ],
+     "concepts": [
+      "request queue",
+      "dispatcher Strategy",
+      "SCAN/LOOK",
+      "direction state machine",
+      "concurrency",
+      "safety and maintenance mode"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "Mermaid: sequence",
+      "pseudocode",
+      "quiz: check-lld-practice-1",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-library-management",
+     "title": "LLD: Library management system",
+     "level": "intermediate",
+     "minutes": 12,
+     "priority": "P1",
+     "prereqs": [
+      "solid"
+     ],
+     "objectives": [
+      "Model books, copies, members, loans and reservations",
+      "Enforce borrowing rules and fines",
+      "Design search and notifications"
+     ],
+     "concepts": [
+      "book vs copy",
+      "loan lifecycle",
+      "reservation queue",
+      "fines policy (Strategy)",
+      "Observer for notifications"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "Mermaid: sequence borrow/return",
+      "pseudocode",
+      "quiz: check-lld-practice-1",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-movie-ticket-booking",
+     "title": "LLD: Movie ticket booking",
+     "level": "intermediate",
+     "minutes": 13,
+     "priority": "P1",
+     "prereqs": [
+      "concurrency-basics",
+      "lld-library-management"
+     ],
+     "objectives": [
+      "Model theatres, screens, shows, seats and bookings",
+      "Prevent double booking with locks or holds",
+      "Handle payment timeout and release"
+     ],
+     "concepts": [
+      "seat lock with TTL",
+      "optimistic vs pessimistic locking",
+      "booking state machine",
+      "payment integration",
+      "idempotent confirm"
+     ],
+     "resources": [
+      "Mermaid: sequence hold → pay",
+      "Mermaid: classDiagram/flowchart",
+      "pseudocode",
+      "quiz: check-lld-practice-2",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-splitwise",
+     "title": "LLD: Splitwise",
+     "level": "intermediate",
+     "minutes": 12,
+     "priority": "P1",
+     "prereqs": [
+      "solid"
+     ],
+     "objectives": [
+      "Model users, groups, expenses and splits (equal, exact, percent)",
+      "Compute balances and simplify debts",
+      "Validate splits and handle rounding"
+     ],
+     "concepts": [
+      "expense split Strategy",
+      "balance sheet",
+      "debt simplification (greedy)",
+      "rounding",
+      "validation"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "pseudocode",
+      "quiz: check-lld-practice-2",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-snake-and-ladder",
+     "title": "LLD: Snake and Ladder",
+     "level": "basic",
+     "minutes": 10,
+     "priority": "P1",
+     "prereqs": [
+      "oop-pillars",
+      "class-relationships-uml"
+     ],
+     "objectives": [
+      "Model board, cells, snakes, ladders, dice and players",
+      "Run the game loop and detect the winner",
+      "Make board size and rules configurable"
+     ],
+     "concepts": [
+      "board and entities",
+      "dice abstraction (testable randomness)",
+      "game loop",
+      "configurable rules"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "pseudocode",
+      "quiz: check-lld-practice-2",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-chess",
+     "title": "LLD: Chess",
+     "level": "advanced",
+     "minutes": 15,
+     "priority": "P1",
+     "prereqs": [
+      "design-patterns-behavioural",
+      "lld-snake-and-ladder"
+     ],
+     "objectives": [
+      "Model pieces with polymorphic move validation",
+      "Implement turn, check, checkmate and special moves",
+      "Record moves for undo and replay (Command)"
+     ],
+     "concepts": [
+      "Piece hierarchy and polymorphism",
+      "move validation",
+      "game state",
+      "Command for undo",
+      "special moves (castling, en passant, promotion)"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "Mermaid: sequence of a move",
+      "pseudocode",
+      "quiz: check-lld-practice-2",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-in-memory-cache",
+     "title": "LLD: In-memory cache",
+     "level": "intermediate",
+     "minutes": 12,
+     "priority": "P1",
+     "prereqs": [
+      "concurrency-basics",
+      "caching"
+     ],
+     "objectives": [
+      "Design get/put with LRU eviction in O(1)",
+      "Add TTL expiry and pluggable eviction policies",
+      "Make it thread-safe without killing throughput"
+     ],
+     "concepts": [
+      "hash map + doubly linked list",
+      "eviction Strategy (LRU/LFU)",
+      "TTL",
+      "thread safety (locks, striping)",
+      "generics"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "pseudocode",
+      "quiz: check-lld-practice-3",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-logging-framework",
+     "title": "LLD: Logging framework",
+     "level": "intermediate",
+     "minutes": 11,
+     "priority": "P1",
+     "prereqs": [
+      "design-patterns-structural",
+      "design-patterns-behavioural"
+     ],
+     "objectives": [
+      "Model loggers, levels, formatters and appenders",
+      "Use Chain of Responsibility / Strategy for level filtering and output",
+      "Make logging asynchronous and safe"
+     ],
+     "concepts": [
+      "log levels",
+      "appender abstraction",
+      "formatter",
+      "Chain of Responsibility",
+      "async queue",
+      "Singleton debate"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "pseudocode",
+      "quiz: check-lld-practice-3",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-rate-limiter",
+     "title": "LLD: Rate limiter",
+     "level": "intermediate",
+     "minutes": 11,
+     "priority": "P1",
+     "prereqs": [
+      "rate-limiting",
+      "concurrency-basics"
+     ],
+     "objectives": [
+      "Implement token bucket and sliding window as interchangeable strategies",
+      "Key limits per client and make them thread-safe",
+      "Expose a clean interface for middleware"
+     ],
+     "concepts": [
+      "RateLimiter interface",
+      "token bucket implementation",
+      "sliding window log/counter",
+      "Strategy",
+      "concurrency",
+      "clock abstraction for tests"
+     ],
+     "resources": [
+      "reuse sim: token-bucket",
+      "Mermaid: classDiagram/flowchart",
+      "pseudocode",
+      "quiz: check-lld-practice-3",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-task-scheduler",
+     "title": "LLD: Task scheduler",
+     "level": "advanced",
+     "minutes": 13,
+     "priority": "P1",
+     "prereqs": [
+      "concurrency-basics",
+      "lld-rate-limiter"
+     ],
+     "objectives": [
+      "Schedule one-off and recurring tasks with a priority queue",
+      "Run tasks on a worker pool with retries and timeouts",
+      "Handle cancellation and missed schedules"
+     ],
+     "concepts": [
+      "priority queue by next run",
+      "worker pool",
+      "recurring schedules (cron-like)",
+      "retry policy",
+      "cancellation",
+      "clock abstraction"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "Mermaid: sequence schedule → run",
+      "pseudocode",
+      "quiz: check-lld-practice-4",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-ride-booking",
+     "title": "LLD: Ride booking",
+     "level": "advanced",
+     "minutes": 14,
+     "priority": "P1",
+     "prereqs": [
+      "design-patterns-behavioural",
+      "lld-task-scheduler"
+     ],
+     "objectives": [
+      "Model riders, drivers, rides and a matching strategy",
+      "Drive the ride through a state machine with notifications",
+      "Compute fares with pluggable pricing"
+     ],
+     "concepts": [
+      "matching Strategy",
+      "ride state machine (State)",
+      "Observer notifications",
+      "pricing Strategy",
+      "location abstraction"
+     ],
+     "resources": [
+      "Mermaid: stateDiagram-v2",
+      "Mermaid: classDiagram/flowchart",
+      "pseudocode",
+      "quiz: check-lld-practice-4",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-food-ordering",
+     "title": "LLD: Food ordering system",
+     "level": "advanced",
+     "minutes": 14,
+     "priority": "P1",
+     "prereqs": [
+      "lld-ride-booking",
+      "error-handling"
+     ],
+     "objectives": [
+      "Model restaurants, menus, carts, orders and delivery",
+      "Handle order state, payment and cancellation",
+      "Separate concerns so new payment or delivery partners plug in"
+     ],
+     "concepts": [
+      "cart and order aggregate",
+      "order state machine",
+      "payment abstraction",
+      "delivery assignment Strategy",
+      "Observer for status updates",
+      "error handling"
+     ],
+     "resources": [
+      "Mermaid: classDiagram/flowchart",
+      "Mermaid: sequence place order",
+      "pseudocode",
+      "quiz: check-lld-practice-4",
+      "recall ×1"
+     ],
+     "archNodes": []
+    },
+    {
+     "slug": "lld-revision",
+     "title": "Revision: low-level design",
+     "level": "basic",
+     "minutes": 8,
+     "priority": "P2",
+     "prereqs": [
+      "lld-food-ordering"
+     ],
+     "objectives": [
+      "Recall the pattern behind each LLD problem",
+      "Identify which case study to redo"
+     ],
+     "concepts": [
+      "flashcards for modules 15–16"
+     ],
+     "resources": [
+      "recall-cards variant `lld` (needs RecallDeckId extension) or reuse `test` deck",
+      "no quiz"
+     ],
+     "archNodes": []
+    }
+   ]
+  }
+ ]
+}

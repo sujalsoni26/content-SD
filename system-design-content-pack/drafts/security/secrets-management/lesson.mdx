@@ -1,0 +1,75 @@
+A **secret** is any value whose disclosure lets someone act as your system: database passwords, API keys, signing keys, TLS private keys. The design goal is blunt: no human sees them, no copy outlives its use, and every use is attributable to one workload. Encryption keys follow the same rules (see [Encryption](/learn/encryption)).
+
+## Secret sprawl
+
+Secrets leak by being copied into places never designed to hold them.
+
+| Where it ends up | How it gets out | What to do instead |
+| --- | --- | --- |
+| Git history | Pushed once, it is in every clone and fork; rewriting history does not remove them | Treat it as compromised and rotate; block with pre-commit scanning and push protection |
+| Container images | Baked in with ENV or COPY; anyone who pulls the image reads the layer | Mount at runtime from the orchestrator |
+| Environment variables | Readable by every process in the container, printed in crash dumps and debug pages | Fetch from a secrets manager; use the environment only when nothing else works |
+| Logs and traces | A connection string in an error message, a token in a request log | Redact in the logging library (see [Logging](/learn/logging)); alert on secret-shaped strings |
+| Chat, tickets, wikis | Pasted "just for now" | Share a reference to the secrets manager, never the value |
+
+GitHub's own guidance: revoke or rotate first, worry about history second, because forks and cached views keep the commit.
+
+## A secrets manager
+
+A **secrets manager** (HashiCorp Vault, AWS Secrets Manager) stores secrets encrypted under a KMS-held key, exposes them over an authenticated API with per-path access control, versions them, and audits every read: which identity fetched which secret when. Centralising gives one place to rotate, one place to revoke, one log to answer "who had this".
+
+An application authenticates to the manager at startup with its *own* identity (last section), fetches the secrets it is entitled to into memory, and refreshes them before they expire or change. It never writes them to disk and re-reads at the point of use, so a rotation does not strand it. Platforms wrap this as a sidecar or mounted volume.
+
+## Dynamic, short-lived credentials
+
+Better than storing a database password well is not having one. With **dynamic secrets** the manager creates a credential on demand: Vault's database engine connects with a privileged account only it knows, creates a new user with a random password and a **lease** (a time to live), and hands it to the requesting service. Every instance gets its own credential, and when the lease expires unrenewed Vault revokes it.
+
+<Mermaid caption="The service proves who it is with its platform identity, receives a credential that exists only for it and only for a while, and Vault removes the credential when the lease ends." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant S as Order service
+    participant V as Vault
+    participant D as PostgreSQL
+    S->>V: login with workload identity (service account token)
+    V-->>S: Vault token scoped to role orders-rw
+    S->>V: read database/creds/orders-rw
+    V->>D: CREATE ROLE v-orders-7f3 with random password, valid for 1h
+    D-->>V: ok
+    V-->>S: username, password, lease 1h
+    S->>D: connect as v-orders-7f3
+    Note over S,V: renew the lease before expiry, or fetch a fresh credential
+    V->>D: DROP ROLE v-orders-7f3 when the lease expires
+`} />
+
+What this buys: a stolen credential works for an hour, not for years; the audit trail names the instance, because the username does; and restarting an application no longer "fixes" a leak, which never revoked anything. The costs: more database users and connection churn, a connection pool that must survive a credential change, and a secrets manager you cannot start without.
+
+## Rotation
+
+Static secrets that cannot be dynamic, such as a third party's API key, are **rotated** on a schedule and on any suspicion: the longer a secret lives, the longer an unnoticed leak stays useful. Rotation without downtime needs two valid versions during the switch: issue the new one, roll it out, revoke the old. Managed rotation (AWS Secrets Manager runs a function that updates both the secret and the target system) removes the human from the loop. The privileged account the manager itself uses is rotated too, so only the manager knows it.
+
+## Workload identity instead of long-lived keys
+
+Everything above assumes the service can authenticate to the secrets manager. With what? If the answer is a token in an environment variable, you have moved the problem, not solved it. **Workload identity** lets the platform vouch for the workload: a cloud role attached to a virtual machine gives its processes temporary, automatically rotated credentials from the instance metadata service with no stored key, and a Kubernetes service account token does the same inside a cluster (see [Kubernetes](/learn/kubernetes)). **SPIFFE** standardises the idea: identities of the form `spiffe://trust-domain/path`, carried in short-lived documents (X.509 certificates or JWTs) that a local API delivers and rotates, which is also what a service mesh uses for mutual TLS (see [Service mesh](/learn/service-mesh)). The secrets manager trusts that identity, so <mark>there is no secret zero left to leak</mark>.
+
+<Callout type="analogy" title="Shift cards, not master keys">
+
+A hotel does not give every cleaner a copy of the master key. The front desk issues a card that opens these rooms, this shift, and each lock records which card opened it. Losing a card is an inconvenience; losing a master key means changing every lock. Where it stops: the cleaner still has to prove who they are to the desk, which is the workload identity problem.
+
+</Callout>
+
+<Callout type="interview" title="Say how the first secret is obtained">
+
+"Services run with a cloud role or service account, authenticate to Vault with it, and receive dynamic database credentials with a one-hour lease. Static third-party keys live in Vault with scheduled rotation and dual-version rollout. Nothing is in images, env files or git."
+
+</Callout>
+
+<DeepDive title="Go deeper: when the secrets manager is down">
+
+A secrets manager is a hard dependency at startup, so it gets tier-one treatment (see [Availability](/learn/availability)): replicated, health-checked, clients that retry with backoff. Decide what a running service does when its lease cannot be renewed: keep using the credential until the database rejects it, or stop early and honour the lease. Decide too what a fleet restart does, since a thousand instances asking at once is a lease storm; stagger starts.
+
+</DeepDive>

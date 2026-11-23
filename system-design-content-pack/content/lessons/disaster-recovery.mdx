@@ -1,0 +1,79 @@
+**Disaster recovery (DR)** is the plan for losing something that high availability cannot absorb: a whole region, the data itself (a bad migration, ransomware, a `DELETE` without a `WHERE`), or the account that owns everything. HA, from [Availability](/learn/availability), survives a host or a zone automatically and in seconds. DR is slower, usually deliberate, and governed by the two numbers that lesson defined: the **RPO**, how much data you may lose, and the **RTO**, how long you may be down.
+
+<Diagram name="rpo-rto-timeline" caption="RPO is the gap back to the last copy you can recover; RTO is the gap forward to service restored. Every DR strategy is a price for shrinking one or both." />
+
+## Objectives per tier, not per company
+
+A single RPO for everything is either ruinously expensive or dishonest. Classify by what the loss costs:
+
+| Tier | Example data or service | RPO | RTO |
+| --- | --- | --- | --- |
+| 0 | Payment ledger, authentication | Seconds | Minutes |
+| 1 | Orders, catalogue, user profiles | Minutes | Under an hour |
+| 2 | Analytics, recommendations, search index | Hours (or rebuild from source) | A day |
+
+The figures are illustrations; the business names the tiers and the tolerances, and engineering prices them.
+
+## Four strategies
+
+AWS's disaster-recovery whitepaper groups the options into four, in increasing order of cost and decreasing RPO and RTO:
+
+| Strategy | What runs in the recovery region | Typical RPO | Typical RTO |
+| --- | --- | --- | --- |
+| Backup and restore | Nothing; data and images are copied there and everything is rebuilt on demand | Hours | Up to a day |
+| Pilot light | Data stores replicated and live; application servers deployed but switched off, or not yet created | Minutes | Tens of minutes |
+| Warm standby | A scaled-down but fully working copy, serving little or no traffic | Seconds | Minutes |
+| Multi-site active/active | Full copies in several regions, all serving traffic | Near zero | Near zero |
+
+The RPO and RTO columns are the orders of magnitude AWS's Well-Architected guidance attaches to each strategy; yours depend on your data and your rehearsals. Pilot light and warm standby differ in readiness: a pilot light cannot serve a request until compute is started and scaled, while a warm standby already can and only needs to grow. Active/active removes failover altogether, at the cost of running everything twice and deciding how writes in two regions reconcile, the subject of [multi-region](/learn/multi-region).
+
+<Callout type="warning" title="Replication is not a backup">
+
+Continuous replication copies a dropped table to the recovery region as faithfully as it copies an order, in under a second. Every strategy, including active/active, still needs point-in-time backups or versioning so that you can return to the moment before the damage.
+
+</Callout>
+
+## Backups you can actually restore
+
+A **full backup** copies everything; an **incremental** copies what changed since the last one; a **snapshot** freezes a volume's blocks at an instant. For databases the strongest form is **point-in-time recovery**: take a base backup, keep archiving the write-ahead log (see [WAL](/learn/wal)), and on recovery restore the base and replay the log to a chosen moment. PostgreSQL's continuous archiving works this way: the base copy need not even be consistent, because replaying the WAL repairs it, and the stop point can be a timestamp, a named restore point or a transaction id, so "the state at 14:02, just before the migration" is a configuration line rather than a wish.
+
+The rule that matters more than the mechanism: <mark>a backup is not a backup until you have restored from it</mark>. Restore into an isolated environment on a schedule, check row counts and checksums against the source, and time the whole thing against the RTO. AWS's guidance names the anti-patterns: restoring but never querying the data, assuming a backup exists, assuming the restore fits the RTO without measuring. Keep one copy in a different account and region, with versioning or immutability on, so that the incident that destroys production (a compromised credential, a ransomware key) cannot reach it.
+
+## Failing over a region
+
+<Steps>
+
+1. **Decide.** Prefer a human trigger with fully automated steps: an automatic failover on a false alarm costs real data and real downtime, so the decision is worth a person, but the execution must be one command.
+2. **Fence the old primary.** Stop it accepting writes, if it is reachable, so that clients with stale DNS cannot create a second history.
+3. **Promote the data.** Make the recovery region's replica the primary. Everything committed but not yet replicated is lost: <mark>replication lag is your RPO</mark>. Managed cross-region replication such as Aurora global database typically lags under a second and promotes in about a minute.
+4. **Bring up compute.** Pilot light starts and scales servers; warm standby scales up. Both depend on the cloud's control plane, which may itself be degraded in a regional event, so pre-provisioned capacity shortens the RTO.
+5. **Move the traffic.** A DNS failover record switches when its health check fails; keep the TTL at 60 seconds or less, as Route 53's guidance says for health-checked records, and expect a tail of resolvers that ignore TTLs anyway (see [DNS](/learn/dns)). A global anycast load balancer such as AWS Global Accelerator avoids DNS caching by keeping the same IP addresses and re-routing behind them.
+6. **Verify, then plan the way back.** Failback is a second migration: the recovery region now holds the current data, so the old primary must be rebuilt as its replica before roles swap again.
+
+</Steps>
+
+## Where the copy may live
+
+Regulation decides which regions are available. The Reserve Bank of India's 2018 directive requires the entire data of payment systems operated in India to be stored only in India (the foreign leg of a transaction excepted), so a Mumbai primary cannot fail over to Singapore. The GDPR restricts transfers of personal data out of the EU to the conditions of its Chapter V. Where no second in-country region exists, residency rules can rule out a second region entirely, as AWS's guidance notes, and the plan becomes multi-zone plus strong, tested backups.
+
+## Runbooks and game days
+
+A **runbook** is the failover written as steps with owners, decision criteria and the messages to send, so that it can be followed at 3 a.m. by someone who did not write it. A **game day** is a scheduled rehearsal in which the real team runs the real procedure in a production-like environment, and increasingly in production; the Well-Architected guidance's first anti-pattern is never exercising failover in production. Each rehearsal measures the actual RTO and RPO, finds the secondary that can no longer carry the load, and feeds fixes back into the runbook. Running the incident itself is the subject of [incident response](/learn/incident-response).
+
+<Callout type="analogy" title="Four ways to own a spare phone">
+
+Backup and restore is buying a new phone and restoring from the cloud: cheap until the day you need it, then slow. Pilot light is a spare in a drawer, synced nightly but switched off. Warm standby is the spare charged and switched on in your bag. Active/active is two phones you use every day. Where the analogy stops: phones do not take writes from millions of people while you are not looking, which is why the data copy, not the device, dominates every real DR plan.
+
+</Callout>
+
+<Callout type="interview" title="Say the tier, the strategy and the drill">
+
+"The ledger is tier 0: warm standby in a second in-country region, asynchronous replication so RPO is seconds, promotion plus DNS failover for an RTO of about ten minutes, rehearsed quarterly. Everything else is backup and restore with point-in-time recovery, restore-tested weekly." Stating what is not protected to the same level is part of the answer.
+
+</Callout>
+
+<DeepDive title="Go deeper: control plane versus data plane during a disaster">
+
+Cloud providers distinguish the data plane (serving requests, resolving DNS, replicating data) from the control plane (creating instances, changing routing, autoscaling), and design the data plane to a higher availability target. In a regional event the control plane is often what is impaired, so a failover that depends on launching instances or editing DNS records through an API may stall exactly when needed. AWS's guidance therefore prefers data-plane failover steps (a health check already in place flipping a record, capacity already provisioned, a replica already receiving data) and recommends restoring backups on a schedule, so that a recent restored copy exists even if the restore API is unavailable on the day.
+
+</DeepDive>

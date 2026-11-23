@@ -1,0 +1,69 @@
+{
+  "slug": "concurrency-basics",
+  "title": "Concurrency and thread safety",
+  "moduleId": "lld",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "Two threads increment the same counter a million times each and the total comes out short, with no exception and no error, only a wrong number.",
+  "summary": "A race needs shared state and a mutation; remove either or guard it. Prefer immutability, then atomics, then locks; run work on bounded pools fed by blocking queues; acquire multiple locks in one global order; rely on happens-before for visibility.",
+  "catTip": "Two cats, one bowl, no lock: the bowl is a race condition. Two cats, two bowls, each wanting the other's: deadlock. I propose bowl ordering by cat seniority, mine first.",
+  "recall": {
+    "q": "Two threads call hits++ on a shared long field. Why is the final count wrong, and what are the fixes in order of preference?",
+    "a": "hits++ is a read, an add and a write, so both threads can read the same value and one increment is lost. Prefer immutability (nothing shared is mutated), then an AtomicLong whose incrementAndGet is a single compare-and-swap, then a lock (synchronized or ReentrantLock) when several fields must change together."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Shared mutable state without coordination produces wrong counts, corrupted collections and flags that other threads never see, and the bugs appear only under load and vanish in the debugger.",
+    "tradeoffs": "Locks cost contention and risk deadlock, atomics cover only one variable, immutability costs copies, and bounded pools and queues force you to decide what happens when they are full.",
+    "explainSimply": "When two people edit the same sticky note at once, one edit gets lost. You can give each person their own note, use a note that updates in one stroke, or have one pen that only one person holds at a time. Trouble starts when two people each hold a pen the other needs.",
+    "hint": "Count the steps hidden inside the ++ and ask what another thread can do between them."
+  },
+  "meow": "Read bowl, add kibble, write bowl. Other cat did the same in between. Kibble lost. Meow-tomic operations, please.",
+  "quiz": [
+    {
+      "prompt": "Two threads each increment a plain long field 1,000 times with hits++. Which statement about the final value is guaranteed?",
+      "options": [
+        "It is exactly 2,000, because long writes are atomic on 64-bit machines",
+        "It is exactly 1,000, because one thread always wins",
+        "It is at most 2,000 and often less, because increments interleave and overwrite each other",
+        "An exception is thrown when the second thread writes"
+      ],
+      "answer": 2,
+      "explanation": "Each increment is a read, an add and a write that can interleave with the other thread's, so increments are lost silently. Even where a single long write is atomic, the three-step read-modify-write is not, so the first option confuses atomic writes with atomic updates."
+    },
+    {
+      "prompt": "Thread A locks account 1 and then waits for account 2; thread B locks account 2 and then waits for account 1. Which change prevents the deadlock?",
+      "options": [
+        "Mark both balance fields volatile",
+        "Always acquire the two account locks in a fixed global order, for example ascending account id",
+        "Retry the whole transfer in a loop until it succeeds",
+        "Store the balances in AtomicLong fields"
+      ],
+      "answer": 1,
+      "explanation": "Deadlock needs locks taken in opposite orders, and a global order removes the cycle. volatile and AtomicLong address visibility and single-variable atomicity, not two locks held at once, and a retry loop around a deadlocked call never gets the chance to run."
+    }
+  ],
+  "cards": [
+    {
+      "q": "What does volatile give you, and what does it not?",
+      "a": "Visibility and ordering: a write to a volatile field happens-before every later read of it, so other threads see the new value. Not atomicity: a check-then-act or an increment on a volatile field is still a race. Use an atomic or a lock for compound actions."
+    },
+    {
+      "q": "Why is Executors.newCachedThreadPool() risky for a request-handling service, and what is the alternative?",
+      "a": "It creates a new thread whenever none is idle, so a traffic spike becomes unbounded thread growth and memory pressure. Use a ThreadPoolExecutor with a fixed size and a bounded queue, and pick a rejection policy (CallerRunsPolicy applies back-pressure) so that overload is explicit."
+    }
+  ],
+  "glossary": [
+    { "term": "CAS", "full": "Compare-And-Swap", "note": "An atomic instruction that sets a value only if it still equals the expected old value; Java exposes it as compareAndSet." }
+  ],
+  "sources": [
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.AtomicLong", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicLong.html", "accessed": "2026-11-22", "supports": "incrementAndGet atomically increments; compareAndSet sets the value only if it equals the expected value", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.locks.ReentrantLock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/locks/ReentrantLock.html", "accessed": "2026-11-22", "supports": "the lock() then try/finally unlock() idiom; tryLock with a timeout; reentrancy", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.Executors", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Executors.html", "accessed": "2026-11-22", "supports": "newFixedThreadPool uses a shared unbounded queue; newCachedThreadPool creates new threads as needed; newVirtualThreadPerTaskExecutor creates an unbounded number of virtual threads", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ThreadPoolExecutor", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ThreadPoolExecutor.html", "accessed": "2026-11-22", "supports": "bounded queues prevent resource exhaustion; rejection policies; CallerRunsPolicy runs the task on the submitting thread and slows submission", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.BlockingQueue", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/BlockingQueue.html", "accessed": "2026-11-22", "supports": "put waits for space and take waits for an element; bounded capacity; designed for producer-consumer use", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent package summary, Memory Consistency Properties", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/package-summary.html", "accessed": "2026-11-22", "supports": "the happens-before rules for monitor unlock/lock, volatile write/read, Thread.start and join, and concurrent collections and executors", "status": "verified" },
+    { "title": "The Java Tutorials: Atomic Access", "url": "https://docs.oracle.com/javase/tutorial/essential/concurrency/atomic.html", "accessed": "2026-11-22", "supports": "volatile establishes happens-before for that variable but atomic actions alone do not remove the need to synchronise compound actions", "status": "verified" },
+    { "title": "Goetz et al., Java Concurrency in Practice (Addison-Wesley, 2006), ch. 2, 3, 10", "url": "https://jcip.net/", "accessed": "2026-11-22", "supports": "the framing of thread safety as managing shared mutable state; lock ordering as the deadlock defence", "status": "reference" }
+  ]
+}

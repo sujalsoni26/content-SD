@@ -1,0 +1,92 @@
+{
+  "slug": "brokers-compared",
+  "title": "Choosing a broker",
+  "moduleId": "streaming",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "Billing, analytics and a new fraud model all need the order events, one of them wants last month's replayed, and the team put everything on one work queue.",
+  "summary": "Brokers are logs or queues underneath. Kafka and Pulsar keep records and let readers replay; RabbitMQ and SQS route, acknowledge and delete each message; SNS fans out. Replay and many readers want a log, per-message routing wants a queue.",
+  "catTip": "The newspaper archive lets me read any day I like, as often as I like. The post office hands each letter to one cat and it is gone. I pick the archive for history and the post office for errands. Never the other way round.",
+  "recall": {
+    "q": "What single question decides between a log broker and a queue broker?",
+    "a": "Whether more than one consumer needs the same events, or anyone will replay them: if so, a log such as Kafka. If each message is routed by content and consumed once by competing workers with per-message acks, a queue such as RabbitMQ or SQS, with SNS for fan-out."
+  },
+  "archNodes": ["queue"],
+  "guide": {
+    "breaks": "A queue used as an event bus copies every event into every consumer's queue and can never replay, while a log used as a work queue gives head-of-line blocking per partition and no per-message retry.",
+    "tradeoffs": "Logs give replay and fan-out but order only per partition and offer no per-message routing; queues route and retry each message but delete it on acknowledgement; managed services remove operations at the price of regional throughput ceilings.",
+    "explainSimply": "A log is a newspaper archive: every issue stays on the shelf and any reader can start from any date. A queue is a post office: each letter goes to one carrier and is gone once signed for. Pick the archive when many people need the same history, the post office when each item is an errand for one person.",
+    "hint": "Think about who else needs the same message, and whether anyone will ever ask for it again."
+  },
+  "meow": "Many readers or a replay? Log, meow. One worker, one ack, one retry? Queue. Nobody on call? Let the cloud hold the queue.",
+  "quiz": [
+    {
+      "prompt": "A food-delivery platform wants order events consumed by billing, analytics, notifications and a fraud model, and wants to replay last month's orders into a new model. Which broker shape fits?",
+      "options": [
+        "A RabbitMQ queue with four competing consumers",
+        "An SQS standard queue with a long visibility timeout",
+        "A partitioned log such as Kafka: each team reads with its own consumer group and resets offsets to replay",
+        "An SNS topic alone, since it fans out to every subscriber"
+      ],
+      "answer": 2,
+      "explanation": "Several independent readers plus replay is the log's defining case: consumer groups read the same bytes and offsets can be reset. SNS is the strongest distractor because it does fan out, but it keeps nothing, so a subscriber that was not there last month cannot replay it."
+    },
+    {
+      "prompt": "An SQS consumer takes 90 seconds to process a message and the queue uses the default visibility timeout. What happens?",
+      "options": [
+        "Nothing; SQS waits until the consumer deletes the message",
+        "After 30 seconds the message becomes visible again and another consumer processes it too",
+        "The message is moved to the dead-letter queue after 30 seconds",
+        "SQS extends the timeout automatically while the consumer stays connected"
+      ],
+      "answer": 1,
+      "explanation": "The default visibility timeout is 30 seconds, after which an undeleted message reappears, which is how SQS implements at-least-once delivery. The dead-letter option is the plausible error: a message moves there only after maxReceiveCount receives under a redrive policy, not on a single timeout."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Why does an SQS FIFO queue have a throughput ceiling that a standard queue does not?",
+      "a": "Ordering within a message group forces serialisation through one partition: 300 transactions per second per API action per partition, 3,000 with batches of ten. High-throughput mode spreads message groups over more partitions; a standard queue never orders, so it never serialises."
+    },
+    {
+      "q": "RabbitMQ and Kafka both deliver in order. How do their ordering promises differ?",
+      "a": "RabbitMQ keeps a queue in publication order, but with several consumers on one queue each sees only its share, so a redelivery can reach a consumer after a newer message. Kafka orders within a partition and gives each partition to exactly one consumer in a group, so per-key order holds end to end."
+    }
+  ],
+  "glossary": [
+    { "term": "AMQP", "full": "Advanced Message Queuing Protocol", "note": "The open messaging protocol RabbitMQ implements (version 0-9-1): publishers send to exchanges, which route to queues through bindings." },
+    { "term": "SQS", "full": "Amazon Simple Queue Service", "note": "AWS's managed queue: consumers poll, a received message is hidden for the visibility timeout, and it is deleted only when the consumer says so." },
+    { "term": "SNS", "full": "Amazon Simple Notification Service", "note": "AWS's managed pub/sub topic that pushes each message to every subscription, such as SQS queues, Lambda functions or HTTP endpoints." }
+  ],
+  "sources": [
+    { "title": "RabbitMQ documentation, AMQP 0-9-1 Model Explained", "url": "https://www.rabbitmq.com/tutorials/amqp-concepts", "accessed": "2026-11-22", "supports": "publishers send to exchanges, bindings route to queues, four exchange types, the push API versus polling", "status": "verified" },
+    { "title": "RabbitMQ documentation, Consumer Acknowledgements and Publisher Confirms", "url": "https://www.rabbitmq.com/docs/confirms", "accessed": "2026-11-22", "supports": "ack, nack and reject; prefetch caps unacknowledged deliveries; unacked messages are requeued when a connection closes and marked redelivered", "status": "verified" },
+    { "title": "RabbitMQ documentation, Broker Semantics", "url": "https://www.rabbitmq.com/docs/semantics", "accessed": "2026-11-22", "supports": "since release 2.7.0 messages are held in publication order even through requeueing", "status": "verified" },
+    { "title": "RabbitMQ documentation, Queues (ordering)", "url": "https://www.rabbitmq.com/docs/queues#ordering", "accessed": "2026-11-22", "supports": "a queue is an ordered collection with FIFO semantics", "status": "verified" },
+    { "title": "RabbitMQ documentation, Consumers", "url": "https://www.rabbitmq.com/docs/consumers", "accessed": "2026-11-22", "supports": "deliveries are pushed to subscribed consumers; fetching messages one by one with basic.get is discouraged", "status": "verified" },
+    { "title": "RabbitMQ documentation, Quorum Queues", "url": "https://www.rabbitmq.com/docs/quorum-queues", "accessed": "2026-11-22", "supports": "quorum queues are Raft-based and the default choice for replicated queues; classic queue mirroring was removed in RabbitMQ 4.0", "status": "verified" },
+    { "title": "RabbitMQ blog, \"Quorum Queues in RabbitMQ 4.0\", 28 August 2024", "url": "https://www.rabbitmq.com/blog/2024/08/28/quorum-queues-in-4.0", "accessed": "2026-11-22", "supports": "classic queue mirroring removed in 4.0", "status": "verified" },
+    { "title": "RabbitMQ documentation, Streams", "url": "https://www.rabbitmq.com/docs/streams", "accessed": "2026-11-22", "supports": "streams are an append-only log with non-destructive consumption, offsets and size or age retention", "status": "verified" },
+    { "title": "RabbitMQ blog, \"RabbitMQ Streams Overview\", 13 July 2021", "url": "https://www.rabbitmq.com/blog/2021/07/13/rabbitmq-streams-overview", "accessed": "2026-11-22", "supports": "streams were introduced in RabbitMQ 3.9", "status": "verified" },
+    { "title": "RabbitMQ documentation, Dead Letter Exchanges", "url": "https://www.rabbitmq.com/docs/dlx", "accessed": "2026-11-22", "supports": "messages are dead-lettered on reject or nack without requeue, per-message TTL expiry, queue length limit, or exceeding a quorum queue's delivery limit", "status": "verified" },
+    { "title": "Amazon SQS Developer Guide, Visibility timeout", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html", "accessed": "2026-11-22", "supports": "default visibility timeout 30 seconds, minimum 0, maximum 12 hours", "status": "verified" },
+    { "title": "Amazon SQS Developer Guide, Standard queues", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html", "accessed": "2026-11-22", "supports": "nearly unlimited API calls per second, at-least-once delivery, best-effort ordering", "status": "verified" },
+    { "title": "Amazon SQS Developer Guide, FIFO queues", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fifo-queues.html", "accessed": "2026-11-22", "supports": "strict ordering within message groups and exactly-once processing", "status": "verified" },
+    { "title": "Amazon SQS Developer Guide, Using the message deduplication ID", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/using-messagededuplicationid-property.html", "accessed": "2026-11-22", "supports": "the five-minute deduplication window", "status": "verified" },
+    { "title": "Amazon SQS Developer Guide, Quotas related to messages", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html", "accessed": "2026-11-22", "supports": "300 transactions per second per partition per API action and 3,000 messages per second with batching for FIFO queues; high-throughput figures of 70,000 unbatched in the largest US regions and 9,000 in ap-south-1; retention default 4 days, 1 minute to 14 days; maximum message size 1 MiB", "status": "verified" },
+    { "title": "AWS What's New, \"Amazon SQS increases maximum message payload size to 1 MiB\", 4 August 2025", "url": "https://aws.amazon.com/about-aws/whats-new/2025/08/amazon-sqs-max-payload-size-1mib/", "accessed": "2026-11-22", "supports": "the maximum payload rose from 256 KiB to 1 MiB in August 2025", "status": "verified" },
+    { "title": "Amazon SQS Developer Guide, Short and long polling", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html", "accessed": "2026-11-22", "supports": "long polling waits up to 20 seconds", "status": "verified" },
+    { "title": "Amazon SQS Developer Guide, Dead-letter queues", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html", "accessed": "2026-11-22", "supports": "a redrive policy moves a message to the dead-letter queue after maxReceiveCount receives", "status": "verified" },
+    { "title": "Amazon SNS Developer Guide, What is Amazon SNS?", "url": "https://docs.aws.amazon.com/sns/latest/dg/welcome.html", "accessed": "2026-11-22", "supports": "topics push to SQS, Lambda, HTTP(S), email, SMS and mobile push subscriptions", "status": "verified" },
+    { "title": "Amazon SNS Developer Guide, Message filtering", "url": "https://docs.aws.amazon.com/sns/latest/dg/sns-message-filtering.html", "accessed": "2026-11-22", "supports": "subscription filter policies", "status": "verified" },
+    { "title": "Amazon SNS Developer Guide, FIFO topic message delivery", "url": "https://docs.aws.amazon.com/sns/latest/dg/fifo-message-delivery.html", "accessed": "2026-11-22", "supports": "FIFO topics deliver in order and once to SQS queues, and cannot deliver to other endpoint types", "status": "verified" },
+    { "title": "Amazon SNS features", "url": "https://aws.amazon.com/sns/features/", "accessed": "2026-11-22", "supports": "standard topics give best-effort ordering and at-least-once delivery", "status": "verified" },
+    { "title": "Redis documentation, Redis Streams", "url": "https://redis.io/docs/latest/develop/data-types/streams/", "accessed": "2026-11-22", "supports": "entry ids of millisecond time plus sequence; consumer groups and the pending entries list; XACK and XAUTOCLAIM; MAXLEN and MINID trimming; persistence depends on AOF fsync policy", "status": "verified" },
+    { "title": "Apache Pulsar documentation, Architecture overview", "url": "https://pulsar.apache.org/docs/next/concepts-architecture-overview/", "accessed": "2026-11-22", "supports": "stateless brokers with storage in Apache BookKeeper; geo-replication between clusters", "status": "verified" },
+    { "title": "Apache Pulsar documentation, Messaging (subscription types)", "url": "https://pulsar.apache.org/docs/next/concepts-messaging/", "accessed": "2026-11-22", "supports": "the four subscription types exclusive, shared, failover and key_shared", "status": "verified" },
+    { "title": "Apache Pulsar documentation, Tiered storage", "url": "https://pulsar.apache.org/docs/next/concepts-tiered-storage/", "accessed": "2026-11-22", "supports": "older segments are offloaded to cheaper storage such as S3 or GCS", "status": "verified" },
+    { "title": "Apache Pulsar documentation, Multi-tenancy", "url": "https://pulsar.apache.org/docs/next/concepts-multi-tenancy/", "accessed": "2026-11-22", "supports": "tenants and namespaces are built in", "status": "verified" },
+    { "title": "Apache Kafka 4.4 documentation, Design (push versus pull)", "url": "https://kafka.apache.org/44/design/design/", "accessed": "2026-11-22", "supports": "consumers pull from brokers; each partition is consumed by exactly one consumer in a group", "status": "verified" },
+    { "title": "Apache Kafka 4.4 topic configuration reference (retention.ms)", "url": "https://kafka.apache.org/44/generated/topic_config.html", "accessed": "2026-11-22", "supports": "retention.ms defaults to 604800000 ms, seven days", "status": "verified" }
+  ]
+}

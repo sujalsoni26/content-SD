@@ -1,0 +1,51 @@
+{
+  "slug": "design-patterns-structural",
+  "title": "Design patterns II: structural",
+  "moduleId": "lld",
+  "level": "intermediate",
+  "minutes": 9,
+  "problem": "A class that calls a vendor library directly leaks the vendor's shape into business code and mixes retries and metrics into every method that sends anything.",
+  "summary": "Structural patterns compose objects without exposing concrete classes: Adapter changes an interface, Decorator adds behaviour behind the same one, Proxy controls access, Facade simplifies a subsystem, and Composite lets a tree and a leaf answer the same question.",
+  "catTip": "A cardboard box is my Adapter: it makes any shelf fit a cat. A blanket on top is a Decorator, same cat, warmer. The human who decides whether visitors may pet me is a Proxy.",
+  "recall": {
+    "q": "A wrapper implements the same interface as the object it holds. What single question tells you whether it is a Decorator or a Proxy?",
+    "a": "Ask why it exists. A Decorator adds a responsibility (retry, metrics, buffering) and is stacked by the caller; a Proxy controls access to the real object (lazy creation, caching, permissions, remote calls) and often manages that object's lifetime itself."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without these patterns, vendor APIs leak into business logic, cross-cutting concerns such as retries and metrics get copied into every method, and tree-shaped data needs a special case for every level.",
+    "tradeoffs": "Each wrapper is another layer to read, debug and keep consistent, identity checks on wrapped objects break, and a facade can quietly grow into the class that does everything.",
+    "explainSimply": "These patterns are ways of putting one object inside another so the outside world sees a tidier shape. A travel plug changes the socket shape, a phone case adds protection without changing the phone, and a receptionist decides who gets through to the manager. Same move, three different reasons.",
+    "hint": "The shape is identical; think about the reason the wrapper was written."
+  },
+  "meow": "Purr-oxy, decor-cat-or, a-cat-ter: same box, different reasons for the box.",
+  "quiz": [
+    {
+      "prompt": "You wrap a PaymentClient so that every call is timed and counted, keeping the same interface, and you plan to stack a retrying wrapper on top. Which pattern is this?",
+      "options": ["Adapter", "Decorator", "Proxy", "Facade"],
+      "answer": 1,
+      "explanation": "The interface is unchanged and a responsibility is added that can be stacked, which is Decorator. Proxy has the same shape, but its intent is to control access to the object (lazy loading, caching, permissions), not to add a concern."
+    },
+    {
+      "prompt": "A menu has categories that contain dishes and other categories, and the app must show the item count of any node. Which pattern avoids a special case per level?",
+      "options": ["Facade over the menu service", "Adapter for each category type", "Composite with one interface for dish and category", "Proxy that caches the count"],
+      "answer": 2,
+      "explanation": "Composite gives leaf and group one interface, so a category's count is the sum of its children's counts and recursion handles any depth. A caching proxy might make the count faster but does not remove the per-level special case."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Adapter and Facade both hide something behind a new interface. How do they differ?",
+      "a": "An Adapter wraps one object whose interface does not match what the caller wants and translates call for call. A Facade sits over many objects and offers a smaller, simpler entry point, often calling several of them per operation."
+    },
+    {
+      "q": "A caching decorator around a service never caches anything when the service's methods call each other. Why?",
+      "a": "Decorators and proxies only see calls that cross the object boundary. A method calling another method on this bypasses the wrapper. Move the wrapped behaviour into a separately injected object so the call passes through the wrapper."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994), ch. 4 Structural Patterns", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions of Adapter, Decorator, Facade, Proxy and Composite; the related-patterns note that an adapter provides a different interface, a proxy the same interface and a decorator an enhanced one; the child-management dilemma in Composite", "status": "reference" },
+    { "title": "Java SE 21 API: java.io.BufferedReader and java.util.Collections", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/io/BufferedReader.html", "accessed": "2026-11-22", "supports": "BufferedReader over InputStreamReader as a JDK Decorator; Collections.unmodifiableList as a read-only view that rejects writes", "status": "reference" }
+  ]
+}

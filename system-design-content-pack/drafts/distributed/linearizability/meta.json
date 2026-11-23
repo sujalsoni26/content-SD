@@ -1,0 +1,72 @@
+{
+  "slug": "linearizability",
+  "title": "Linearizability, serializability and the consistency zoo",
+  "moduleId": "distributed",
+  "level": "advanced",
+  "minutes": 9,
+  "problem": "Alice sees the final score, tells Bob, and Bob's refresh still shows the match in progress because his read hit a replica that had not caught up.",
+  "summary": "Linearizability makes replicated data behave like one copy in real time; serializability makes concurrent transactions equivalent to some serial order; strict serializability is both. Reserve the top of the map for locks, uniqueness and leaders, because it costs round trips and availability.",
+  "catTip": "One food bowl, one truth: when it is empty, it is empty for every cat, instantly. Two bowls that are usually the same are how the kitten eats twice. Linearizability is the one-bowl illusion, and it costs a walk to the kitchen.",
+  "recall": {
+    "q": "What is the difference between linearizability and serializability, and what do you call having both?",
+    "a": "Linearizability is a single-object, single-operation guarantee that every operation appears to take effect instantly between its call and its return, so reads reflect real time. Serializability is a multi-object transaction guarantee of equivalence to some serial order, with no real-time requirement. Both together is strict serializability, which Spanner calls external consistency."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without linearizability two nodes can both read free and both take the last seat or the lock, and a user can be told a fact by a friend that their own refresh then denies.",
+    "tradeoffs": "Every linearizable read or write goes through a leader or quorum round trip and must refuse or wait during a partition, so the guarantee is bought per object, not for the whole system.",
+    "explainSimply": "Imagine a scoreboard that every fan in the stadium sees at the same instant: when it changes, nobody can still see the old score. Weaker promises are like news spreading through a crowd, where everyone eventually hears the result but some people hear it later than their friends. Linearizability is the single-scoreboard promise, and it needs everyone to check with the scoreboard rather than the crowd.",
+    "hint": "Think about which guarantee mentions real time, which mentions transactions, and the name for the one that does both."
+  },
+  "meow": "One bowl, one truth, every whisker sees the same emptiness at once. Many bowls, meow-ny truths, and the kitten eats twice.",
+  "quiz": [
+    {
+      "prompt": "A database runs every transaction at SERIALIZABLE isolation but serves read-only transactions from a replica that is a few seconds behind. Which statement is correct?",
+      "options": [
+        "The system is linearizable, because serializable is the strongest isolation level",
+        "The system is serializable but not strictly serializable: the serial order it is equivalent to need not match real time, so a read can miss a write that completed before it began",
+        "The system is strictly serializable, because each replica applies transactions in commit order",
+        "The system is neither serializable nor linearizable, because stale reads violate isolation"
+      ],
+      "answer": 1,
+      "explanation": "Serializability only requires equivalence to some serial order, so an old snapshot is allowed, and adding the real-time requirement is what makes it strict. Applying writes in order on each replica does not help, because a read can land on a replica that has not yet applied them."
+    },
+    {
+      "prompt": "Which feature genuinely needs linearizability?",
+      "options": [
+        "The follower count shown on a profile page",
+        "Comments in a thread appearing after the post they reply to",
+        "Allocating the last seat in a show to exactly one of two simultaneous buyers",
+        "A user seeing their own just-posted comment on refresh"
+      ],
+      "answer": 2,
+      "explanation": "Exactly one winner requires both buyers' operations to behave as if on a single copy in real time, so the second sees the seat taken. The comments case needs only causal ordering and seeing your own write needs only read-your-writes, both of which are cheaper."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Give an example of a system that is serializable but not linearizable.",
+      "a": "A database at SERIALIZABLE isolation that serves read-only transactions from a slightly stale snapshot. Each such read is equivalent to a serial order in which it ran earlier, so serializability holds, but a write that completed before the read started is invisible, so real-time (linearizable) order is broken."
+    },
+    {
+      "q": "Why does linearizability cost latency and availability?",
+      "a": "A linearizable read must be served by a leader or by a quorum guaranteed to include the latest write, and a write must wait for that quorum, so each costs at least one network round trip. During a partition a cut-off node cannot know whether a newer write exists, so it must refuse or wait rather than answer."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Maurice Herlihy and Jeannette Wing, \"Linearizability: A Correctness Condition for Concurrent Objects\", ACM TOPLAS 12(3), 1990, pp. 463–492", "url": "https://doi.org/10.1145/78969.78972", "accessed": "2026-11-22", "supports": "the 1990 definition and attribution of linearizability (bibliographic record checked via Crossref; only scanned copies were reachable, so the text was not re-read)", "status": "reference" },
+    { "title": "Jepsen, \"Consistency Models\" reference", "url": "https://jepsen.io/consistency", "accessed": "2026-11-22", "supports": "the hierarchy of models organised as Models, Phenomena and Dependencies, with models defined by the dependency cycles they forbid", "status": "verified" },
+    { "title": "Jepsen, \"Linearizability\"", "url": "https://jepsen.io/consistency/models/linearizable", "accessed": "2026-11-22", "supports": "operations appear to take place atomically in an order consistent with real time; a single-object model; cannot be totally or sticky available", "status": "verified" },
+    { "title": "Jepsen, \"Strict Serializability\"", "url": "https://jepsen.io/consistency/models/strict-serializable", "accessed": "2026-11-22", "supports": "strict serializability implies both serializability and linearizability and is not totally or sticky available", "status": "verified" },
+    { "title": "Jepsen, \"Serializability\"", "url": "https://jepsen.io/consistency/models/serializable", "accessed": "2026-11-22", "supports": "serializability imposes no real-time or per-process constraints, so a read is not guaranteed to observe an earlier completed write; not totally or sticky available", "status": "verified" },
+    { "title": "Jepsen, \"Sequential Consistency\"", "url": "https://jepsen.io/consistency/models/sequential", "accessed": "2026-11-22", "supports": "a total order consistent with each process's order, attributed to Lamport 1979; cannot be totally or sticky available", "status": "verified" },
+    { "title": "Jepsen, \"Causal Consistency\"", "url": "https://jepsen.io/consistency/models/causal", "accessed": "2026-11-22", "supports": "causally related operations appear in the same order on all processes; processes may disagree about the order of causally independent operations; causal consistency is sticky available", "status": "verified" },
+    { "title": "Peter Bailis, \"Linearizability versus Serializability\" (24 September 2014)", "url": "http://www.bailis.org/blog/linearizability-versus-serializability/", "accessed": "2026-11-22", "supports": "linearizability as a single-operation, single-object, real-time guarantee; serializability as a multi-object guarantee with no real-time order; strict serializability as the combination; the C in CAP being linearizability per Gilbert and Lynch; neither achievable without coordination", "status": "verified" },
+    { "title": "Corbett et al., \"Spanner: Google's Globally-Distributed Database\", OSDI 2012", "url": "https://static.googleusercontent.com/media/research.google.com/en//archive/spanner-osdi2012.pdf", "accessed": "2026-11-22", "supports": "Spanner's serialization order satisfies external consistency, which the paper equates with linearizability: if T1 commits before T2 starts, T1's commit timestamp is smaller", "status": "verified" },
+    { "title": "Christos Papadimitriou, \"The serializability of concurrent database updates\", Journal of the ACM 26(4), 1979", "url": "https://doi.org/10.1145/322154.322158", "accessed": "2026-11-22", "supports": "the formal definition of serializability (bibliographic record checked; text not re-read)", "status": "reference" },
+    { "title": "Leslie Lamport, \"How to Make a Multiprocessor Computer That Correctly Executes Multiprocess Programs\", IEEE Transactions on Computers C-28(9), 1979", "url": "https://doi.org/10.1109/TC.1979.1675439", "accessed": "2026-11-22", "supports": "the origin of sequential consistency (bibliographic record checked; text not re-read)", "status": "reference" },
+    { "title": "Seth Gilbert and Nancy Lynch, \"Brewer's conjecture and the feasibility of consistent, available, partition-tolerant web services\", ACM SIGACT News 33(2), 2002", "url": "https://doi.org/10.1145/564585.564601", "accessed": "2026-11-22", "supports": "the CAP proof whose consistency is linearizability (bibliographic record checked; text not re-read)", "status": "reference" },
+    { "title": "Martin Kleppmann, Designing Data-Intensive Applications, ch. 9 \"Consistency and Consensus\" (O'Reilly, 2017)", "url": "https://dataintensive.net/", "accessed": "2026-11-22", "supports": "the single-copy intuition, the sports-result and cross-channel examples, and where linearizability is required", "status": "reference" }
+  ]
+}

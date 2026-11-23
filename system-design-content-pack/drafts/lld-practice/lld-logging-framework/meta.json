@@ -1,0 +1,69 @@
+{
+  "slug": "lld-logging-framework",
+  "title": "LLD: Logging framework",
+  "moduleId": "lld-practice",
+  "level": "intermediate",
+  "minutes": 11,
+  "problem": "Every library calls the logger, so a disabled call that allocates, an appender that throws, or a disk that blocks a payment thread hurts the whole application.",
+  "summary": "Separate whether (the Logger's level check, one comparison), where (Appender), how it looks (Layout) and the exceptions (a Filter chain). Build the event only after the check, and make asynchrony a Decorator appender with a bounded queue and an explicit drop-or-block policy.",
+  "catTip": "I meow at every level, but the humans only hear WARN and above. The clever part is that my ignored meows cost nothing: I check whether anyone is listening before I bother to open my mouth.",
+  "recall": {
+    "q": "What is the key design decision in the logging framework case study, and where does the fast path live?",
+    "a": "Split four concerns: the Logger decides whether a request is enabled by comparing its level with the effective level inherited down the dotted-name hierarchy, Appenders decide where it goes, Layouts how it is rendered and Filters the per-appender exceptions. The fast path is that comparison: the LogEvent is created only after it passes, so a disabled call allocates nothing, and the async appender is a Decorator with a bounded queue that drops INFO and below but blocks for WARN and ERROR when full."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A logger that formats, filters and writes in one method pays for debug messages nobody reads, lets a broken file appender throw into business code, and makes every request wait for the slowest destination.",
+    "tradeoffs": "Four small interfaces and a registry add classes, the bounded async queue means some INFO lines are dropped under overload by design, and events still in the queue at shutdown are lost unless the context is stopped cleanly.",
+    "explainSimply": "Think of a newsroom: reporters drop dispatches in a basket and go back to work, an editor's threshold decides what is worth printing, and each outlet prints the story in its own style. The basket has a fixed size, so the rule for a full basket, make reporters wait or bin the gossip, is agreed in advance.",
+    "hint": "Name the four questions a log call answers, then ask which one must be answered before anything is allocated."
+  },
+  "meow": "Is anyone listening? Compare level, no? Silent meow, zero allocation. Yes? Event into the basket, worker writes it, I nap.",
+  "quiz": [
+    {
+      "prompt": "The application logs at DEBUG inside a hot loop but runs at INFO. Which design keeps that loop free of allocation?",
+      "options": [
+        "Build the LogEvent, then let each appender's ThresholdFilter deny it",
+        "Compare the requested level with the logger's effective level before creating any event or formatting any argument",
+        "Route all events through the AsyncAppender so allocation happens on the worker thread",
+        "Set the root logger to OFF and enable only the loggers you need"
+      ],
+      "answer": 1,
+      "explanation": "The level check is the fast path: a method call and an integer comparison, with the event created only when it passes. Filtering per appender also stops the output, but by then the event, its timestamp and its context copy have already been allocated on the hot thread, and the async queue only moves the formatting, not the allocation."
+    },
+    {
+      "prompt": "An AsyncAppender's bounded queue is full because the disk is slow. Which policy matches the requirement that WARN and ERROR are the last events to be lost?",
+      "options": [
+        "Block every caller with put() until the worker frees a slot",
+        "Drop every event with offer() and increment a counter",
+        "Drop TRACE, DEBUG and INFO with a counter, and block for WARN and ERROR with put()",
+        "Grow the queue without bound so nothing is ever dropped"
+      ],
+      "answer": 2,
+      "explanation": "Shedding cheap events first keeps application threads moving while serious ones wait for space, which is the shape of Logback's default. Blocking everyone also loses nothing but turns a slow disk into every request's latency, which the asynchronous appender exists to prevent."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In the logging framework, why is the filter chain on the appender rather than on the logger, and what do ACCEPT, DENY and NEUTRAL do?",
+      "a": "Filters express per-destination exceptions to the level rule, so the console can show everything while the file keeps only WARN, without touching the logger every call site uses. DENY drops the event without consulting later filters, ACCEPT writes it and skips the rest, NEUTRAL passes it to the next filter; all NEUTRAL means write."
+    }
+  ],
+  "glossary": [
+    { "term": "MDC", "full": "Mapped Diagnostic Context", "note": "A per-thread map of context values, such as a request id, that the logger copies into every event written on that thread." }
+  ],
+  "sources": [
+    { "title": "Logback manual, chapter 2: Architecture", "url": "https://logback.qos.ch/manual/architecture.html", "accessed": "2026-11-22", "supports": "Logger, Appender and Layout as the three main classes; dotted-name hierarchy with a root logger whose level defaults to DEBUG; the effective level is the first non-null level walking up from the logger; a request of level p is enabled if p is at or above the effective level q; appender additivity; the same name always returns the same Logger instance; parameterised messages formatted only when enabled; a disabled request costs a method call and an integer comparison; the processing steps from filter chain to output", "status": "verified" },
+    { "title": "Logback manual: AsyncAppender (Appenders chapter, async and sifting)", "url": "https://logback.qos.ch/manual/appenders-async-sift.html", "accessed": "2026-11-22", "supports": "events are buffered in a BlockingQueue and dispatched by a worker thread to one wrapped appender; queueSize defaults to 256; when 20 percent of capacity remains, TRACE, DEBUG and INFO are dropped; discardingThreshold 0 keeps all; neverBlock defaults to false (block on a full queue) and true drops instead; the appender must be stopped at shutdown or queued events are stranded, hence a shutdown hook", "status": "verified" },
+    { "title": "Logback manual, chapter 7: Filters", "url": "https://logback.qos.ch/manual/filters.html", "accessed": "2026-11-22", "supports": "filters attached to appenders are evaluated in order with ternary replies: DENY drops the event immediately, NEUTRAL consults the next filter, ACCEPT processes it and skips the rest; TurboFilters attach to the context and run before the event is created", "status": "verified" },
+    { "title": "Logback manual, chapter 8: Mapped Diagnostic Context", "url": "https://logback.qos.ch/manual/mdc.html", "accessed": "2026-11-22", "supports": "the MDC is managed per thread; child threads do not automatically inherit the parent's map; values should be removed in a finally block so reused pool threads do not leak them; copy the context map into tasks handed to other threads; typical use is stamping each request with a client or session id", "status": "verified" },
+    { "title": "Logback manual: RollingFileAppender (Appenders chapter, rolling)", "url": "https://logback.qos.ch/manual/appenders-rolling.html", "accessed": "2026-11-22", "supports": "RollingFileAppender extends FileAppender with a RollingPolicy responsible for what happens at rollover and a TriggeringPolicy responsible for when; TimeBasedRollingPolicy infers the period from fileNamePattern, with maxHistory and compression by file extension", "status": "verified" },
+    { "title": "SLF4J user manual", "url": "https://www.slf4j.org/manual.html", "accessed": "2026-11-22", "supports": "SLF4J is a facade over logging frameworks with the provider chosen at deployment time; LoggerFactory.getLogger usage; parameterised messages; MDC delegated to the underlying framework", "status": "verified" },
+    { "title": "Apache Log4j 2 manual: Asynchronous Loggers", "url": "https://logging.apache.org/log4j/2.x/manual/async.html", "accessed": "2026-11-22", "supports": "async loggers use the LMAX Disruptor, a lock-free inter-thread communication library, instead of a queue; the default ring buffer is 256 times 1024 slots (4096 in garbage-free mode); the queue-full policy defaults to blocking, with a Discard option that drops events at or below INFO; a slow appender makes the application log at the speed of its slowest appender; exceptions in appenders are harder to signal to the application", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ArrayBlockingQueue", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ArrayBlockingQueue.html", "accessed": "2026-11-22", "supports": "a bounded, array-backed FIFO queue whose capacity cannot change; put blocks while the queue is full, offer returns false immediately, poll with a timeout waits up to that time", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ConcurrentHashMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html", "accessed": "2026-11-22", "supports": "computeIfAbsent is performed atomically, the mapping function must be short and must not modify the map during computation, which is why the parent logger is resolved before the call", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.LongAdder", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/LongAdder.html", "accessed": "2026-11-22", "supports": "LongAdder is preferable to AtomicLong for counters updated by many threads and read as statistics, such as the dropped-event counter", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.CopyOnWriteArrayList", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/CopyOnWriteArrayList.html", "accessed": "2026-11-22", "supports": "a list whose mutations copy the underlying array, so iteration never sees a partially updated list; suited to the appender list that is iterated per event and changed only at configuration time", "status": "reference" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, Chain of Responsibility, Decorator, Template Method, Flyweight and Singleton as used and as debated here", "status": "reference" }
+  ]
+}

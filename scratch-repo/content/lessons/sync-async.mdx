@@ -1,0 +1,42 @@
+|  | Synchronous | Asynchronous |
+| --- | --- | --- |
+| How | Call and wait for the reply | Emit a message or event and continue |
+| Pros | Simple; immediate result | Decoupled, resilient, smooths spikes |
+| Cons | A slow or dead callee slows or fails the caller; delays add up along chains | No immediate result; eventual consistency; harder to trace |
+| Use for | Answers needed now: login check, loading the feed, payment authorization | Side effects: notifications, emails, image resizing, analytics, search indexing |
+
+Posting a photo: **save the post synchronously**; resize images, notify followers and update analytics **asynchronously**. The user gets a reply as soon as the post is safe.
+
+<Diagram name="sync-vs-async-timeline" caption="Same work, different wait. Illustrative timings." />
+
+<Mermaid caption="The asynchronous photo post: the user gets a reply once the post is saved; workers finish the rest." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant U as User
+    participant P as Post service
+    participant Q as Queue
+    participant W as Workers
+    U->>P: Upload photo
+    Note over P: Save the post
+    P->>Q: Resize, notify and analytics jobs
+    P-->>U: Posted
+    Q->>W: Deliver jobs
+    Note over Q,W: Resize, notify, analytics
+`} />
+
+<Callout type="analogy" title="Phone call vs text message">
+
+A synchronous call is a phone call: both sides must be there, and you can't do anything else until it ends. An asynchronous message is a text: you send it and get on with your day, and the reply arrives when it arrives.
+
+</Callout>
+
+<Callout type="interview" title="The one question to ask">
+
+"Does the caller need this result to answer the user right now?" If yes, call synchronously, with a timeout (see [Timeouts and retries](/learn/timeouts-retries)). If no, put it on a queue (see [Message queues](/learn/message-queues)).
+
+</Callout>

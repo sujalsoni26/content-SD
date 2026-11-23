@@ -1,0 +1,37 @@
+A **message queue**, run by a **broker**, buffers messages between *producers* and *consumers*. The producer drops a message in and moves on; a consumer picks it up when it is ready.
+
+<Steps>
+
+1. The producer sends a message to the broker, which stores it.
+2. A consumer receives the message and processes it.
+3. The consumer **acks** it, and the broker deletes it.
+4. If the consumer crashes before acking, the message is **redelivered** to another consumer.
+
+</Steps>
+
+<Interactive name="queue-leveling" />
+
+- **Load leveling.** A million simultaneous photo uploads would crash the workers; the queue absorbs the burst and workers drain it at their own pace. Add workers to drain faster.
+- **At-least-once delivery** means duplicates happen, so consumers must be <mark>idempotent</mark> (see [Idempotency](/learn/idempotency)).
+- A **dead-letter queue (DLQ)** parks messages that keep failing, so one poison message can't block the line forever.
+- A **growing queue** means consumers are too slow: scale them or apply backpressure (see [Backpressure and load shedding](/learn/backpressure)).
+- **Ordering** isn't always guaranteed.
+- Examples: RabbitMQ, Amazon SQS, Apache Kafka (a distributed log that also does pub/sub; see [Kafka: a distributed log](/learn/kafka-architecture)). Choosing between them: [Choosing a broker](/learn/brokers-compared).
+
+<Callout type="analogy" title="The restaurant ticket rail">
+
+Waiters (producers) clip orders onto the rail and go back to the tables; cooks (consumers) take tickets as fast as they can. A dinner rush lengthens the rail instead of overwhelming the kitchen. A ticket is only thrown away once the dish is out (the ack).
+
+</Callout>
+
+<DeepDive title="Go deeper: delivery guarantees">
+
+| Guarantee | What can go wrong | When it fits |
+| --- | --- | --- |
+| At-most-once | Messages can be lost, never duplicated | Metrics where a gap is fine |
+| At-least-once | Never lost, sometimes duplicated | The common default; pair it with idempotent consumers |
+| Exactly-once | Really "effectively once": at-least-once plus deduplication or transactions | Kafka transactions, idempotent sinks |
+
+In Amazon SQS, a received message becomes invisible for a *visibility timeout*. If the consumer doesn't delete it in time, it reappears for someone else: that is the "redelivery" in practice.
+
+</DeepDive>

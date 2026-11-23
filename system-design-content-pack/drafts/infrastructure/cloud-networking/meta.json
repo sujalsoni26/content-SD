@@ -1,0 +1,99 @@
+{
+  "slug": "cloud-networking",
+  "title": "Cloud networking: VPCs, subnets and load balancers",
+  "moduleId": "infrastructure",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Every server has a public address, the database answers the internet, and the one NAT gateway in zone a takes the whole fleet offline when that zone fails.",
+  "summary": "A VPC is your own address space in a region, split into public and private subnets per zone. Internet and NAT gateways decide who reaches out, security groups and network ACLs decide who gets in, and endpoints keep AWS traffic off the metered path.",
+  "catTip": "The front door is for visitors. The cat flap is for me going out, and it counts every trip and charges the humans per squeeze. I asked for one flap per room so a stuck door never traps the whole house. Granted, reluctantly.",
+  "recall": {
+    "q": "What makes a subnet public, and what do private subnets use to reach the internet?",
+    "a": "A subnet is public when its route table sends 0.0.0.0/0 to an internet gateway. Private subnets route outbound traffic to a NAT gateway in a public subnet, which is zonal and charges per gigabyte, so you want one per zone and gateway endpoints for S3 and DynamoDB."
+  },
+  "archNodes": ["gateway"],
+  "guide": {
+    "breaks": "Without private subnets and stateful security groups every server is reachable from the internet, and a single-zone NAT gateway or a stateless rule that forgets ephemeral ports cuts off whole tiers at once.",
+    "tradeoffs": "Private subnets need NAT gateways that are zonal and charge per gigabyte, PrivateLink endpoints cost per hour per zone, and every extra boundary is another route table and rule set to get wrong.",
+    "explainSimply": "A VPC is an office building you design: reception lets visitors into the lobby floors only, the mail room sends parcels out from the private floors but accepts none in, and each door lock remembers who it let through. You build one mail room per wing so a flood does not stop the whole building's post.",
+    "hint": "Think about which route makes a subnet public, and what the private ones use instead."
+  },
+  "meow": "Public subnet: door to the street. Private subnet: cat flap through NAT, metered per squeeze, one per zone. Security group remembers me, network ACL does not.",
+  "quiz": [
+    {
+      "prompt": "App servers in private subnets across three zones all route 0.0.0.0/0 to a single NAT gateway in zone a. What is the design flaw?",
+      "options": [
+        "Private subnets cannot use a NAT gateway; they need an internet gateway of their own",
+        "If zone a fails, servers in zones b and c lose outbound internet access, and their traffic to the NAT gateway crosses zones",
+        "A NAT gateway can serve only the subnet it is created in",
+        "Security groups will block the return traffic, because NAT is stateless"
+      ],
+      "answer": 1,
+      "explanation": "A NAT gateway is zonal, so AWS recommends one per zone with zone-local routes. The last option is the tempting error: both the NAT gateway and security groups are stateful, so return traffic is allowed; it is network ACLs that are stateless."
+    },
+    {
+      "prompt": "Which pair correctly contrasts security groups and network ACLs?",
+      "options": [
+        "Security groups are stateless and ordered; network ACLs are stateful and allow-only",
+        "Security groups apply to subnets; network ACLs apply to individual instances",
+        "Security groups are stateful with allow rules only, evaluated as a set; network ACLs are stateless with allow and deny rules, evaluated in number order",
+        "Both are stateful, but only network ACLs support deny rules"
+      ],
+      "answer": 2,
+      "explanation": "That is AWS's own comparison: instance-level, stateful, allow-only and all-rules versus subnet-level, stateless, allow-and-deny and first-match. The last option is half right about deny rules, but network ACLs are stateless, which is why return traffic needs explicit ephemeral-port rules."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Your app servers upload 10 TB a month to S3 through a NAT gateway. What costs you money unnecessarily, and what fixes it?",
+      "a": "The NAT gateway's per-gigabyte processing charge, about $0.045 per GB in US East, so roughly $450 a month, on traffic that never needed to leave AWS. A gateway VPC endpoint for S3 is free and keeps the traffic private."
+    },
+    {
+      "q": "You must expose an internal payments API to a partner's VPC without peering, and your address ranges overlap. Which construct do you use?",
+      "a": "A PrivateLink endpoint service: put the API behind a Network Load Balancer, publish it as an endpoint service, and the partner creates an interface endpoint in their VPC that receives a private address in their own range."
+    }
+  ],
+  "glossary": [
+    { "term": "VPC", "full": "Virtual Private Cloud", "note": "A software-defined private network inside a cloud region with its own address range, subnets, route tables and gateways." },
+    { "term": "NAT", "full": "Network Address Translation", "note": "Rewriting private source addresses to a shared public one on the way out; a NAT gateway does it for private subnets, zonally and per gigabyte." },
+    { "term": "CIDR", "full": "Classless Inter-Domain Routing", "note": "The address-plus-prefix notation such as 10.0.0.0/16 used to size VPCs and subnets." },
+    { "term": "NACL", "full": "Network Access Control List", "note": "A stateless, numbered allow-and-deny filter attached to a subnet, evaluated in order until a rule matches." },
+    { "term": "ALB", "full": "Application Load Balancer", "note": "AWS's layer-7 load balancer for HTTP, HTTPS and gRPC, routing by host, path, header, method, query string or source address." },
+    { "term": "NLB", "full": "Network Load Balancer", "note": "AWS's layer-4 load balancer for TCP, UDP and TLS with a static address per zone and the client's source address preserved." }
+  ],
+  "sources": [
+    { "title": "Amazon VPC User Guide, VPC CIDR blocks", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-cidr-blocks.html", "accessed": "2026-11-22", "supports": "VPC IPv4 block size between /16 and /28", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Subnet CIDR blocks (subnet sizing)", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html", "accessed": "2026-11-22", "supports": "the first four and last addresses of each subnet are reserved; subnet sizes /28 to /16", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Subnets for your VPC", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html", "accessed": "2026-11-22", "supports": "each subnet resides entirely within one Availability Zone", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Subnet route tables", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/subnet-route-tables.html", "accessed": "2026-11-22", "supports": "a subnet is associated with one route table at a time, implicitly the main route table", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Route priority", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/route-tables-priority.html", "accessed": "2026-11-22", "supports": "longest-prefix match; every route table contains a local route for the VPC range", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Internet gateways", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html", "accessed": "2026-11-22", "supports": "a public subnet has a route to an internet gateway; the gateway is horizontally scaled, redundant and highly available with no bandwidth constraints, performs one-to-one NAT and carries no charge", "status": "verified" },
+    { "title": "Amazon VPC User Guide, NAT gateway basics", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-basics.html", "accessed": "2026-11-22", "supports": "a NAT gateway is created in one Availability Zone; if that zone is down, resources in other zones lose internet access, so create one per zone; 5 Gbps scaling to 100 Gbps; 55,000 simultaneous connections per unique destination per address", "status": "verified" },
+    { "title": "Amazon VPC User Guide, NAT gateways", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html", "accessed": "2026-11-22", "supports": "public NAT gateways sit in a public subnet and give private instances outbound internet access", "status": "verified" },
+    { "title": "Amazon VPC pricing", "url": "https://aws.amazon.com/vpc/pricing/", "accessed": "2026-11-22", "supports": "NAT gateway charges of $0.045 per hour and $0.045 per GB processed in US East, plus standard data transfer", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Security groups", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html", "accessed": "2026-11-22", "supports": "security groups are stateful, allow rules only; a new group has no inbound rules and allows all outbound", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Security group rules", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html", "accessed": "2026-11-22", "supports": "rules can reference another security group as the source", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Network ACLs", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html", "accessed": "2026-11-22", "supports": "network ACLs are stateless, have numbered allow and deny rules evaluated from the lowest number with first match applied, and need ephemeral-port rules (1024 to 65535) for return traffic", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Default and custom network ACLs", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/default-network-acl.html", "accessed": "2026-11-22", "supports": "the default network ACL allows all traffic; a custom one denies everything until rules are added", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Compare security groups and network ACLs", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/infrastructure-security.html#VPC_Security_Comparison", "accessed": "2026-11-22", "supports": "the instance-level versus subnet-level, stateful versus stateless, allow-only versus allow-and-deny, all-rules versus ordered comparison", "status": "verified" },
+    { "title": "Elastic Load Balancing features", "url": "https://aws.amazon.com/elasticloadbalancing/features/", "accessed": "2026-11-22", "supports": "ALB at layer 7 with HTTP, HTTPS and gRPC; NLB at layer 4 with TCP, UDP and TLS, static and Elastic IPs, millions of requests per second; Gateway Load Balancer at layer 3", "status": "verified" },
+    { "title": "Elastic Load Balancing, Application Load Balancer rule condition types", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/rule-condition-types.html", "accessed": "2026-11-22", "supports": "routing by host header, path, HTTP header, HTTP method, query string and source IP", "status": "verified" },
+    { "title": "Elastic Load Balancing, What is a Network Load Balancer?", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html", "accessed": "2026-11-22", "supports": "layer 4, millions of requests per second, a static IP address per Availability Zone", "status": "verified" },
+    { "title": "Elastic Load Balancing, Network Load Balancer target group attributes (client IP preservation)", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/network/edit-target-group-attributes.html#client-ip-preservation", "accessed": "2026-11-22", "supports": "client IP preservation is enabled by default for instance target groups", "status": "verified" },
+    { "title": "Elastic Load Balancing, What is a Gateway Load Balancer?", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/gateway/introduction.html", "accessed": "2026-11-22", "supports": "operates at layer 3 for virtual appliances such as firewalls and inspection systems", "status": "verified" },
+    { "title": "Amazon VPC Peering Guide, What is VPC peering?", "url": "https://docs.aws.amazon.com/vpc/latest/peering/what-is-vpc-peering.html", "accessed": "2026-11-22", "supports": "peering traffic stays on the AWS network with no single point of failure", "status": "verified" },
+    { "title": "Amazon VPC Peering Guide, How VPC peering connections work (unsupported configurations)", "url": "https://docs.aws.amazon.com/vpc/latest/peering/invalid-peering-configurations.html", "accessed": "2026-11-22", "supports": "no peering between VPCs with overlapping CIDR blocks; no transitive peering", "status": "verified" },
+    { "title": "AWS Transit Gateway, What is a transit gateway?", "url": "https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html", "accessed": "2026-11-22", "supports": "a network transit hub interconnecting VPCs and on-premises networks", "status": "verified" },
+    { "title": "AWS PrivateLink, Gateway endpoints", "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html", "accessed": "2026-11-22", "supports": "gateway endpoints for S3 and DynamoDB need no internet or NAT gateway and carry no additional charge", "status": "verified" },
+    { "title": "AWS PrivateLink, Access an AWS service using an interface VPC endpoint", "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/create-interface-endpoint.html", "accessed": "2026-11-22", "supports": "an endpoint network interface with a private IP address is created in each chosen subnet; billed hourly plus data processing", "status": "verified" },
+    { "title": "AWS PrivateLink pricing", "url": "https://aws.amazon.com/privatelink/pricing/", "accessed": "2026-11-22", "supports": "interface endpoints are billed per hour per Availability Zone and $0.01 per GB for the first petabyte", "status": "verified" },
+    { "title": "AWS PrivateLink, Share your services through AWS PrivateLink", "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-share-your-services.html", "accessed": "2026-11-22", "supports": "a provider fronts a service with a Network Load Balancer as an endpoint service; consumers connect through interface endpoints", "status": "verified" },
+    { "title": "Amazon VPC User Guide, Amazon DNS server and DNS attributes", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/AmazonDNS-concepts.html", "accessed": "2026-11-22", "supports": "the Route 53 Resolver at the VPC range plus two and at 169.254.169.253; enableDnsSupport defaults to true and enableDnsHostnames to false except in a default VPC", "status": "verified" },
+    { "title": "Amazon Route 53 Developer Guide, Working with private hosted zones", "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zones-private.html", "accessed": "2026-11-22", "supports": "private hosted zones answer DNS queries for a domain within one or more VPCs", "status": "verified" },
+    { "title": "Google Cloud, VPC networks overview", "url": "https://docs.cloud.google.com/vpc/docs/vpc", "accessed": "2026-11-22", "supports": "VPC networks, routes and firewall rules are global; subnets are regional", "status": "verified" },
+    { "title": "Microsoft Learn, What is Azure Virtual Network?", "url": "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-overview", "accessed": "2026-11-22", "supports": "virtual networks and subnets span all availability zones in a region", "status": "verified" },
+    { "title": "Microsoft Learn, Network security groups", "url": "https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview", "accessed": "2026-11-22", "supports": "NSGs hold allow and deny rules evaluated by priority", "status": "verified" },
+    { "title": "Microsoft Learn, What is Azure NAT Gateway?", "url": "https://learn.microsoft.com/en-us/azure/nat-gateway/nat-overview", "accessed": "2026-11-22", "supports": "Azure's managed NAT service associated at subnet level", "status": "verified" },
+    { "title": "Microsoft Learn, What is Azure Private Link?", "url": "https://learn.microsoft.com/en-us/azure/private-link/private-link-overview", "accessed": "2026-11-22", "supports": "private endpoints reach services over the Microsoft backbone", "status": "verified" }
+  ]
+}

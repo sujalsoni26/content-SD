@@ -1,0 +1,69 @@
+{
+  "slug": "lld-in-memory-cache",
+  "title": "LLD: In-memory cache",
+  "moduleId": "lld-practice",
+  "level": "intermediate",
+  "minutes": 12,
+  "problem": "A bounded map must throw out the right entry in constant time, expire stale ones, and serve many threads without turning every read into a queue.",
+  "summary": "Keep storage and eviction order apart: a hash map finds the entry, a doubly linked list threaded through the entries orders them, and an EvictionPolicy Strategy names the victim in O(1). TTL, a statistics Decorator, a single-flight loader and the lock are layered on top.",
+  "catTip": "My favourite napping spots are a cache: the one I used least recently gets the dust. I find each spot instantly and reshuffle my ranking with a flick of the tail, never by walking the whole house.",
+  "recall": {
+    "q": "What is the key design decision in the in-memory cache case study, and how does it give O(1) get and put with LRU eviction?",
+    "a": "Separate storage from order: a HashMap maps key to Entry, and the Entry carries prev and next links that an EvictionPolicy (LruPolicy by default) threads into a doubly linked list with sentinels. A hit is one hash lookup plus a relink of four pointers, and the victim is always head.next, so nothing scans the entries."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A map with a size limit but no order must scan to find the least recently used entry, expired values are served until something notices, and a hot key that expires sends every missing thread to the database at once.",
+    "tradeoffs": "Links inside the entry make it mutable and couple it to the policy, lazy expiry lets size briefly count stale entries, and because an LRU read is a write, concurrency costs either one lock or an approximate eviction order.",
+    "explainSimply": "Think of papers on a desk: whatever you touch goes on top, and when the desk is full the bottom sheet is archived. An index card tells you instantly where each paper is, and every sheet knows its two neighbours so pulling one out of the middle is a single tug. A timer throws away sheets that have gone stale even if nobody touches them.",
+    "hint": "Ask what structure answers where is it and what structure answers who leaves next, then ask how a hit updates the second one without searching."
+  },
+  "meow": "Hash map says where, linked list says who is next out. Hit? Flick to the front. Full? Head.next goes to the archive, meow.",
+  "quiz": [
+    {
+      "prompt": "A popular key expires and two hundred threads miss on it in the same millisecond. Which design stops two hundred identical database loads without stalling reads of unrelated keys?",
+      "options": [
+        "Make get synchronized and perform the load inside it, so the second thread finds the value cached",
+        "Keep one in-flight CompletableFuture per key in a ConcurrentHashMap; the first thread loads outside any cache lock and the rest join its future",
+        "Double the TTL so the key expires half as often",
+        "Switch the eviction policy from LRU to LFU so hot keys are never evicted"
+      ],
+      "answer": 1,
+      "explanation": "putIfAbsent makes exactly one thread the loader and lets the others wait on its result, while the slow load runs outside the cache lock. Loading inside a synchronized get also avoids duplicate loads, but it holds the whole cache's lock for the duration of a database call, so every unrelated get queues behind it."
+    },
+    {
+      "prompt": "You want more read throughput from an LRU cache guarded by a single lock. Which option gives no benefit at all?",
+      "options": [
+        "Replace the lock with a ReentrantReadWriteLock and take the read lock in get",
+        "Split the cache into 16 segments by key hash, each with its own lock and its own LRU list",
+        "Store the map in a ConcurrentHashMap and lock only around the relink of the recency list",
+        "Buffer accesses and apply them to the recency list in batches under the lock"
+      ],
+      "answer": 0,
+      "explanation": "In an LRU cache every get relinks an entry, so there is no read-only path and the read lock would have to be a write lock anyway; the Java documentation says read-write locks pay off only when readers outnumber writers. Striping is the strongest-sounding alternative and does help, at the cost of an eviction order that is only approximate across segments."
+    }
+  ],
+  "cards": [
+    {
+      "q": "In the in-memory cache, why does EvictionPolicy.onAccess take an Entry rather than a key, and what would break if it took a key?",
+      "a": "The entry already carries its prev and next links, so the policy can unlink and relink it in O(1) with no search. With a key the policy would need its own map from key to node, costing a second hash lookup on every access and duplicating the storage the cache already has."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Java SE 21 API: java.util.LinkedHashMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/LinkedHashMap.html", "accessed": "2026-11-22", "supports": "the accessOrder constructor flag orders entries from least to most recently accessed and get counts as an access; removeEldestEntry is invoked by put and putAll after inserting a new entry and returning true removes the eldest; the class is described as well suited to building LRU caches", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ConcurrentHashMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html", "accessed": "2026-11-22", "supports": "retrieval operations do not block and do not entail locking; compute, computeIfAbsent and computeIfPresent are performed atomically, must be short and simple, and must not modify the map during computation; aggregate methods such as size are estimates under concurrent updates", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.locks.ReentrantReadWriteLock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/locks/ReentrantReadWriteLock.html", "accessed": "2026-11-22", "supports": "read-write locks are worthwhile only when the structure is large, accessed by more reader threads than writer threads, and operations outweigh synchronisation overhead; upgrading from read to write lock is not possible", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.locks.StampedLock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/locks/StampedLock.html", "accessed": "2026-11-22", "supports": "tryOptimisticRead returns a stamp that validate checks; optimistic reads suit short read-only sections and must only read fields into locals before validating; the lock is not reentrant", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ScheduledExecutorService", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html", "accessed": "2026-11-22", "supports": "scheduleWithFixedDelay measures the delay from the end of one execution to the start of the next; a task that throws suppresses subsequent executions", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.Executors", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Executors.html", "accessed": "2026-11-22", "supports": "newSingleThreadScheduledExecutor creates a single-threaded executor that runs tasks sequentially with at most one active at a time", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.LongAdder", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/LongAdder.html", "accessed": "2026-11-22", "supports": "LongAdder is preferable to AtomicLong when many threads update a sum used for statistics rather than fine-grained synchronisation; sum() is not an atomic snapshot", "status": "verified" },
+    { "title": "Java SE 21 API: java.time.Clock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/Clock.html", "accessed": "2026-11-22", "supports": "best practice is to inject a Clock so tests can use fixed or offset clocks; millis() is the wall-clock millisecond instant", "status": "verified" },
+    { "title": "Guava wiki: CachesExplained", "url": "https://github.com/google/guava/wiki/CachesExplained", "accessed": "2026-11-22", "supports": "Guava caches perform maintenance during writes and occasional reads rather than on a background thread, because such a thread would compete with user operations for locks, and expose cleanUp() for callers who want a schedule; a get that finds another thread loading the key waits for that load", "status": "verified" },
+    { "title": "Guava API: com.google.common.cache.LoadingCache.get(K)", "url": "https://guava.dev/releases/snapshot/api/docs/com/google/common/cache/LoadingCache.html", "accessed": "2026-11-22", "supports": "if another call is currently loading the value for the key, get simply waits for that thread to finish and returns its loaded value", "status": "verified" },
+    { "title": "Caffeine source: Cache.get(K, Function) Javadoc", "url": "https://raw.githubusercontent.com/ben-manes/caffeine/master/caffeine/src/main/java/com/github/benmanes/caffeine/cache/Cache.java", "accessed": "2026-11-22", "supports": "the entire get-with-mapping-function invocation is performed atomically so the function is applied at most once per key, and other threads may be blocked while the computation is in progress", "status": "verified" },
+    { "title": "Go: golang.org/x/sync/singleflight", "url": "https://pkg.go.dev/golang.org/x/sync/singleflight", "accessed": "2026-11-22", "supports": "the single-flight idea: only one execution is in flight for a given key at a time, and duplicate callers wait for the original and receive the same results", "status": "verified" },
+    { "title": "Matani, Shah, Mitra, An O(1) algorithm for implementing the LFU cache eviction scheme (arXiv 2110.11602)", "url": "https://arxiv.org/abs/2110.11602", "accessed": "2026-11-22", "supports": "an LFU eviction algorithm with O(1) insertion, access and eviction, in contrast to the usual logarithmic heap-based LFU; the frequency-list structure summarised in the DeepDive is from the paper body, which was not re-read", "status": "reference" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, Decorator, Singleton and Observer as used and as deliberately not used here", "status": "reference" }
+  ]
+}

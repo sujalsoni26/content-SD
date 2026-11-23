@@ -1,0 +1,88 @@
+**Multi-version concurrency control (MVCC)** means an update never overwrites the row other transactions are reading: it writes a new version and leaves the old one in place until no running transaction can still see it. That is why readers do not block writers in PostgreSQL and InnoDB, and why one anomaly survives that the table in [ACID](/learn/acid) does not mention.
+
+## Versions, snapshots and visibility
+
+Every PostgreSQL row version carries two hidden columns: `xmin`, the ID of the transaction that created it, and `xmax`, the ID of the transaction that deleted or replaced it. An `UPDATE` creates a new version with `xmin` set to the updating transaction and stamps the old version's `xmax` with the same ID. Each transaction's final status is recorded in `pg_xact`, and because old versions stay in place, crash recovery never has to undo anything (see [Write-ahead logging](/learn/wal)).
+
+A **snapshot** is the set of transactions that had committed when it was taken. A version is visible if its creator had committed and its deleter had not. Under Read Committed each statement takes a fresh snapshot; under Repeatable Read and Serializable the transaction takes one snapshot at its first statement and keeps it.
+
+InnoDB takes a different route. Each row holds a 6-byte transaction ID and a 7-byte **roll pointer** into the undo log, where the previous version is kept, and a reader whose snapshot predates the row's last change follows roll pointers back until it finds a version it may see.
+
+| | PostgreSQL | InnoDB |
+| --- | --- | --- |
+| Where old versions live | In the table itself, beside the new ones | In undo logs in undo tablespaces |
+| Reader finds an older version by | Checking xmin, xmax and commit status | Following the roll-pointer chain |
+| Cleanup | VACUUM (autovacuum is on by default) | Purge threads discarding undo records |
+| Symptom when cleanup lags | Table and index bloat, slower scans | Growing undo tablespace, slower consistent reads |
+
+Writers still block writers: two updates to the same row serialise on a row lock. <mark>MVCC removes read-write blocking, not write-write blocking.</mark>
+
+## The anomaly the ACID table leaves out
+
+[ACID](/learn/acid) covered dirty reads, non-repeatable reads, phantoms and the lost update. Snapshot isolation rules out the first three and, in PostgreSQL's Repeatable Read, also catches the lost update: a transaction that modifies a row another transaction changed after its snapshot fails with "could not serialize access due to concurrent update". One anomaly gets through: **write skew**.
+
+Two transactions read the same data, each makes a decision, and each writes a *different* row. Neither write conflicts with the other, so both commit, yet together they break a rule each checked alone. The classic illustration, from *Designing Data-Intensive Applications*: a hospital requires at least one doctor on call, and Alice and Bob, both on call, both ask to leave.
+
+<Mermaid caption="Write skew: both transactions see two doctors on call, each removes a different row, and the rule of at least one on call is broken without any row being written twice." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant A as Alice transaction
+    participant DB as On-call roster
+    participant B as Bob transaction
+    A->>DB: count doctors on call for shift 7
+    DB-->>A: 2
+    B->>DB: count doctors on call for shift 7
+    DB-->>B: 2
+    A->>DB: set Alice off call
+    B->>DB: set Bob off call
+    Note over DB: Both commit. Nobody is on call.
+`} />
+
+The same shape appears whenever a check reads several rows and a write changes a different one: two fans grabbing the last seat for an IPL match through separate booking rows. No isolation level below Serializable prevents it.
+
+### Naming the levels
+
+The SQL standard's Repeatable Read permits phantoms; PostgreSQL's does not, because it is really snapshot isolation, the level Berenson and colleagues named in 1995. InnoDB's default REPEATABLE READ also uses one snapshot per transaction for plain reads, while its locking reads take gap and next-key locks against phantom inserts.
+
+| Level | PostgreSQL | InnoDB |
+| --- | --- | --- |
+| Read Committed | Default; a new snapshot for every statement | Each consistent read takes a fresh snapshot |
+| Repeatable Read | Snapshot per transaction; no phantoms; a concurrent update aborts the second writer | Default; snapshot fixed at the first read; next-key locks on locking reads |
+| Serializable | Serializable snapshot isolation: detects dangerous dependency patterns and aborts one transaction | Repeatable Read plus plain reads converted to locking reads when autocommit is off |
+
+## Preventing write skew
+
+<Steps>
+
+1. **Find the invariant that spans rows.** At least one doctor on call; no two bookings for seat 14C.
+2. **Choose a mechanism.** PostgreSQL's `SERIALIZABLE` uses **serializable snapshot isolation (SSI)**: snapshot reads plus tracking of read-write dependencies between concurrent transactions, aborting one when it sees a pattern no serial order could produce (Cahill, Röhm and Fekete, 2008; in PostgreSQL since 9.1). The alternative is to lock what you read: `SELECT ... FOR UPDATE` on the rows you checked makes the second transaction wait. Where a constraint fits, use it: a unique index on show and seat rejects the second booking outright.
+3. **Retry.** Both Repeatable Read and Serializable fail with SQLSTATE 40001 under contention, and the application must rerun the transaction from the start.
+
+</Steps>
+
+## Old versions have to go somewhere
+
+Every update leaves a dead version behind, and if nobody collects them the table bloats. PostgreSQL's VACUUM reclaims dead tuples; autovacuum runs it by default. Two things defeat it. A long-running transaction, or an idle-in-transaction session, pins an old snapshot, so every younger version must be kept. And transaction IDs are 32-bit: every table must be vacuumed at least once every two billion transactions, or the server stops accepting new transactions to avoid **wraparound**. InnoDB's documentation gives the mirror advice: commit regularly, even read-only transactions, or purge stalls and the undo tablespace grows.
+
+<Callout type="analogy" title="Newspaper editions">
+
+Each snapshot is that morning's edition: you read the edition that was current when you sat down, and the printer keeps running new editions without waiting for you. Write skew is two editors who each read the same edition, each conclude the other's story covers the topic, and each pull their own, so the evening edition has no story at all.
+
+</Callout>
+
+<Callout type="interview" title="Name the anomaly, then the fix">
+
+"Readers don't block writers because MVCC keeps versions; snapshot isolation still allows write skew when two transactions check overlapping data and write different rows. I'd use SERIALIZABLE with retries on 40001, SELECT FOR UPDATE on the rows the decision depends on, or a unique constraint where one fits."
+
+</Callout>
+
+<DeepDive title="Go deeper: how SSI spots the dangerous shape">
+
+Every write-skew anomaly contains a transaction that read something a concurrent transaction later overwrote, while being itself read-then-overwritten by another. SSI records lightweight predicate locks on what each transaction reads, watches for a transaction with both an incoming and an outgoing read-write dependency to concurrent transactions, and aborts one of them before the cycle can commit. It never blocks, but it is conservative: some aborted transactions would have been harmless, so treat 40001 as routine.
+
+</DeepDive>

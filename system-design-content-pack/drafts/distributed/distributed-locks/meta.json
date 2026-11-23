@@ -1,0 +1,66 @@
+{
+  "slug": "distributed-locks",
+  "title": "Distributed locking",
+  "moduleId": "distributed",
+  "level": "advanced",
+  "minutes": 9,
+  "problem": "Two workers on different machines both believe they hold the lock for the same job, and the one whose lease silently expired writes last.",
+  "summary": "A distributed lock grants one holder at a time across machines, usually a TTL key in Redis or a consensus store. The TTL can expire under a slow holder, so a correct lock needs a fencing token the resource checks, or no lock at all.",
+  "catTip": "I sit on the warm server and declare it mine, then nap for forty seconds. When I wake, another cat is sitting there too: my claim expired while I slept. A lock with a TTL is a lease, and a lease needs a fencing token.",
+  "recall": {
+    "q": "A worker holding a Redis lock with a 30-second TTL pauses for 40 seconds and then writes. What goes wrong, and what prevents it?",
+    "a": "The key expired during the pause, another worker acquired the lock, and both write. The TTL makes the lock a lease whose expiry the holder cannot see; a fencing token checked by the storage rejects the late write, and a compare-and-delete release stops the first worker deleting the second worker's lock."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "A lock key with a TTL expires while its holder is paused or slow, a second worker takes the lock and both write to the same resource; a plain DEL on release can also remove a lock that now belongs to someone else.",
+    "tradeoffs": "Every distributed lock is a lease, so you pay either for a consensus round trip plus a fencing check on the resource, or you accept that under pauses and clock shifts two holders can briefly overlap.",
+    "explainSimply": "A distributed lock is a hotel key card that expires at check-out, so a room is never stuck forever if a guest disappears. The catch is that an oversleeping guest does not notice the card has expired, and the next guest is let in while they are still inside. A safe system has the room itself check whose turn it is.",
+    "hint": "Think about what the holder knows at the moment its lease expires, and who else could do the checking."
+  },
+  "meow": "Meow-tual exclusion: my spot on the server expires while I nap. Fence it, or purr-haps two cats write at once.",
+  "quiz": [
+    {
+      "prompt": "A worker acquires a Redis lock with SET NX PX 30000, then stalls for 45 seconds in a garbage-collection pause before writing. Which statement is correct?",
+      "options": [
+        "Redis notices the worker is paused and extends the lock until it finishes",
+        "The lock expired during the pause, another worker may hold it, and only a check on the storage side such as a fencing token can reject the late write",
+        "The compare-and-delete release script prevents the double write because the token no longer matches",
+        "Redlock would prevent this because a majority of five nodes must agree before the key expires"
+      ],
+      "answer": 1,
+      "explanation": "Expiry is time-based and invisible to the holder, so only the resource can refuse the stale write. The compare-and-delete script protects the release step, stopping the late worker from deleting someone else's lock, not the write."
+    },
+    {
+      "prompt": "Which alternative removes the need for a distributed lock when the goal is to run a nightly job exactly once?",
+      "options": [
+        "Insert a row keyed by job and date under a unique constraint and let the loser's insert fail",
+        "Have every worker sleep a random time before starting so they rarely collide",
+        "Give the lock a longer TTL so the job always finishes before it expires",
+        "Replicate the Redis lock key to a replica so it survives a primary failure"
+      ],
+      "answer": 0,
+      "explanation": "A unique constraint makes the database choose exactly one winner atomically. A longer TTL only moves the failure to a longer pause, and random delays merely make collisions less likely."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Why must a Redis lock be released with a compare-and-delete script rather than a plain DEL?",
+      "a": "A client whose lock has already expired may run DEL and remove the lock another client now holds, letting a third client in. Comparing the stored random token first means a late release finds a different token and does nothing."
+    },
+    {
+      "q": "Kleppmann and antirez disagreed about Redlock. Name one point of disagreement and one point of agreement.",
+      "a": "Disagreement: whether a majority of independent Redis nodes is a safe correctness lock given wall-clock expiry and pauses (Kleppmann: no; antirez: yes, given bounded clock drift). Agreement: a holder paused after acquiring cannot know its lease expired, so the resource must check a token, and Redis should expire keys on a monotonic clock."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Redis documentation, \"Distributed Locks with Redis\" (single-instance recipe and the Redlock algorithm)", "url": "https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/", "accessed": "2026-11-22", "supports": "SET resource NX PX 30000 with a random value; the compare-and-delete Lua script and DELEX IFEQ in Redis 8.4; Redlock with N=5 masters, majority of three, validity minus elapsed time and drift, random retry delay; asynchronous replication failover race; the fsync-every-second default and delayed restarts; the disclaimer about fencing tokens and wall-clock expiry", "status": "verified" },
+    { "title": "Redis documentation, SET command", "url": "https://redis.io/docs/latest/commands/set/", "accessed": "2026-11-22", "supports": "NX sets only if the key does not exist and returns a null reply otherwise; PX sets a millisecond expiry", "status": "verified" },
+    { "title": "Martin Kleppmann, \"How to do distributed locking\" (8 February 2016)", "url": "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html", "accessed": "2026-11-22", "supports": "efficiency versus correctness locks; the GC-pause scenario; fencing tokens as monotonically increasing numbers rejected by the storage (tokens 33 and 34); the critique that Redlock issues no fencing tokens and depends on wall-clock timing; the recommendation of a single Redis node for efficiency and a consensus system with fencing for correctness", "status": "verified" },
+    { "title": "Salvatore Sanfilippo (antirez), \"Is Redlock safe?\" (2016)", "url": "http://antirez.com/news/101", "accessed": "2026-11-22", "supports": "the reply: pauses after acquisition affect every auto-releasing lock; Redlock assumes bounded clock drift rather than synchronised clocks; delays before acquisition are caught by the validity check; the random token can be checked by the resource; agreement that Redis should use a monotonic clock", "status": "verified" },
+    { "title": "Apache ZooKeeper, \"ZooKeeper Recipes and Solutions\", Locks", "url": "https://zookeeper.apache.org/doc/current/recipes.html", "accessed": "2026-11-22", "supports": "the lock recipe: ephemeral sequential child nodes, lowest sequence number holds the lock, watch only the next-lower node to avoid the herd effect, delete to release", "status": "verified" },
+    { "title": "etcd documentation, \"etcd concurrency API reference\" (Lock service)", "url": "https://etcd.io/docs/v3.5/dev-guide/api_concurrency_reference_v3/", "accessed": "2026-11-22", "supports": "a lock is tied to a lease and is held until Unlock or until the lease expires or is revoked", "status": "verified" },
+    { "title": "etcd source, client/v3/concurrency/mutex.go", "url": "https://github.com/etcd-io/etcd/blob/main/client/v3/concurrency/mutex.go", "accessed": "2026-11-22", "supports": "the mutex writes a key under the lock prefix in a transaction guarded by CreateRevision equal to zero, attached to the session lease; the key with the lowest creation revision owns the lock; waiters wait for lower-revision keys to be deleted", "status": "verified" }
+  ]
+}

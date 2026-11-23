@@ -1,0 +1,64 @@
+{
+  "slug": "lld-splitwise",
+  "title": "LLD: Splitwise",
+  "moduleId": "lld-practice",
+  "level": "intermediate",
+  "minutes": 12,
+  "problem": "Three friends share a ₹1,000 dinner, the split says ₹333.33 each, one paisa vanishes, and after a month the group needs nine payments to settle.",
+  "summary": "Model each expense as an immutable record whose shares, in paise, must sum exactly to the amount, make the split a Strategy, derive balances from an append-only ledger, and reduce settlements with a greedy largest-creditor, largest-debtor pass whose limits you can state.",
+  "catTip": "I paid for the fish, the humans split it three ways, and the leftover paisa went to the first cat on the list. Rules are rules. The ledger never forgets who owes me.",
+  "recall": {
+    "q": "What is the key design decision in a Splitwise-style system, and what does it protect?",
+    "a": "Treat money as integer paise and make every Expense an immutable record whose shares must sum exactly to the amount, produced by a SplitStrategy (equal, exact, percent) that places rounding leftovers deterministically. Balances are derived from this append-only ledger, and debt simplification is a greedy pass over net balances that minimises the total money moved but not, in general, the number of transfers."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without an exact, validated split and an immutable ledger, balances drift by paise, edits corrupt history, and a group ends up making far more payments than it needs.",
+    "tradeoffs": "Integer paise and strict validation reject inputs a casual user expects to work, and simplification is either a fast greedy pass that may use more transfers than necessary or an exact search that explodes with group size.",
+    "explainSimply": "Think of a shared trip notebook where every page is a receipt that can never be erased, only cancelled by a new page. At the end you add up each person's pages to get one number, and the person who is owed most is paid by the person who owes most until everyone is at zero.",
+    "hint": "Ask what the shares of one expense must add up to, and which unit makes that check exact."
+  },
+  "meow": "Meow paid 100000 paise. Three cats. 33334, 33333, 33333. Not one paisa lost; the ledger purrs.",
+  "quiz": [
+    {
+      "prompt": "A ₹1,000 expense is split equally among three people in a system that stores money as integer paise. Which result is correct?",
+      "options": [
+        "₹333.33 each, with the missing paisa written off",
+        "33334, 33333 and 33333 paise, assigned in a fixed participant order so the shares sum to exactly 100,000",
+        "₹333.333... each, stored as doubles and rounded only for display",
+        "₹334, ₹333 and ₹333, rounding to whole rupees to avoid the problem"
+      ],
+      "answer": 1,
+      "explanation": "The shares of an expense must sum to its amount, so the leftover paisa is assigned deterministically rather than lost. Doubles rounded for display are the strongest distractor because the screen looks right while the stored total no longer equals the expense and the drift compounds."
+    },
+    {
+      "prompt": "After netting, a group has balances Asha +400, Bala +300, Chetan -200, Deepa -200 and Esha -300. Which statement about the greedy largest-creditor, largest-debtor simplification is correct?",
+      "options": [
+        "It always produces the minimum number of transfers, here three",
+        "It produces at most n - 1 transfers and moves the least total money, but here it yields four while Esha to Bala, Chetan to Asha and Deepa to Asha settles everything in three",
+        "It reduces the count by adjusting some members' net balances slightly",
+        "It is exponential in the number of members, so apps run it only overnight"
+      ],
+      "answer": 1,
+      "explanation": "Greedy pairs Asha with Esha first and finishes in four transfers, while the exact pairing needs three; minimising transfers exactly is NP-hard, so the greedy pass is what apps ship. The first option is the strongest distractor because it holds for many small groups and fails only when a zero-sum pairing is split by the largest-first choice."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A new split type is requested: by shares, such as 2:1:1. Where does it go, and what must it guarantee?",
+      "a": "A new SplitStrategy implementation. It must return shares that sum exactly to the amount in paise, placing rounding leftovers deterministically; Expense, BalanceSheet and ExpenseService do not change, because Expense re-checks the sum in its constructor."
+    }
+  ],
+  "glossary": [
+    { "term": "NP-hard", "full": "Non-deterministic Polynomial-time hard", "note": "At least as hard as every problem in NP; no polynomial-time algorithm is known, so exact answers for large inputs are impractical and heuristics are used instead." }
+  ],
+  "sources": [
+    { "title": "Tom Verhoeff, \"Settling Multiple Debts Efficiently: An Invitation to Computing Science\", Informatics in Education 3(1), 2004, pp. 105-126", "url": "https://wstomv.win.tue.nl/publications/settling-debts.pdf", "accessed": "2026-11-22", "supports": "the greedy algorithm yields an acyclic bipartite transfer graph with at most N - 1 transfers and minimum total amount; minimising the number of transfers equals maximising zero-sum parts; the two-debtor case is the subset-sum problem; the general problem is at least as hard as 3-Partition, which is NP-complete in the strong sense", "status": "verified" },
+    { "title": "Informatics in Education, article record for Verhoeff (2004), doi 10.15388/infedu.2004.08", "url": "https://www.infedu.vu.lt/journal/INFEDU/article/612", "accessed": "2026-11-22", "supports": "the publication details of the paper", "status": "secondary" },
+    { "title": "Splitwise blog, \"Debts made simple\" (14 September 2012)", "url": "https://blog.splitwise.com/2012/09/14/debts-made-simple/", "accessed": "2026-11-22", "supports": "the product's simplify-debts promises: everyone owes the same net amount at the end and nobody owes more in total than before; a member may be told to pay someone they did not deal with directly", "status": "verified" },
+    { "title": "Java SE 21 API: java.math.BigDecimal", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/math/BigDecimal.html", "accessed": "2026-11-22", "supports": "new BigDecimal(0.1) equals 0.1000000000000000055511151231257827021181583404541015625; divide without a rounding mode throws ArithmeticException for a non-terminating quotient; setScale applies the given rounding mode", "status": "verified" },
+    { "title": "Java SE 21 API: java.math.RoundingMode", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/math/RoundingMode.html", "accessed": "2026-11-22", "supports": "HALF_EVEN (banker's rounding) statistically minimises cumulative error over repeated calculations; HALF_UP is the mode commonly taught in school", "status": "verified" },
+    { "title": "Garey and Johnson, Computers and Intractability: A Guide to the Theory of NP-Completeness (Freeman, 1979), problems SP13 Subset Sum and SP15 3-Partition", "url": "https://en.wikipedia.org/wiki/Computers_and_Intractability", "accessed": "2026-11-22", "supports": "the NP-completeness of subset sum and the strong NP-completeness of 3-Partition that Verhoeff's reductions rely on", "status": "reference" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994), ch. 5 Behavioral Patterns", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "the definition and intent of Strategy and Observer", "status": "reference" }
+  ]
+}

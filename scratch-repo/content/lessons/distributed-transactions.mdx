@@ -1,0 +1,98 @@
+An **atomic commit** across two systems means a change lands on both or on neither, even if one crashes in the middle. Inside one database the transaction log provides this (see [ACID transactions](/learn/acid)). Once the two sides are different systems, two shards, a database and a broker, two services' databases, there is no shared log, and each side can commit or fail on its own.
+
+## Why "commit both" is not enough
+
+Commit the order in the Orders database, then the stock decrement in Inventory. If the second commit fails, the first is already durable and cannot be taken back; reversing the order moves the problem. What is missing is a way to ask each side "can you commit this?" and have the answer be a *promise*: a participant that says yes must be able to commit later whatever happens, which means forcing everything to its log and keeping its locks until told otherwise.
+
+## Two-phase commit
+
+**Two-phase commit (2PC)** turns that promise into a protocol driven by a **coordinator** (a transaction manager, or one of the participants) across the **participants**, the resources being changed.
+
+<Steps>
+
+1. **Prepare.** The coordinator sends *prepare* to every participant.
+2. **Vote.** Each participant does the work, forces a *prepared* record to its log, keeps its locks and votes *yes*, or votes *no* and aborts locally.
+3. **Decide.** With all votes in, the coordinator logs *commit* (all yes) or *abort* (any no, or a timeout). That write is the commit point.
+4. **Complete.** The coordinator sends the decision; participants apply it, release their locks and acknowledge, and the coordinator forgets the transaction.
+
+</Steps>
+
+Logging before acting is what makes the protocol safe. Its weakness is what happens between step 2 and step 4.
+
+<Mermaid caption="After voting yes, a participant is in doubt: it cannot commit, because another vote may have been no, and cannot abort, because the coordinator may have decided commit. It holds its locks until the coordinator comes back." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Coordinator
+    participant O as Orders DB
+    participant I as Inventory DB
+    C->>O: prepare
+    C->>I: prepare
+    Note over O: log prepared, keep locks
+    Note over I: log prepared, keep locks
+    O-->>C: yes
+    I-->>C: yes
+    Note over C: Crashes before logging a decision
+    Note over O,I: In doubt, rows locked, nobody can decide
+    Note over C: Restarts, reads its log, finds no decision
+    C->>O: abort
+    C->>I: abort
+    Note over O,I: Locks released
+`} />
+
+## The in-doubt window
+
+A participant that has voted yes is **in doubt** until the decision arrives and cannot resolve the transaction alone, so if the coordinator crashes or is partitioned away, every participant holds its locks until the coordinator returns and replays its log. This is why 2PC is a **blocking** protocol; asking the other participants does not help if they are all in doubt too.
+
+The other crash is easier: a participant that fails after voting yes restarts, finds the prepared record in its log, re-acquires the locks and asks the coordinator for the outcome. PostgreSQL makes this state visible: `PREPARE TRANSACTION` writes the transaction to disk so it survives a crash, keeps its locks, and waits for `COMMIT PREPARED` or `ROLLBACK PREPARED`. It is off by default (`max_prepared_transactions` is zero) because a forgotten prepared transaction holds its locks indefinitely, the in-doubt window made permanent.
+
+**Three-phase commit** (Skeen, 1981) adds a pre-commit round so participants can decide without the coordinator, but assumes crashed nodes stay crashed and no partitions, so it is rarely used.
+
+<Callout type="analogy" title="The officiant who faints">
+
+A wedding is a two-phase commit. The officiant asks each side "do you?" (prepare), and only once both have said yes announces the marriage (commit). A "yes" is a promise: having given it, neither side may walk out while the officiant decides. If the officiant faints after both have answered, the couple stands at the altar able neither to leave nor to marry, which is exactly the in-doubt participant holding its locks. Where the analogy stops: a second officiant can be fetched in minutes, while a crashed coordinator may hold the decision in a log nobody else can read.
+
+</Callout>
+
+## XA, the standard interface
+
+The X/Open **XA** specification (1991) standardised the conversation between a transaction manager and resource managers: `xa_start` and `xa_end` to bracket work in a global transaction, `xa_prepare`, `xa_commit` and `xa_rollback` for the two phases, `xa_recover` to list in-doubt branches after a crash. PostgreSQL's `PREPARE TRANSACTION` is its resource-manager side. XA gives you 2PC across vendors, blocking included.
+
+## 2PC on top of consensus
+
+Blocking is really a single-point-of-failure problem: the coordinator's log lives on one machine. Replicate it with consensus and the coordinator can fail without taking its decision with it (see [Consensus: Raft in one picture](/learn/consensus)).
+
+Google's Spanner does exactly this. Data is split into Paxos groups, each with a leader. A client buffers its writes, picks one group as **coordinator**, and sends the commit request to every participant group's leader. Each participant leader takes write locks, chooses a prepare timestamp and logs a *prepare* record through Paxos; the coordinator leader collects the votes, chooses the commit timestamp and logs the *commit* record through Paxos; every participant then logs the outcome through Paxos. If the coordinator leader dies, its group's new leader has the same replicated log, so the decision survives. Each phase is a consensus write across datacentres: that is the latency cost.
+
+<Mermaid caption="Spanner-style layering: two-phase commit runs between group leaders, and each leader's prepare and commit records are themselves replicated by consensus within its group." chart={`flowchart LR
+    CL["Client with buffered writes"] --> CO["Coordinator group leader"]
+    CL --> P1["Participant leader, group 1"]
+    CL --> P2["Participant leader, group 2"]
+    P1 -->|prepare record via Paxos| R1["Group 1 replicas"]
+    P2 -->|prepare record via Paxos| R2["Group 2 replicas"]
+    P1 -->|vote yes| CO
+    P2 -->|vote yes| CO
+    CO -->|commit record via Paxos| R0["Coordinator group replicas"]
+`} />
+
+CockroachDB replicates its transaction record and provisional writes through Raft and heartbeats the record, so a dead coordinator's transaction can be aborted by whoever runs into it. Google's earlier Percolator (2010) ran a client-coordinated 2PC over Bigtable's single-row transactions, with a *primary lock* as the commit point. SQL across shards on these foundations is [Distributed SQL](/learn/distributed-sql).
+
+## Why services usually avoid it
+
+Between microservices 2PC is rare, and not only because few HTTP APIs can "prepare". Locks are held across network calls for the whole protocol, so the slowest participant sets the latency. Availability is coupled: the coordinator *and* every participant must be up at once, and a partition leaves rows locked inside otherwise healthy services. Spanner's authors argue the opposite inside one database, where the coordinator is replicated, and that is the right split: 2PC where the system beneath you replicates the coordinator; between independently deployed services, local transactions with compensations, a [saga](/learn/sagas).
+
+<Callout type="interview" title="Say where the locks are held">
+
+"Two-phase commit gives atomicity, not availability: between prepare and the decision every participant holds locks and waits for the coordinator. I would use it inside a database that replicates the coordinator with consensus, and sagas between services."
+
+</Callout>
+
+<DeepDive title="Go deeper: heuristic decisions">
+
+XA lets an operator break an in-doubt wait by *heuristically* committing or rolling back a branch; `xa_recover` lists such branches and `xa_forget` discards one. The trade is a certain outage (locks held forever) for a possible inconsistency that someone reconciles by hand.
+
+</DeepDive>

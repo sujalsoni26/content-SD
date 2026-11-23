@@ -1,0 +1,307 @@
+Sell every seat of every show exactly once, through a web and mobile app, while an IPL final puts five thousand seats in front of two hundred thousand fans in the same minute. Storage and throughput are not the hard part. The hard part is that a **seat** is a thing two people can want at the same moment, and the system must say yes to at most one of them, give that person time to pay, and take the seat back if they do not. This study assumes [Idempotency](/learn/idempotency), [ACID transactions](/learn/acid) and [Caching](/learn/caching), continues the object model and the **seat hold** from [LLD: Movie ticket booking](/learn/lld-movie-ticket-booking), and follows the order of [How to work a case study](/learn/case-study-method).
+
+## Requirements
+
+- **Functional:** list events and shows; show a seat map with each seat's price and whether it is free, held or booked; hold one to ten seats for 10 minutes; pay within the hold through a payment service provider (PSP); confirm the booking and issue tickets; cancel before a cut-off with a refund; open a sale at an announced time (a **drop**).
+- **Out of scope:** search, dynamic pricing, resale, fraud scoring, and the inside of payments, which is [Design a payment system](/learn/design-payment-system). Seating is assigned; general admission appears under *Trade-offs*.
+- **Non-functional:**
+  - **No double booking, ever**, because a second ticket for one seat cannot be apologised away; where correctness and availability conflict, refuse the hold.
+  - **Holds expire reliably**, even if the server that created one dies, because a leaked hold is a seat nobody can buy.
+  - **Confirm is idempotent**, because payment callbacks are retried and fans double-tap.
+  - **Survive the drop**: tens of thousands of fans arriving in one minute for a few thousand seats must not take down the database or the other shows on the platform.
+  - **Seat map in under 200 ms** at the 99th percentile, because the fan is choosing in real time; the map may be about a second stale.
+
+## Estimation
+
+Assume, for a normal day, 500k bookings of 2.5 seats each, two holds per booking (half are abandoned), 20 seat-map views per booking, and peaks of three times the average. For the drop assume 5,000 seats released at 12:00, 200,000 fans arriving in the first minute with half of them in the first 10 seconds, each refreshing the seat map every 2 seconds while choosing, a 10-minute hold, 2.5 seats per hold, a queue page polled every 10 seconds, and a seat map of 5 KB (one byte per seat; the layout is a static file). Rules of thumb to measure before trusting: a PostgreSQL primary sustains a few thousand short write transactions a second, a Redis node about 100k operations a second.
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Normal-day seat-map reads | 5 × 10⁵ × 20 ÷ 10⁵ s | \~100/s, \~300/s at peak |
+| Normal-day holds and confirms | 10⁶ ÷ 10⁵ s and 5 × 10⁵ ÷ 10⁵ s | \~10 holds/s, \~5 confirms/s |
+| Drop: arrivals | 100,000 in the first 10 s | 10k/s |
+| Drop: seat-map reads if everyone is let in | 200,000 × 0.5/s | 100k/s |
+| Drop: seat-map egress at that rate | 100k × 5 KB | 500 MB/s ≈ 4 Gbps |
+| Drop: hold attempts if everyone is let in | 200,000 ÷ 60 s | \~3,300/s |
+| Holds the inventory can carry | 5,000 ÷ 2.5 | 2,000, so 99 attempts in 100 fail |
+| Fans to admit in minute one | 2,000 holds × 1.5 for abandoned holds | 3,000, i.e. 50/s |
+| Database writes behind a queue | 50 holds/s × 2.5 seat rows + 1 hold row | \~175 row writes/s |
+| Queue-page polls | 200,000 ÷ 10 s | 20k/s, two counter reads each |
+| Hot data for the show | 5,000 seat rows × \~100 B + 2,000 holds × \~200 B | \~1 MB |
+| Bookings kept | 5 × 10⁵ × 365 × \~1 KB | \~180 GB a year |
+
+→ <mark>Two thousand holds for two hundred thousand fans, and a map wanted a hundred thousand times a second that changes fifty times a second</mark>. With a queue in front of it the database's share is 175 row writes a second, which any primary does; without one it faces 3,300 attempts a second and must refuse 99% of them under lock. This is the mixed shape named in [Three system shapes](/learn/system-shapes): read-heavy seat maps and write bursts that must be correct. In one line: cache the map, queue the people, let the database decide the seat.
+
+## API
+
+| Endpoint | Request | Success | Errors |
+| --- | --- | --- | --- |
+| `GET /shows/{show_id}/seat-map` | – | 200 + `{ "version", "seats": "FFHBF…" }` (one letter per seat: free, held, booked), `Cache-Control: max-age=1` | 404 |
+| `GET /queue/{show_id}` | device cookie | 200 + `{ "position" }` while waiting, `{ "admitted": true, "token" }` once admitted | 404 no sale in progress |
+| `POST /holds` | `{ "show_id", "seat_ids": [ … ] }` + `Idempotency-Key` + `X-Queue-Token` | 201 + `{ "hold_id", "expires_at", "amount" }` | 403 not admitted · 409 + `{ "taken": [ … ] }` · 422 over ten seats or a second active hold |
+| `POST /holds/{hold_id}/pay` | `{ "payment_method" }` | 202 + `{ "payment_id", "next_action" }`, hold extended | 410 hold expired · 409 already confirmed |
+| `POST /holds/{hold_id}/confirm` | internal, from the payment service, `Idempotency-Key` = payment id | 200 + `{ "booking_id", "tickets" }`, the same body on a repeat | 409 hold released, so the payment is cancelled |
+| `DELETE /holds/{hold_id}` | – | 204 | 404 |
+| `GET /bookings/{booking_id}` | – | 200 + seats and tickets | 404 |
+
+The hold returns 201 before any money moves, because the seat is what the fan is racing for; paying returns 202 because the PSP, not this service, decides when it is done. The 409 on a hold lists the seats that were taken so the client can refresh the map and let the fan choose again.
+
+## Data model
+
+```sql
+-- one row per seat per show: the thing two fans fight over
+CREATE TABLE show_seat (
+  show_id         bigint NOT NULL,
+  seat_id         int    NOT NULL,
+  state           text   NOT NULL CHECK (state IN ('FREE', 'HELD', 'BOOKED')),
+  hold_id         uuid,
+  hold_expires_at timestamptz,
+  version         int    NOT NULL DEFAULT 0,
+  PRIMARY KEY (show_id, seat_id)
+) PARTITION BY HASH (show_id);
+
+CREATE TABLE hold (
+  hold_id         uuid PRIMARY KEY,
+  show_id         bigint NOT NULL,
+  user_id         bigint NOT NULL,
+  status          text   NOT NULL,   -- HELD, PAYMENT_PENDING, CONFIRMED, EXPIRED, RELEASED
+  expires_at      timestamptz NOT NULL,
+  amount          int    NOT NULL,
+  idempotency_key text   NOT NULL UNIQUE,
+  payment_id      text
+);
+
+CREATE TABLE booking (
+  booking_id bigint PRIMARY KEY,
+  hold_id    uuid   NOT NULL UNIQUE,
+  user_id    bigint NOT NULL,
+  show_id    bigint NOT NULL,
+  payment_id text   NOT NULL UNIQUE
+);
+
+-- the backstop: a seat of a show belongs to one booking, whatever the code does
+CREATE TABLE booking_seat (
+  show_id    bigint NOT NULL,
+  seat_id    int    NOT NULL,
+  booking_id bigint NOT NULL REFERENCES booking,
+  PRIMARY KEY (show_id, seat_id)
+);
+```
+
+`show_seat` is partitioned by show so that a multi-seat hold is always one local transaction; its `version` column serves the optimistic variant in deep dive 1. A hold whose time has passed counts as free the moment anyone reads it, as in the LLD lesson, so correctness never waits for the sweeper. `hold.idempotency_key` makes a retried `POST /holds` return the first hold rather than a second, and `booking.payment_id` makes a replayed confirm find the booking it already created. `booking_seat` has no business logic at all: its primary key is the one rule no bug can argue with.
+
+## High-level design
+
+<Mermaid caption="Fans meet the CDN and the waiting room first. Only admitted fans reach the booking tier, and only the database decides a seat. Events after commit keep the cache, tickets and email out of the transaction." chart={`flowchart LR
+    U["Fans"] --> CDN["CDN: layout, prices, seat-map snapshot"]
+    U --> WR["Waiting room: counters and admission tokens"]
+    WR --> GW["API gateway: verifies token, rate limits"]
+    GW --> BS["Booking service, stateless"]
+    BS --> R["Redis: seat-map cache, queue counters"]
+    BS --> DB["PostgreSQL: show_seat, hold, booking"]
+    BS --> PS["Payment service"]
+    PS --> PSP["PSP"]
+    PSP -. "webhook" .-> PS
+    PS --> BS
+    SW["Hold sweeper"] --> DB
+    DB -. "outbox" .-> EV["Events: held, released, confirmed"]
+    EV --> R
+    EV --> T["Tickets and email"]
+`} />
+
+- **CDN and seat-map cache:** serve the layout for a year and the 5 KB map for a second, because the map is wanted 100k times a second and may be a second stale (see [CDN](/learn/cdn)).
+- **Waiting room:** admits fans at the rate holds can be made, so that the booking tier sees 50 hold attempts a second instead of 3,300 (deep dive 2).
+- **API gateway:** checks the signed admission token and rate-limits per user, so that nobody skips the queue by calling the API directly (see [Rate limiting](/learn/rate-limiting)).
+- **Booking service:** stateless; runs the hold and confirm transactions, so that any instance serves any request and a crash loses nothing committed.
+- **PostgreSQL:** owns seats, holds and bookings, because "who gets E7" needs row locks, constraints and durability in one place.
+- **Redis:** holds the map snapshot and the queue counters, because both are read far more than written and both may be approximate.
+- **Payment service:** authorises when the fan pays and captures only after confirm, so that a hold which lapses mid-payment is a cancelled authorisation, not a refund.
+- **Hold sweeper:** returns expired holds to sale and invalidates the map; correctness does not depend on it running on time.
+- **Outbox and events:** publish `held`, `released` and `confirmed` after commit, so that cache invalidation, tickets and email never sit inside the seat transaction (see [Pub/Sub](/learn/pubsub)).
+
+<Mermaid caption="Hold, pay, confirm. The hold is one transaction under row locks, paying extends the hold and authorises without capturing, confirm is a second transaction idempotent on the payment id, and capture happens only after the database has said yes." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant F as Fan
+    participant B as Booking service
+    participant DB as PostgreSQL
+    participant P as Payment service
+    participant PSP as PSP
+    F->>B: POST /holds E7 and E8, queue token
+    B->>DB: BEGIN, lock E7 and E8 FOR UPDATE NOWAIT
+    B->>DB: both FREE or expired, so HELD until 12:10, insert hold 9001, COMMIT
+    DB-->>B: committed
+    B-->>F: 201 hold 9001, pay by 12:10
+    F->>B: POST /holds/9001/pay
+    B->>DB: hold still HELD, so extend to 12:15, PAYMENT_PENDING
+    B->>P: authorise 1,200 INR, key hold-9001
+    P->>PSP: authorise, same key
+    PSP-->>P: authorised pi_9a
+    P-->>B: authorised
+    B-->>F: 202 payment in progress
+    alt the fan completes payment
+        P->>B: confirm hold 9001, key pi_9a
+        B->>DB: lock hold 9001, CONFIRMED, insert booking and booking_seat, seats BOOKED, COMMIT
+        DB-->>B: committed, or unique violation if already confirmed
+        B-->>P: 200 booking 5150
+        P->>PSP: capture pi_9a
+        Note over P,B: a repeated confirm with key pi_9a returns booking 5150 again
+    else 12:15 passes with no confirm
+        B->>DB: sweeper sets hold 9001 EXPIRED and the seats FREE
+        B->>P: cancel authorisation pi_9a
+        P->>PSP: cancel pi_9a, funds released
+    end
+`} />
+
+## Storage and caching
+
+| Data | Where | Why |
+| --- | --- | --- |
+| Seats, holds, bookings | PostgreSQL, partitioned by show | The seat decision needs row locks, constraints and durability together |
+| Seat-map snapshot | Redis `seatmap:{show_id}` with a 1 s TTL, and the CDN with `max-age=1` | 100k reads/s for 50 changes/s; a one-second-old map costs a 409 the fan half expected |
+| Layout, prices, event pages | CDN, long TTL, versioned file names | They do not change during a sale |
+| Queue counters and tokens | Redis, or a waiting-room product at the edge | 10k arrivals/s and 20k polls/s must never reach the database |
+| Payment state | The payment service's own store | Money has its own consistency and audit rules |
+| Tickets (PDF, QR) | Object storage | Written once, read by scanners at the gate (see [Object storage](/learn/object-storage)) |
+
+The map is rebuilt from `show_seat` on a miss and **deleted**, not updated, when a `held`, `released` or `confirmed` event arrives, because deletes are safe in any order. Expect a stampede on every invalidation during the drop, when thousands of fans refresh the same key in the same second; one rebuild with the others waiting (request coalescing) keeps that to one database read per change. Nothing about a hold or a booking is cached, because a cached hold is a lie about who owns a seat.
+
+## Scaling
+
+The shard key is `show_id`, because a hold never spans shows: every multi-seat hold stays one local transaction, and a venue's quiet Tuesday show and its sold-out Saturday one can live on different partitions (see [Sharding](/learn/sharding)). The hot show at a drop lands on one partition, and that is fine, because the waiting room caps its write rate at about 50 holds a second. <mark>The database is not what you scale for the drop; the queue is.</mark>
+
+The booking tier is stateless behind a load balancer. The read path scales at the edge, not with replicas. The sweeper runs as several workers that each take a batch of expired holds with `SELECT … FOR UPDATE SKIP LOCKED`, which PostgreSQL's documentation describes for exactly this queue-like access, so workers never fight over rows. The queue is two counters per show, which one Redis node serves at 20k reads a second with room to spare; a drop that outgrows it moves to a product that runs the queue at the edge.
+
+## Consistency and availability
+
+| Decision | Guarantee | Why |
+| --- | --- | --- |
+| Who holds or owns a seat | Strong: one primary, row locks, unique constraints | Two owners cannot be reconciled afterwards |
+| Seat map | Eventual, about one second | A stale map is corrected by a 409 at hold time |
+| Queue position | Approximate | Nobody checks, and the admission decision is exact |
+| Booking confirmation | Strong and idempotent | A ticket must exist exactly once |
+| Payment outcome | Eventual, reconciled with the PSP | The PSP is outside our transaction |
+
+In the terms of [Consistency](/learn/consistency) and [CAP](/learn/cap), the write path is CP: during a primary failover, holds and confirms fail for the thirty seconds it takes to promote a replica, the right failure because a fan can retry and a double booking cannot be undone. The read path stays available, because the map and the queue live in Redis, and a retried hold carries the same idempotency key, so the failover never produces two holds for one tap.
+
+<Callout type="analogy" title="One cloakroom attendant">
+
+A cloakroom has one attendant and a board of numbered hooks. The crowd sees the board from the hall, a steward lets people in a few at a time, but only the attendant hangs a coat, one at a time. Where the analogy breaks: the board in the hall is a photo taken a second ago, so you may find your hook taken, and the attendant takes coats back if you have not paid within ten minutes.
+
+</Callout>
+
+## Failure and recovery
+
+| Failure | What users see | How it heals |
+| --- | --- | --- |
+| Booking server dies after creating a hold | Nothing: the hold and its expiry are in the database | Any instance serves the next request; the hold expires on its own if the fan walks away |
+| Fan pays at 12:09:59 for a hold that expires at 12:10:00 | Nothing, usually | `pay` extends the hold to 12:15 **before** authorising, so the payment cannot outlive the hold |
+| Confirm arrives for a released hold whose seats are re-held | "Payment cancelled, seats released" | Confirm locks the hold row, finds it RELEASED, answers 409; the payment service cancels the authorisation |
+| Payment webhook never arrives | Hold stays PAYMENT\_PENDING until 12:15 | A reconciliation job asks the PSP about `hold-9001` by its idempotency key and confirms or releases |
+| Duplicate confirm: retried webhook, double tap | The same booking | `booking.payment_id` is unique; the second confirm returns the existing booking |
+| Redis down | Map rebuilt from the database with coalescing; queue admits nobody | Fail the queue **open** to the gateway's per-show rate limit, so the sale continues degraded |
+| Database primary fails over | Holds fail for \~30 s; the map keeps serving | Clients retry with the same key; the new primary has every committed hold |
+| Sweeper falls behind | Expired seats look held on the map for longer | Readers treat an expired hold as free, so a new hold on those seats succeeds; only the map lags |
+| Bots hold seats and never pay | Inventory off the market ten minutes at a time | One active hold per user per show, tokens bound to a logged-in user, a challenge at the queue door |
+
+<mark>Every failure above resolves to the same question: what does the hold row say?</mark> That is why the hold lives in the database with its expiry, not in a server's memory or a cache.
+
+## Security
+
+- **Authentication:** fans log in before joining the queue, because the admission token and the one-hold-per-user rule mean nothing for an anonymous device (see [Authentication](/learn/authentication)).
+- **Admission tokens:** signed, bound to user, show and a ten-minute expiry, checked at the gateway; a bad token is a 403 before any database work.
+- **Abuse this design invites:** holding seats to deny them to others, and scripted buying. Cap active holds per user per show at one, cap tickets per account per event, challenge at the queue entrance, and rate-limit `POST /holds` per user and per IP (see [API security](/learn/api-security)).
+- **Payment data:** card numbers never touch this system; the PSP tokenises them in the fan's browser, which keeps this service out of PCI scope.
+- **Tickets:** the QR code is a signed token and the scanner marks it used in the same database, so a screenshot of someone else's ticket does not open a gate twice.
+
+## Observability
+
+Six numbers prove the system is healthy (see [Metrics and monitoring](/learn/metrics-monitoring)): **hold success and 409 rates**, which show whether the map is too stale or the crowd too large for the inventory; **hold-to-confirm conversion and expiry rate**, which drive the admission rate; **seat-map cache hit ratio and age**; **queue depth and admissions per second**; **lock wait time and `NOWAIT` errors on `show_seat`**; and **payments pending past five minutes**, the money-without-ticket alarm. The trace to keep (see [Distributed tracing](/learn/tracing)) is one `POST /holds`: token check, lock wait, commit, cache delete. During a drop the lock-wait span is the first thing to look at.
+
+## Trade-offs and bottlenecks
+
+<Comparison>
+
+<ComparisonItem title="Seat rows with holds (this design)">
+
+One row per seat per show, a hold with a TTL, and a transaction that locks exactly the seats requested. Any seat can be shown, chosen and refused individually, and the backstop constraint is trivial. The cost is a row lock per seat on the hot path and a sweeper.
+
+</ComparisonItem>
+
+<ComparisonItem title="A counter per section">
+
+General admission has no seats to pick, so inventory is one number: `UPDATE section SET sold = sold + 2 WHERE id = 7 AND sold + 2 <= capacity`, with "one row updated" as the answer. No map, no per-seat locks, no seat sweeper. The cost is that one row is the whole hot path, so a hot section serialises every buyer on it.
+
+</ComparisonItem>
+
+</Comparison>
+
+The condition that decides: <mark>does the fan choose a seat?</mark> Assigned seating needs rows, standing areas need counters, and most venues need both. Next to break, in order: the **PSP** at a drop, because 50 authorisations a second plus bank redirects is where latency now lives; the **seat-map stampede**, if invalidation runs without coalescing; **hold hoarding** by bots, which no database setting fixes; and, past one venue, **one database for all shows**, which partitioning answers. Not taken: Redis as the owner of holds (a failover loses them, a multi-seat hold needs a script, and the Redis documentation itself points past `SET NX` to Redlock; see [Distributed locks](/learn/distributed-locks)); a distributed transaction with the PSP (it cannot prepare; see [Distributed transactions](/learn/distributed-transactions)); letting everyone in (3,300 refusals a second under lock *is* the outage).
+
+<Callout type="interview" title="Lead with the ratio, then earn each box">
+
+"Two hundred thousand fans, two thousand holds: I queue the people, cache the map, and let one database transaction decide each seat. A hold is a row with a TTL taken under `SELECT FOR UPDATE NOWAIT` in seat order, with a unique constraint on booked seats as the backstop. Paying extends the hold and authorises without capturing; confirm is idempotent on the payment id and captures only after the commit; the sweeper releases what nobody paid for." Then name the box you refuse: Redis as the owner of seats, because a failover must not resell E7.
+
+</Callout>
+
+## How it evolves
+
+At **10×** (a 50,000-seat final, two million fans in the first minute) the waiting room moves to the edge and the hot show is split by **section**: a hold is capped to one section, so each section is its own partition with its own admission rate, and the map is served per section rather than as one 50 KB blob. Payments become the bottleneck, so the PSP's rate limit joins the admission formula.
+
+At **100×** this is a platform for many venues and promoters. Each tenant gets quotas (see [Multi-tenancy](/learn/multi-tenancy)); dynamic pricing and a resale market arrive as services that read `confirmed` events; the queue gains fairness rules and bot scoring; and shows are pinned to the region of their venue, with the map replicated read-only everywhere else (see [Multi-region architecture](/learn/multi-region)). The hold, pay, confirm triangle does not change at any scale; only what stands in front of it does.
+
+## Deep dive 1: one seat, two fans
+
+Two requests for E7 reach two booking servers in the same millisecond. Both read E7 as free. Whoever writes second must lose, and the database is the only place both requests meet. Three ways to make it decide, and one backstop.
+
+**Pessimistic: lock first, then look.**
+
+```sql
+BEGIN;
+SELECT seat_id, state, hold_expires_at
+  FROM show_seat
+ WHERE show_id = 42 AND seat_id IN (57, 58)
+ ORDER BY seat_id
+   FOR UPDATE NOWAIT;            -- error now, rather than queue behind another buyer
+-- every row FREE, or HELD with hold_expires_at < now()? otherwise ROLLBACK and answer 409
+UPDATE show_seat
+   SET state = 'HELD', hold_id = :hold, hold_expires_at = now() + interval '10 minutes',
+       version = version + 1
+ WHERE show_id = 42 AND seat_id IN (57, 58);
+INSERT INTO hold (hold_id, show_id, user_id, status, expires_at, amount, idempotency_key)
+VALUES (:hold, 42, :user, 'HELD', now() + interval '10 minutes', 1200, :key);
+COMMIT;
+```
+
+`FOR UPDATE` locks the selected rows against concurrent updates until the transaction ends; `NOWAIT` makes PostgreSQL report an error instead of waiting if a row cannot be locked at once. For a seat that is the right answer, because the second fan wants a different seat, not a place in a queue for this one. Locking in `seat_id` order means two holds for E7 and E8 can never deadlock by taking them in opposite orders.
+
+**Optimistic: write with a condition.** Read the seats and remember each `version`, then `UPDATE … WHERE version = :seen AND (state = 'FREE' OR hold_expires_at < now())`. If fewer rows change than seats requested, roll back and answer 409. No lock is held across the read, so the uncontested case is one round trip; the cost is a retry storm when many fans want the same last seats.
+
+**Insert-only: let a constraint decide.** Make each hold attempt an insert into a `seat_hold` table with a partial unique index, `CREATE UNIQUE INDEX ON seat_hold (show_id, seat_id) WHERE active`, which PostgreSQL enforces among active rows only. The second insert fails with a unique violation, with no `SELECT` and no lock wait; released and expired holds flip `active` to false and stop counting.
+
+The condition that decides is **contention**. On a normal day any of the three works and optimistic is cheapest. At a drop the pessimistic path is calmer, because a refused lock costs one error while a failed optimistic write costs a read, a write and a retry, and 99 attempts in 100 will be refused. Whichever you choose, keep the **backstop**: `booking_seat`'s primary key means a bug can produce two holds but never two bookings. And keep the sweeper out of the correctness story: a hold whose `hold_expires_at` has passed is free the moment the `SELECT` reads it.
+
+## Deep dive 2: the virtual waiting room
+
+Without a queue, 200,000 fans hit `POST /holds` 3,300 times a second for 2,000 holds, every refusal takes a row lock to discover, and the fans who were refused refresh harder. A **virtual waiting room** turns the crowd into a line and admits it at the pace the inventory can absorb.
+
+<Steps>
+
+1. **Take a number.** A fan arriving at the sale page gets the next value of an atomic counter for the show (`INCR queue:42:arrived`) in a cookie. One Redis command per arrival: 10k a second is comfortable.
+2. **Advance the gate.** A second counter, `queue:42:admitted`, is raised by a controller every few seconds. A fan is admitted when their number is at or below it. The queue page compares the two numbers every 10 seconds, 20k reads a second that never touch the database, and shows a position.
+3. **Issue a token.** An admitted fan receives a signed token for this user and show, valid 10 minutes, which the gateway requires on `POST /holds`. The seat map opens only now.
+4. **Set the pace from the inventory.** Admissions per minute = free seats ÷ seats per hold × a margin for abandoned holds, recomputed from `released` and `confirmed` events: 5,000 ÷ 2.5 × 1.5 = 3,000 in the first minute, then roughly as many as the holds that expire or convert. The queue drains at the speed of payments, not of hardware.
+5. **Fail open.** If Redis is unreachable the gateway falls back to a per-show token bucket of about 100 holds a second, so the sale continues degraded rather than stopping.
+
+</Steps>
+
+<Interactive name="queue-leveling" />
+
+Fire a burst and watch the workers drain it at their own pace: the waiting room is the same shape with fans instead of uploads, and "bounded, shed with 503" is what the fallback rate limit does when even the queue is gone.
+
+Two refinements matter at a real drop. **Fairness**: 100,000 arrivals in 10 seconds are not meaningfully ordered by any clock, so some sales draw the first cohort at random and queue the rest in order; say which you do, because fans will ask. **Bots**: a token is useless without a logged-in user, one active hold per user per show, and a challenge at the door. A system like BookMyShow could run all of this itself; Cloudflare's Waiting Room does it at the edge, with a cap on *total active users*, a *new users per minute* threshold, a session of 1 to 30 minutes, and a response header the origin sends to revoke a session once the fan has bought or given up, which is how `confirmed` and `released` would feed admissions back.

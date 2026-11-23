@@ -1,0 +1,70 @@
+A **storage engine** is the part of a database that turns rows into bytes on disk and back again. Everything above it (parsing SQL, planning, checking permissions) ends in a request such as "fetch the row with this key", and the engine decides which bytes move between memory and disk.
+
+## Pages: the unit of everything
+
+Databases do not read rows; they read **pages** (also called blocks), fixed-size chunks of a file. PostgreSQL uses 8 kB pages by default (the size is chosen when the server is compiled), InnoDB uses 16 kB (settable between 4 kB and 64 kB, only when the instance is initialised), and SQLite uses 4 kB. Asking for one 100-byte row still costs one page read, which is why the numbers in [Latency](/learn/latency) are quoted per random read, not per byte.
+
+Inside a PostgreSQL page sit a 24-byte header, an array of 4-byte item pointers, free space, and the items themselves, which for a table are **tuples** (row versions). Each tuple carries a 23-byte header, including the transaction IDs that [MVCC](/learn/mvcc-isolation) uses to decide who may see it. A tuple cannot span pages; oversized values are compressed or sliced into a side table (PostgreSQL calls this TOAST).
+
+A PostgreSQL table is a **heap file**: pages in no particular order, each tuple addressed by page number and item pointer, exposed as `ctid`. An insert goes to any page with room; an index entry (see [Indexing](/learn/indexing)) is just a key plus a `ctid`.
+
+InnoDB makes a different choice. The table *is* a B-tree ordered by primary key (the **clustered index**), so rows live in the leaf pages of the primary-key index, and every secondary index stores the primary-key value instead of a physical address. A secondary lookup therefore walks two trees, and a long primary key makes every secondary index bigger.
+
+## The buffer pool: why reads are page reads
+
+Reading from disk on every query would be unbearably slow, so the engine caches pages in RAM: the **buffer pool**. PostgreSQL calls its share `shared_buffers` (128 MB by default, supplemented by the operating system's file cache). InnoDB's buffer pool also defaults to 128 MB, and its documentation notes that dedicated servers often give it up to 80% of physical memory.
+
+<Mermaid caption="Every read is a page lookup: a buffer-pool hit costs memory time; a miss costs a disk read and possibly a write-back of the page it evicts." chart={`flowchart LR
+    Q["Executor needs page 4217"] --> BP{"In the buffer pool?"}
+    BP -- "hit" --> R["Return rows from memory"]
+    BP -- "miss" --> E["Pick a page to evict"]
+    E --> D{"Evicted page dirty?"}
+    D -- "yes" --> W["Write it back first"]
+    D -- "no" --> L["Read page 4217 from disk"]
+    W --> L
+    L --> R
+`} />
+
+Eviction is some flavour of least-recently-used. InnoDB inserts newly read pages at the midpoint of its list, keeping the older three-eighths of the pool behind them, so a one-off table scan cannot flush the pages your transactions actually use. Writes go through the pool too: the page is changed in memory, marked dirty, logged to the [write-ahead log](/learn/wal), and written back later.
+
+<mark>The currency of database performance is page reads, and the cheapest page read is the one the buffer pool already holds.</mark> PostgreSQL shows the count directly: `EXPLAIN (ANALYZE, BUFFERS)` reports `shared hit` (found in the pool) and `read` (fetched from disk) for every plan node.
+
+<Callout type="analogy" title="Pallets, not parcels">
+
+A warehouse forklift moves pallets, never a single parcel, and keeps the most-used pallets by the loading bay. Pages are the pallets, the buffer pool is the bay. Where the analogy fails: a database can change a parcel on a pallet in the bay and put off driving the pallet back for minutes, trusting its log to survive a power cut.
+
+</Callout>
+
+## Row store or column store
+
+How columns are laid out on a page decides which workloads an engine suits.
+
+| | Row store | Column store |
+| --- | --- | --- |
+| Layout | All columns of a row together on one page | Each column stored in its own run of pages |
+| Suits | OLTP: many small transactions touching whole rows | OLAP: scans over millions of rows and a few columns |
+| Typical query | Load one order and its lines | Revenue per category for the last quarter |
+| Reading one row | One page read | One read per column, then stitch the row together |
+| Compression | Modest | Strong, because neighbouring values resemble each other |
+| Writes | Cheap single-row inserts and updates | Batched; single-row updates are awkward |
+| Examples | PostgreSQL, MySQL InnoDB, SQLite | ClickHouse, Parquet files, cloud warehouses |
+
+Flipkart placing an order wants a row store: fetch the customer, insert the order, update the stock, each touching a handful of rows. Finance asking for sales by category by day wants a column store: it reads the three columns involved and skips the other forty. Most companies run both, fed by batch loads or [change data capture](/learn/cdc).
+
+## The engine is a pluggable part
+
+MySQL makes the abstraction visible: the server parses and plans, then hands storage to an engine chosen per table with an `ENGINE` clause. InnoDB is the default; MyISAM, Memory and others remain for narrow uses. MongoDB does the same beneath documents: its default engine, WiredTiger, provides document-level concurrency, a checkpoint every 60 seconds plus a journal for crash safety, and compression. RocksDB is only an engine: a C++ library, started at Facebook from LevelDB's code, embedded in other systems, from MyRocks (RocksDB under MySQL) to Pebble, the engine CockroachDB built in RocksDB's image.
+
+Two engines can speak identical SQL and differ by an order of magnitude on the same workload, because one keeps a B-tree and the other a log-structured tree: see [B-trees vs LSM trees](/learn/btree-vs-lsm).
+
+<Callout type="interview" title="Talk in pages">
+
+Reason in pages: how many does the query touch, are they in the buffer pool, does the index skip most of them? "The table is 50 GB, the pool is 16 GB and this query scans the whole table, so it is disk-bound; an index on the filter column turns it into a few page reads" is a complete answer.
+
+</Callout>
+
+<DeepDive title="Go deeper: why the primary key shapes an InnoDB table">
+
+Because InnoDB stores rows inside the primary-key B-tree, the key decides physical locality. Increasing keys (an auto-increment or time-ordered ID) land at the right-hand edge of the tree, so inserts touch the same few pages. Random keys such as UUID version 4 scatter inserts across the whole tree, dirtying many pages and causing more splits, and every secondary index carries a copy of the key, so a wide one is paid for once per index.
+
+</DeepDive>

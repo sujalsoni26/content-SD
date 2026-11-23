@@ -1,0 +1,107 @@
+**Consensus** is how a group of machines agrees on one value, or one sequence of values, so that no two of them ever believe different things were decided, even while some crash and the network partitions. **Raft** achieves it by electing a leader and letting only the leader append to a **replicated log** that every node copies. It builds on the failure model in [What makes a system distributed](/learn/distributed-fundamentals) and the overlap argument from [Quorums](/learn/quorums).
+
+## Why a majority
+
+Quorums give overlap; consensus needs more. Once a value is decided for a slot, no other value may ever be, so the rule must make two different decisions impossible. A **majority** does exactly that: any two majorities of N nodes share at least one node, and a node accepts only one proposal per round, so two conflicting decisions would need one node to have accepted both. Unanimity would also work but stalls on a single dead node, and "any two nodes" in a cluster of five lets two disjoint pairs decide different things.
+
+So 2f + 1 nodes tolerate f failures: three survive one, five survive two. An even count buys nothing: four nodes still need three to agree and survive only one.
+
+## Raft: terms, heartbeats and elections
+
+Each server is a **follower**, a **candidate** or the **leader**. Time is divided into numbered **terms**, each beginning with an election and having at most one leader. Terms act as a logical clock: every message carries the sender's term, a server that sees a higher term adopts it and becomes a follower, and messages with a lower term are rejected.
+
+The leader proves it is alive with periodic **heartbeats** (`AppendEntries` messages carrying no entries). A follower that hears nothing for its **election timeout** increments the term, becomes a candidate, votes for itself and sends `RequestVote` to everyone. A server grants at most one vote per term, first come first served, and only to a candidate whose log is at least as up to date as its own. A majority of votes makes a leader, which heartbeats at once to stop further elections. Each server draws its timeout at random from a range, 150 to 300 ms in the paper's example, so that usually one server times out first; etcd defaults to a 100 ms heartbeat and a 1000 ms election timeout, which need retuning across data centres.
+
+<Mermaid caption="Raft's three roles. Every arrow out of Candidate is decided by votes, heartbeats or a timeout, never by a wall clock." chart={`stateDiagram-v2
+    [*] --> Follower
+    Follower --> Candidate: election timeout with no heartbeat
+    Candidate --> Leader: votes from a majority
+    Candidate --> Follower: heartbeat from a leader or a higher term seen
+    Candidate --> Candidate: split vote, new term, new random timeout
+    Leader --> Follower: a higher term seen
+`} />
+
+Several followers timing out together split the vote; the term ends without a leader and the next random timeouts resolve it.
+
+<Mermaid caption="Four servers. Term 2 splits two votes against two; server 3's timeout fires first and wins term 3." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant S1 as Server 1
+    participant S2 as Server 2
+    participant S3 as Server 3
+    participant S4 as Server 4
+    Note over S1,S3: both time out, start term 2, vote for themselves
+    S1->>S2: RequestVote(term 2)
+    S3->>S4: RequestVote(term 2)
+    S2-->>S1: vote granted
+    S4-->>S3: vote granted
+    S1->>S3: RequestVote(term 2)
+    S3-->>S1: rejected, already voted this term
+    Note over S1,S4: two votes each of four, no majority of three
+    Note over S3: random timeout fires first, starts term 3
+    S3->>S1: RequestVote(term 3)
+    S3->>S2: RequestVote(term 3)
+    S3->>S4: RequestVote(term 3)
+    S1-->>S3: vote granted, higher term adopted
+    S2-->>S3: vote granted
+    S4-->>S3: vote granted
+    Note over S3: leader for term 3, heartbeats begin
+`} />
+
+## Replicating the log
+
+<Steps>
+
+1. A client sends a command to the leader; followers redirect clients to it.
+2. The leader appends the command to its log as an entry with an index and the current term, then sends `AppendEntries` to all followers in parallel.
+3. Each `AppendEntries` names the index and term of the entry just before the new ones. A follower whose log does not match there rejects it; the leader steps back until they agree, then overwrites the follower's conflicting entries.
+4. Once a majority have stored the entry it is **committed**: the leader applies it, replies to the client, and tells followers the new commit index in later messages.
+
+</Steps>
+
+Committing an entry also commits everything before it. **Leader completeness** in one sentence: because voters refuse candidates with less up-to-date logs, a committed entry is in the log of every later leader, so a commit is never undone.
+
+## What a minority partition can and cannot do
+
+Take five nodes split three against two, with the leader on the side of two. That leader keeps appending commands but never collects the three acknowledgements needed to commit, so its clients hang or time out. Nor may it answer reads from local state, since it may already have been replaced; Raft has a leader exchange heartbeats with a majority before answering a read-only request. On the side of three, a follower times out, wins an election in a higher term and commits new entries. When the partition heals, the old leader sees the higher term, steps down, and its uncommitted entries are overwritten.
+
+In short, <mark>the minority refuses rather than diverges</mark>. That is the CP corner of [CAP](/learn/cap). Lose a majority permanently, say two of three disks at once, and the cluster cannot progress; etcd's documentation calls permanent quorum loss catastrophic.
+
+## Who uses what
+
+| System | Protocol | What it agrees on |
+| --- | --- | --- |
+| etcd | Raft | Kubernetes' cluster state; leases and elections for your own services (see [Leader election](/learn/leader-election)) |
+| Consul | Raft | Service catalogue, key-value data and sessions |
+| CockroachDB | Raft, one group per range of rows | Every write to a range, committed by a quorum of its replicas |
+| ZooKeeper | Zab, its atomic broadcast | A leader proposes, a quorum acknowledges, then it commits; each transaction id carries an epoch that changes with the leader |
+| Kafka | KRaft | The controller quorum replicates the cluster metadata log with Raft; the quorum leader is the active controller. Kafka 4.0 (March 2025) removed ZooKeeper mode entirely |
+| Google Chubby, Spanner | Paxos | Chubby's lock state; each Spanner shard is a Paxos group |
+| Cassandra | Paxos | Lightweight transactions only (compare-and-set) |
+
+**Paxos**, which Lamport first circulated in 1989 and published in 1998 as "The Part-Time Parliament", solves the same problem with proposers and acceptors in numbered rounds; Raft, from 2014, was designed to be easier to understand and matches it in fault tolerance. Zab exists because ZooKeeper needed a primary's updates delivered in exactly the order it generated them, which plain Paxos does not guarantee when a primary fails with proposals outstanding.
+
+You will rarely implement any of these; you run etcd or ZooKeeper and keep small, critical state there: who leads, where the shards are, the configuration. Every committed write is a round trip to a majority, so consensus is a poor fit for the bulk data path, which is what [replication](/learn/replication) and quorums are for.
+
+<Callout type="analogy" title="Choosing a captain by numbered votes">
+
+Eleven players choose a captain by show of hands, and it takes six hands. Two people cannot both have six of eleven hands in the same vote. If the vote splits, you hold another one, and every vote is numbered, so a player back from the toilet can tell that vote 7 is over and should not act on what they heard during vote 6. Where the analogy breaks: real players can see the whole room, whereas a Raft server only knows what arrives in messages, which is why the term number travels in every one.
+
+</Callout>
+
+<Callout type="interview" title="Name the cluster, the size and the partition behaviour">
+
+"Coordination through a three- or five-node etcd cluster running Raft: a write commits when a majority stores it, the minority side of a partition refuses writes, and I keep only metadata there, never the data path." Then say what the application does while the cluster has no leader, because elections take hundreds of milliseconds to seconds.
+
+</Callout>
+
+<DeepDive title="Go deeper: why a new leader commits a no-op first">
+
+Leader completeness guarantees a new leader *has* every committed entry, but at the start of its term it does not know which of its entries are committed, because entries from earlier terms are only known to be committed once an entry from the current term is. Raft therefore has each new leader append a blank no-op entry and commit it, which settles everything before it. The same section of the paper covers reads: a leader must confirm it has not been deposed before serving a read, by exchanging heartbeats with a majority, or else rely on a timing-based lease that assumes bounded clock skew. That lease shortcut is the bridge to the next lesson, where leases and their failure modes take centre stage.
+
+</DeepDive>

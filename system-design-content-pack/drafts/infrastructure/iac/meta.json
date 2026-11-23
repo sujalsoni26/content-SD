@@ -1,0 +1,83 @@
+{
+  "slug": "iac",
+  "title": "Infrastructure as Code and delivery pipelines",
+  "moduleId": "infrastructure",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "Environments built by clicking cannot be rebuilt, staging and production differ in ways nobody can list, and a manual console change silently diverges from what the team believes is deployed.",
+  "summary": "Infrastructure as Code keeps the environment as declarative files in version control, applied with Terraform, CloudFormation or Pulumi: plan before apply, a locked remote state mapping configuration to reality, modules per environment, and a pipeline or GitOps agent as the only route to production.",
+  "catTip": "I knocked the plant off the shelf again. The humans put it back exactly where the photo, the repository, says it goes, every single time. Annoying. Also correct: that is reconciliation, and I am drift.",
+  "recall": {
+    "q": "Two engineers run terraform apply against the same environment at the same moment. What protects the state file, and what happens without it?",
+    "a": "State locking: the backend locks the state for any operation that could write it, so the second run waits or fails. Without a lock both runs read the same state and the last write wins, leaving resources created by the other run orphaned and unknown to Terraform."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Hand-built environments cannot be reproduced or audited, a change made in the console during an incident silently diverges from the configuration, and recovering in a new region takes days instead of minutes.",
+    "tradeoffs": "You now operate the tooling: a sensitive state file to protect and lock, plans to review, drift to reconcile, and a pipeline or GitOps agent whose permissions are among the most powerful credentials in the company.",
+    "explainSimply": "Infrastructure as Code is building from blueprints instead of a foreman's memory: anyone can rebuild the same thing anywhere, and every change to the blueprint is reviewed before the builders act. If someone knocks through a wall without updating the blueprint, an inspection shows the difference, and in GitOps the builders put the wall back.",
+    "hint": "Think about what the tool must remember between runs, and what goes wrong when two runs happen at once."
+  },
+  "meow": "Meow-nifest in Git says the plant is on the shelf. Plant on floor? Agent puts it back. Change the Git, not the shelf, hooman.",
+  "quiz": [
+    {
+      "prompt": "Why does Terraform keep a state file rather than simply inspecting the cloud on every run?",
+      "options": [
+        "Because cloud APIs can create resources but cannot list them",
+        "To map each configuration block to a real resource, record dependencies for correct ordering, cache attributes, and give a team one shared view that can be locked",
+        "Because the state file is where the provider credentials are stored",
+        "To keep a backup copy of the infrastructure that can restore it after an outage"
+      ],
+      "answer": 1,
+      "explanation": "Not every resource can be found by name or tag, so Terraform needs a mapping from configuration to real IDs, plus dependency metadata and a cache; remote state and locking then keep the team consistent. State is not a backup of the resources themselves, which is the strongest distractor."
+    },
+    {
+      "prompt": "In a GitOps setup with Argo CD and self-heal enabled, an engineer fixes an incident by editing a Deployment directly in the cluster. What happens?",
+      "options": [
+        "The change is committed back to Git automatically",
+        "Argo CD marks the application OutOfSync and reverts the live object to match the repository, undoing the fix",
+        "Nothing, because Argo CD only acts on new commits",
+        "The cluster rejects the edit because Argo CD holds a lock on the object"
+      ],
+      "answer": 1,
+      "explanation": "Argo CD continuously compares live state with Git and, with self-heal on, syncs the cluster back to the repository, so emergency changes must be made in Git. Argo CD never writes to Git on your behalf, which is the strongest distractor."
+    }
+  ],
+  "cards": [
+    {
+      "q": "After someone changed a resource in the console, what is the difference between terraform plan -refresh-only and a normal plan?",
+      "a": "A refresh-only plan only updates Terraform's record of reality and proposes no infrastructure changes, so you can see the drift. A normal plan compares the configuration with the refreshed state and proposes to revert the manual change, so you must decide whether to adopt it into the configuration first."
+    },
+    {
+      "q": "Why do the Terraform docs say workspaces are the wrong tool for separating dev from production?",
+      "a": "Workspaces are multiple states for one configuration under the same credentials and backend; production needs separate credentials and access controls so that a mistake in dev cannot touch it. Use separate root configurations, ideally in separate accounts, that share the same modules with different variables."
+    }
+  ],
+  "glossary": [
+    { "term": "IaC", "full": "Infrastructure as Code", "note": "Describing servers, networks and permissions in version-controlled files that a tool such as Terraform applies, instead of configuring them by hand." },
+    { "term": "CI/CD", "full": "Continuous Integration / Continuous Delivery (or Deployment)", "note": "Merge and test every change automatically; keep every passing change deployable, or deploy it automatically." }
+  ],
+  "sources": [
+    { "title": "HashiCorp Terraform Docs, Purpose of Terraform State", "url": "https://developer.hashicorp.com/terraform/language/state/purpose", "accessed": "2026-11-22", "supports": "state exists to map configuration to real resources (not all resources support tags), to track metadata such as dependencies, as a performance cache, and to keep a team in sync", "status": "verified" },
+    { "title": "HashiCorp Terraform Docs, State Locking", "url": "https://developer.hashicorp.com/terraform/language/state/locking", "accessed": "2026-11-22", "supports": "Terraform locks state for all operations that could write it when the backend supports locking; -lock=false is discouraged; force-unlock carries a warning", "status": "verified" },
+    { "title": "HashiCorp Terraform Docs, Remote State", "url": "https://developer.hashicorp.com/terraform/language/state/remote", "accessed": "2026-11-22", "supports": "local state requires everyone to have the latest copy and avoid concurrent runs; remote backends such as HCP Terraform, S3 and Google Cloud Storage share state and may support locking", "status": "verified" },
+    { "title": "HashiCorp Terraform Docs, Backend Type: s3", "url": "https://developer.hashicorp.com/terraform/language/backend/s3", "accessed": "2026-11-22", "supports": "the use_lockfile argument for S3 native state locking; DynamoDB-based locking is deprecated", "status": "verified" },
+    { "title": "HashiCorp Terraform v1.10.0 release notes", "url": "https://github.com/hashicorp/terraform/releases/tag/v1.10.0", "accessed": "2026-11-22", "supports": "the S3 backend gained S3 native state locking in Terraform 1.10", "status": "verified" },
+    { "title": "HashiCorp Terraform Docs, Command: plan", "url": "https://developer.hashicorp.com/terraform/cli/commands/plan", "accessed": "2026-11-22", "supports": "plan refreshes state, compares configuration with prior state and proposes actions without applying them; -out saves a plan that may contain sensitive data; -refresh-only updates state for changes made outside Terraform", "status": "verified" },
+    { "title": "HashiCorp Terraform Tutorial, Manage resource drift", "url": "https://developer.hashicorp.com/terraform/tutorials/state/resource-drift", "accessed": "2026-11-22", "supports": "drift is state falling out of sync with real infrastructure after manual changes; plan and apply -refresh-only detect and record it", "status": "verified" },
+    { "title": "HashiCorp Terraform Docs, Modules", "url": "https://developer.hashicorp.com/terraform/language/modules", "accessed": "2026-11-22", "supports": "a module is a collection of resources managed together; the root module calls child modules from local paths or registries", "status": "verified" },
+    { "title": "HashiCorp Terraform Docs, Workspaces", "url": "https://developer.hashicorp.com/terraform/language/state/workspaces", "accessed": "2026-11-22", "supports": "workspaces hold multiple states for one configuration and are not appropriate for deployments requiring separate credentials and access controls", "status": "verified" },
+    { "title": "AWS Docs, Update CloudFormation stacks using change sets", "url": "https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html", "accessed": "2026-11-22", "supports": "a change set previews proposed stack changes and nothing changes until it is executed", "status": "verified" },
+    { "title": "AWS Docs, Detect unmanaged configuration changes with drift detection", "url": "https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-stack-drift.html", "accessed": "2026-11-22", "supports": "drift is actual configuration differing from the template; resources are reported IN_SYNC, MODIFIED or DELETED; detection identifies drift for you to correct", "status": "verified" },
+    { "title": "Pulumi Docs, Pulumi IaC concepts", "url": "https://www.pulumi.com/docs/iac/concepts/", "accessed": "2026-11-22", "supports": "Pulumi uses general-purpose languages (TypeScript, Python, Go, Java, YAML and more), applies with pulumi up, and stores state in a backend such as Pulumi Cloud", "status": "verified" },
+    { "title": "Pulumi Docs, pulumi preview", "url": "https://www.pulumi.com/docs/iac/cli/commands/pulumi_preview/", "accessed": "2026-11-22", "supports": "pulumi preview shows the proposed updates to a stack without making changes", "status": "verified" },
+    { "title": "OpenGitOps, GitOps Principles v1.0.0", "url": "https://opengitops.dev/", "accessed": "2026-11-22", "supports": "the four principles: declarative, versioned and immutable, pulled automatically, continuously reconciled", "status": "verified" },
+    { "title": "Argo CD Docs, Overview", "url": "https://argo-cd.readthedocs.io/en/stable/", "accessed": "2026-11-22", "supports": "Argo CD is a declarative GitOps continuous delivery tool that treats Git as the source of truth and marks deviating applications OutOfSync", "status": "verified" },
+    { "title": "Argo CD Docs, Automated Sync Policy", "url": "https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/", "accessed": "2026-11-22", "supports": "automated sync, self-heal reverting live changes, and prune deleting removed resources, both disabled by default", "status": "verified" },
+    { "title": "Argo CD Docs, FAQ (polling interval)", "url": "https://argo-cd.readthedocs.io/en/stable/faq/", "accessed": "2026-11-22", "supports": "Argo CD polls Git repositories every 3 minutes by default; webhooks are the alternative", "status": "verified" },
+    { "title": "Flux Docs", "url": "https://fluxcd.io/flux/", "accessed": "2026-11-22", "supports": "Flux keeps Kubernetes clusters in sync with sources of configuration such as Git and is a CNCF graduated project", "status": "verified" },
+    { "title": "Flux Docs, Core Concepts", "url": "https://fluxcd.io/flux/concepts/", "accessed": "2026-11-22", "supports": "reconciliation and the GitRepository, OCIRepository, HelmRepository and Bucket source types", "status": "verified" },
+    { "title": "AWS Whitepaper, Disaster Recovery of Workloads on AWS: Disaster recovery options in the cloud", "url": "https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html", "accessed": "2026-11-22", "supports": "without IaC, restoring workloads in a recovery region is complex and may exceed the RTO", "status": "verified" },
+    { "title": "Jez Humble and David Farley, Continuous Delivery (Addison-Wesley, 2010)", "url": "https://continuousdelivery.com/", "accessed": "2026-11-22", "supports": "the deployment pipeline of build, test and deploy stages and the build-once, promote-everywhere rule", "status": "reference" }
+  ]
+}

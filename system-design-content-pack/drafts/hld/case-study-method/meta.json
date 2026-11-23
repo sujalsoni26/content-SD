@@ -1,0 +1,31 @@
+{
+  "slug": "case-study-method",
+  "title": "How to work a case study",
+  "moduleId": "hld",
+  "level": "basic",
+  "minutes": 6,
+  "problem": "Case studies are long, and without a fixed shape you cannot tell which parts are routine and which part is the actual design problem.",
+  "summary": "Every case study here follows one thirteen-part template plus deep dives, in the order the playbook uses in an interview. Learn the shape once, then spend your attention on the number that dominates and the two or three hard problems.",
+  "catTip": "Same chapters every time: requirements, numbers, API, data, boxes. I skip straight to the deep dives and nap through the parts I already know. Efficient.",
+  "recall": {
+    "q": "In what order does a case study present its sections, and why that order?",
+    "a": "Requirements, estimation, API, data model, high-level design, then storage, scaling, consistency, failure, security, observability, trade-offs and evolution, with deep dives at the end. Each step's output is the next step's input: the numbers decide the boxes."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a shared shape you read every case study from scratch, cannot compare two designs, and in an interview you narrate boxes in whatever order they come to mind.",
+    "tradeoffs": "A fixed template can feel mechanical, so each case study names the two or three sections where the real difficulty lives and spends its deep dives there.",
+    "explainSimply": "Every design write-up here uses the same chapter list, the way every recipe lists ingredients before steps. Once you know the chapters you can skip the routine ones and slow down at the hard bits. The chapter order is also the order you would talk in an interview.",
+    "hint": "Think about what each step needs from the step before it: you cannot size servers before you know the traffic, or pick a database before you know the data."
+  },
+  "meow": "Requirements, numbers, API, data, boxes, deep dives. Same shape every time, like my nap schedule. Predictable is good.",
+  "quiz": [],
+  "cards": [
+    {
+      "q": "Why do case studies state their assumptions before any number?",
+      "a": "An estimate is only as good as its inputs. Saying the assumption first (DAU, actions per user, object size) lets a reader or interviewer correct it before the error multiplies through QPS, storage and the number of boxes."
+    }
+  ],
+  "glossary": [],
+  "sources": []
+}

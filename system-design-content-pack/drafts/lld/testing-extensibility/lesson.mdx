@@ -1,0 +1,115 @@
+A **unit test** runs one small piece of code in isolation, with its collaborators replaced by stand-ins you control, and checks one observable outcome. Code that is hard to unit test is almost always hard to change, so **testability** and **extensibility** are two views of one property: dependencies are explicit and passed in, and behaviour varies by adding an implementation rather than editing a working one.
+
+A class that resists testing: a sliding-window rate limiter that reads the clock and reports to a global metrics object:
+
+```java
+class RateLimiter {
+    private final Map<String, Deque<Long>> hits = new HashMap<>();
+    boolean allow(String client) {
+        long now = System.currentTimeMillis();                         // the test cannot control time
+        Deque<Long> window = hits.computeIfAbsent(client, k -> new ArrayDeque<>());
+        while (!window.isEmpty() && window.peekFirst() <= now - 60_000) window.pollFirst();
+        if (window.size() >= 100) { Metrics.getInstance().increment("limited"); return false; }   // a hidden global
+        window.addLast(now);
+        return true;
+    }
+}
+```
+
+"The 101st request in a minute is refused" is testable, slowly. "After the minute passes, requests are allowed again" needs a sixty-second sleep, and `Metrics.getInstance()` means every test touches real metrics.
+
+## Design for testability
+
+Two changes make it testable, both ordinary good design from [Interfaces, abstractions and dependency injection](/learn/interfaces-abstractions-di). Time becomes a dependency: `java.time.Clock` exists so that code asks an injected object for the time and tests hand in a controllable one. Metrics becomes a constructor parameter behind an interface:
+
+```java
+class RateLimiter {
+    private final Clock clock; private final Metrics metrics; private final int limit; private final Duration window;
+    RateLimiter(Clock clock, Metrics metrics, int limit, Duration window) { /* assign the four fields */ }
+    boolean allow(String client) { long now = clock.millis(); /* the same window logic as before */ return true; }
+}
+```
+
+The general rules:
+
+- **Constructor injection** for every collaborator that does I/O, so a test can replace it.
+- **Pure functions** for logic: a function of its inputs with no I/O is tested with a table of cases. Pricing, parsing and the boundary validation from [Error handling and resilience in code](/learn/error-handling) belong here.
+- **Time, randomness and identifiers as dependencies**: `Clock`, a seeded `Random`, an id generator.
+- **Side effects at the edges**: decide in pure code, then let a thin outer layer apply the decision.
+
+## Test doubles
+
+Gerard Meszaros named the stand-ins; each name says what a test is checking.
+
+| Double | What it does | Use it when |
+| --- | --- | --- |
+| Dummy | Fills a parameter and is never used | The constructor wants a value the test ignores |
+| Stub | Returns canned answers | The test needs a collaborator to say something specific |
+| Fake | A working, simplified implementation: an in-memory repository, a settable clock | Many tests need realistic behaviour without infrastructure |
+| Mock | Holds expectations; the test fails if the calls do not match | The interaction is the behaviour: an email must be sent exactly once |
+| Spy | Records calls for assertions afterwards | You check what was called after the fact |
+
+A clock fake is seven lines and makes time-dependent code deterministic:
+
+```java
+final class FakeClock extends Clock {
+    private Instant now;
+    FakeClock(Instant start) { now = start; }
+    void advance(Duration d) { now = now.plus(d); }
+    public Instant instant() { return now; }
+    public ZoneId getZone() { return ZoneOffset.UTC; }
+    public Clock withZone(ZoneId zone) { return this; }
+}
+```
+
+## Arrange, act, assert
+
+A readable unit test has three parts: set up the world, do the one thing, check the one outcome.
+
+```java
+@Test void allowsAgainOnceTheWindowHasPassed() {
+    FakeClock clock = new FakeClock(Instant.parse("2026-11-22T10:00:00Z"));      // arrange
+    RateLimiter limiter = new RateLimiter(clock, new NoOpMetrics(), 100, Duration.ofMinutes(1));
+    for (int i = 0; i < 100; i++) limiter.allow("app-1");
+    assertFalse(limiter.allow("app-1"));
+
+    clock.advance(Duration.ofMinutes(1));                                           // act
+    assertTrue(limiter.allow("app-1"));                                             // assert
+}
+```
+
+The test runs in microseconds, names a behaviour rather than a method, and would survive a rewrite of the window logic: the three properties to aim for. The same clock abstraction makes the [rate limiter](/learn/lld-rate-limiter) and [task scheduler](/learn/lld-task-scheduler) case studies testable without sleeping.
+
+<Callout type="warning" title="Over-mocking">
+
+A test that mocks every collaborator and asserts the exact sequence of calls is the implementation copied into a different syntax: it passes while the code is wrong and fails when the code is refactored. Prefer fakes and state checks ("the order is now paid") over interaction checks ("charge was called once"), and reserve mocks for interactions that are the requirement.
+
+</Callout>
+
+## Extending without editing
+
+The open/closed principle from [SOLID principles](/learn/solid) sounds abstract until you have tests. In practice, new behaviour arrives as a new implementation of an existing interface: a new `PricingStrategy` or `Notifier` (see [Design patterns III](/learn/design-patterns-behavioural)). The tested classes are untouched, their tests keep passing unchanged, and the new class gets its own. If adding a feature means editing a `switch` in a class with forty green tests, the design is missing a seam; introduce the interface before the feature.
+
+The over-application smell is an interface with one implementation, no test double, and a comment saying "in case we need another". Add the seam when the second implementation, or the first test, needs it.
+
+## API evolution
+
+Once other code depends on a class, changing it is a negotiation. The safe moves are **additive**: a new method, a new optional field, a new implementation. Java's `default` methods exist for this: an interface can gain a method without breaking the classes that implement it. Changing what an existing call means, or returns, is a breaking change even when everything compiles. To remove something, mark it `@Deprecated(since = "2.3", forRemoval = true)`, point at the replacement, give callers a release to migrate, then delete it. The same discipline applies to wire formats (see [REST APIs](/learn/rest)) and to persisted data.
+
+<Callout type="analogy" title="Stunt doubles">
+
+Meszaros took the name from film: a stunt double stands in for the actor in scenes too dangerous or expensive to shoot for real. A fake database stands in for the same reasons. Where the analogy fails: a stunt double must look identical from a distance; a test double only has to honour the interface.
+
+</Callout>
+
+<Callout type="interview" title="Say how you would test it">
+
+When you draw a class, add one sentence on testing: "Clock is injected so expiry is tested without sleeping; the repository has an in-memory fake; pricing is a pure function with a table of cases." It shows the design has seams.
+
+</Callout>
+
+<DeepDive title="Go deeper: mocks versus stubs">
+
+Martin Fowler distinguishes state verification from behaviour verification. With a stub or fake, the test acts and inspects state: the order's status, the fake repository's contents. With a mock, the test declares the calls it expects, acts, and asks the mock to verify. Behaviour verification is right when the call is the requirement and wrong when it merely describes how the current implementation happens to work. A mostly state-based suite survives refactoring; a mostly interaction-based one is rewritten along with the code.
+
+</DeepDive>

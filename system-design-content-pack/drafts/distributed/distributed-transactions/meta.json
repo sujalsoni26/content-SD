@@ -1,0 +1,70 @@
+{
+  "slug": "distributed-transactions",
+  "title": "Distributed transactions and two-phase commit",
+  "moduleId": "distributed",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "An order commits in one database while the stock decrement in another fails, and the first commit is already durable and cannot be taken back.",
+  "summary": "Two-phase commit makes a change across several resources atomic: participants prepare and promise, a coordinator logs the decision, everyone applies it. The price is locks held while in doubt and blocking if the coordinator dies, which consensus-replicated coordinators fix and services avoid with sagas.",
+  "catTip": "Two bowls, two rooms. I will not eat from one until both humans have promised to fill them, and then I wait, paws on both bowls, until the head human says go. If she wanders off, I sit there. Blocking is undignified.",
+  "recall": {
+    "q": "In two-phase commit the coordinator crashes after every participant has voted yes. What state are the participants in, and why can they not resolve it themselves?",
+    "a": "They are in doubt: each has logged a prepared record and holds its locks, but cannot commit (another vote might have been no) or abort (the coordinator may have logged commit). Only the coordinator's log holds the decision, so they block until it recovers, which is why 2PC is a blocking protocol and why Spanner replicates the coordinator's log with Paxos."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without an atomic commit protocol a change across two databases can commit on one side and fail on the other, and the committed side is durable and cannot be undone.",
+    "tradeoffs": "Participants hold locks from prepare until the decision arrives, the slowest participant sets everyone's latency, and a coordinator crash leaves them blocked in doubt unless the coordinator's log is replicated with consensus.",
+    "explainSimply": "Two-phase commit is a wedding: the officiant asks each person 'do you?' and only after both say 'I do' declares them married. Having said 'I do', neither can walk away until the declaration is made. If the officiant faints in between, everyone stands at the altar waiting.",
+    "hint": "Think about what each participant has promised, and where the only copy of the decision lives."
+  },
+  "meow": "Prepare? Meow. Prepare? Meow. Now the human must say commit, or two cats stay frozen over their bowls fur-ever.",
+  "quiz": [
+    {
+      "prompt": "In classic two-phase commit the coordinator crashes after receiving yes votes from all participants but before writing its decision. What happens to the participants?",
+      "options": [
+        "They each commit, because a yes vote means the transaction will succeed",
+        "They each abort after a timeout, because no decision arrived",
+        "They remain in doubt, holding their locks, until the coordinator recovers and replays its log",
+        "They elect a new coordinator among themselves and finish the transaction"
+      ],
+      "answer": 2,
+      "explanation": "Only the coordinator's log can decide, so participants must wait; a yes vote is a promise to commit if told to, not a decision. Aborting on timeout is unsafe because the coordinator may have logged commit and informed another participant before crashing."
+    },
+    {
+      "prompt": "Why does running two-phase commit between group leaders in Spanner avoid the classic blocking problem?",
+      "options": [
+        "Spanner uses three-phase commit, which never blocks",
+        "The coordinator's prepare and commit records are replicated through Paxos, so a new leader of the coordinator group still has the decision",
+        "TrueTime lets participants compute the decision from timestamps without the coordinator",
+        "Spanner holds no locks during commit, so there is nothing to block"
+      ],
+      "answer": 1,
+      "explanation": "Blocking comes from the coordinator's log living on one machine, and replicating that log removes the single point of failure. TrueTime orders commits but does not decide them, and Spanner participants do hold write locks until the outcome is known."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A participant crashes after voting yes in 2PC. What does it do on restart?",
+      "a": "It finds the prepared record in its log, re-acquires the locks and asks the coordinator for the outcome; it must not decide alone. In PostgreSQL a prepared transaction survives a crash and holds its locks until COMMIT PREPARED or ROLLBACK PREPARED arrives."
+    },
+    {
+      "q": "Give two reasons microservices usually avoid 2PC between services.",
+      "a": "Locks are held across network calls for the whole protocol, so the slowest participant sets everyone's latency; and availability is coupled, since the coordinator and every participant must be up at once and a partition leaves healthy services with locked rows. Sagas trade atomicity for local commits plus compensations."
+    }
+  ],
+  "glossary": [
+    { "term": "2PC", "full": "Two-Phase Commit", "note": "Prepare and vote, then commit or abort; participants hold locks while in doubt." },
+    { "term": "XA", "full": "X/Open XA interface (Distributed Transaction Processing: The XA Specification)", "note": "The 1991 standard API between a transaction manager and resource managers for two-phase commit." }
+  ],
+  "sources": [
+    { "title": "Jim Gray, \"Notes on Data Base Operating Systems\", in Operating Systems: An Advanced Course, LNCS 60 (Springer, 1978)", "url": "https://doi.org/10.1007/3-540-08755-9_9", "accessed": "2026-11-22", "supports": "the classic description of two-phase commit (bibliographic record checked; text not re-read)", "status": "reference" },
+    { "title": "Dale Skeen, \"Nonblocking commit protocols\", SIGMOD 1981", "url": "https://doi.org/10.1145/582318.582339", "accessed": "2026-11-22", "supports": "three-phase commit as the named non-blocking variant (bibliographic record checked; text not re-read)", "status": "reference" },
+    { "title": "X/Open CAE Specification, \"Distributed Transaction Processing: The XA Specification\", X/Open Company Ltd, December 1991, document XO/CAE/91/300", "url": "https://pubs.opengroup.org/onlinepubs/009680699/toc.pdf", "accessed": "2026-11-22", "supports": "the XA interface between transaction managers and resource managers: xa_start, xa_end, xa_prepare, xa_commit, xa_rollback, xa_recover (prepared or heuristically completed branches), xa_forget", "status": "verified" },
+    { "title": "PostgreSQL documentation, PREPARE TRANSACTION", "url": "https://www.postgresql.org/docs/current/sql-prepare-transaction.html", "accessed": "2026-11-22", "supports": "a prepared transaction is stored on disk, survives a crash, keeps its locks, and is finished with COMMIT PREPARED or ROLLBACK PREPARED from any session; the feature exists for external transaction managers; long-lived prepared transactions interfere with VACUUM", "status": "verified" },
+    { "title": "PostgreSQL documentation, Resource Consumption (max_prepared_transactions)", "url": "https://www.postgresql.org/docs/current/runtime-config-resource.html", "accessed": "2026-11-22", "supports": "max_prepared_transactions defaults to zero, which disables prepared transactions", "status": "verified" },
+    { "title": "Corbett et al., \"Spanner: Google's Globally-Distributed Database\", OSDI 2012, section 4.2.1", "url": "https://static.googleusercontent.com/media/research.google.com/en//archive/spanner-osdi2012.pdf", "accessed": "2026-11-22", "supports": "the client buffers writes and chooses a coordinator group; participant leaders acquire write locks and log a prepare record through Paxos; the coordinator leader logs the commit record through Paxos; participants log the outcome through Paxos; the authors' argument for supporting general two-phase commit", "status": "verified" },
+    { "title": "CockroachDB documentation, \"Transaction Layer\"", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/transaction-layer", "accessed": "2026-11-22", "supports": "transaction records and write intents replicated by Raft; coordinator heartbeats; parallel commits reducing commit latency from two consensus rounds to one; abort of a transaction whose record is not heartbeated within the liveness threshold", "status": "verified" },
+    { "title": "Peng and Dabek, \"Large-scale Incremental Processing Using Distributed Transactions and Notifications\", OSDI 2010 (Percolator)", "url": "https://www.usenix.org/conference/osdi10/large-scale-incremental-processing-using-distributed-transactions-and-notifications", "accessed": "2026-11-22", "supports": "Percolator commits with a client-coordinated two-phase commit over Bigtable row transactions, using a primary lock as the commit point", "status": "verified" }
+  ]
+}

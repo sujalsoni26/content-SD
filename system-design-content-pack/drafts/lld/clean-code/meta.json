@@ -1,0 +1,62 @@
+{
+  "slug": "clean-code",
+  "title": "Clean code and maintainability",
+  "moduleId": "lld",
+  "level": "basic",
+  "minutes": 7,
+  "problem": "A pricing function takes five unnamed parameters, hides business rules behind magic numbers and a boolean flag, and nobody can tell what a call site does.",
+  "summary": "Clean code reveals intent to the next reader: names that answer questions, small functions at one level of abstraction, cohesive classes with low coupling, comments that explain why, and named refactorings that remove common smells, applied in small tested steps.",
+  "catTip": "My humans call me Cat, Kitty, Beast and You Again. Four names, one concept, and every reader must guess. Pick one word per idea and the whole household reads better.",
+  "recall": {
+    "q": "A method is called as sendInvoice(order, true). What smell is this, and what is the refactoring?",
+    "a": "A flag argument: the boolean switches the method between two jobs and the call site reveals nothing. Split it into two named methods (sendInvoice and sendInvoiceCopy, say) or pass a named enum, so the call site reads as intent."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Code that hides its intent behind short names, magic numbers and flags is misread by the next person, so changes take longer and introduce bugs a clear name would have prevented.",
+    "tradeoffs": "Extracting and naming everything can fragment a simple algorithm into many tiny hops, so every rule here bends to the question of what the reader would rather see.",
+    "explainSimply": "Write code the way you would write a good recipe: ingredients named up front, steps at the same level of detail, and a note explaining the one odd instruction. The person cooking next is probably you in a year, and you will not remember why 0.82.",
+    "hint": "Think about what the call site reads like, and whether a true in it tells the reader anything."
+  },
+  "meow": "calc(l, t, f, d, c) is not a method, it is a ransom note. Name your things, hoo-man.",
+  "quiz": [
+    {
+      "prompt": "A method signature is applyDiscount(Order order, boolean isPrime, boolean isFirstOrder, boolean festival). What is the most direct improvement?",
+      "options": [
+        "Rename the booleans to longer names",
+        "Replace the flags with named methods or a rules object so the call site reads as intent",
+        "Change the booleans to ints so that more cases fit",
+        "Add a comment above every call site explaining the flags"
+      ],
+      "answer": 1,
+      "explanation": "Flag arguments make one method do several jobs and leave call sites reading true, false, true; splitting into named behaviour or passing a Customer or rule set removes the guessing. Comments and longer names leave the call sites just as opaque."
+    },
+    {
+      "prompt": "You must add a feature to a 400-line method that has no tests. What is the safest first step?",
+      "options": [
+        "Rewrite the method from scratch using the new feature as the specification",
+        "Add the feature first, then refactor the method",
+        "Write characterisation tests that pin the current behaviour, then refactor in small steps, then add the feature",
+        "Refactor and add the feature in one commit so that the tests only need to run once"
+      ],
+      "answer": 2,
+      "explanation": "Characterisation tests make the refactoring safe and keep it separate from the behaviour change, so a failure points at one step. Mixing refactoring with the feature, or rewriting without tests, means a failure could come from either half."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Define cohesion and coupling, and name one smell for each.",
+      "a": "Cohesion is how strongly a class's parts belong together: low cohesion looks like two clusters of methods that never share fields, a god class. Coupling is how much one part must know about another: high coupling looks like a method reaching through several objects, order.getCustomer().getAddress().getCity()."
+    },
+    {
+      "q": "Which comment is worth keeping: 'increment the counter' above counter++, or 'retry three times because the vendor returns 503 during its nightly deploy'?",
+      "a": "The second. It explains a why the code cannot express, and a reader deciding whether to change the retry count needs it. The first restates the code and will drift out of date."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Robert C. Martin, Clean Code: A Handbook of Agile Software Craftsmanship (Prentice Hall, 2008), ch. 2 Meaningful Names, ch. 3 Functions, ch. 4 Comments, ch. 17 Smells and Heuristics", "url": "https://www.informit.com/store/clean-code-a-handbook-of-agile-software-craftsmanship-9780132350884", "accessed": "2026-11-22", "supports": "intention-revealing names; one level of abstraction per function and the stepdown rule; comments that explain why; flag arguments and long parameter lists as smells", "status": "reference" },
+    { "title": "Martin Fowler, Refactoring: Improving the Design of Existing Code, 2nd ed. (Addison-Wesley, 2018)", "url": "https://martinfowler.com/books/refactoring.html", "accessed": "2026-11-22", "supports": "the definition of refactoring as structure change without observable behaviour change; the catalogue names Extract Function, Introduce Parameter Object, Replace Magic Literal, Remove Flag Argument, Extract Class", "status": "reference" },
+    { "title": "Michael Feathers, Working Effectively with Legacy Code (Prentice Hall, 2004)", "url": "https://www.informit.com/store/working-effectively-with-legacy-code-9780131177055", "accessed": "2026-11-22", "supports": "legacy code as code without tests; characterisation tests before changing it", "status": "reference" }
+  ]
+}

@@ -1,0 +1,94 @@
+{
+  "slug": "error-handling",
+  "title": "Error handling and resilience in code",
+  "moduleId": "lld",
+  "level": "intermediate",
+  "minutes": 7,
+  "problem": "A method returns null on failure, catches Exception, logs the word error and carries on, so the crash appears three layers away with no clue.",
+  "summary": "Use Optional or a result type for expected outcomes and exceptions for failures that stop the operation; validate at the boundary and fail fast; wrap with context instead of swallowing; give remote calls timeouts and retry only idempotent, transient failures; log once with identifiers.",
+  "catTip": "When my bowl is empty I do not return null and walk away. I throw a MeowException with context: which bowl, how empty, since when. Then I retry with backoff until the human gives in.",
+  "recall": {
+    "q": "A repository method may legitimately find no order for an id, while the service calling it cannot continue without one. How should each signal that?",
+    "a": "The repository returns Optional<Order>, because absence is a normal outcome the type should show. The service calls orElseThrow and raises a specific unchecked exception with the id in its message, so it fails fast where absence stops being acceptable and the handler at the boundary translates it."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Errors that are swallowed, returned as null or logged without context surface far from their cause, let callers continue on bad state, and turn a transient timeout into a double charge when retried blindly.",
+    "tradeoffs": "Result types make every call site unwrap and change when outcomes are added, exceptions hide control flow, and retries cost duplicate work unless the operation is idempotent.",
+    "explainSimply": "Decide in advance what happens when something goes wrong, instead of letting it happen somewhere random. Check inputs once at the door, like airport security, and trust them inside. When something fails deeper in, pass the problem up with a note attached rather than hiding it.",
+    "hint": "Think about whether the caller will branch on the outcome or cannot continue at all."
+  },
+  "meow": "Catch (Exception e) and purr quietly? No. Add context, rethrow, log once. Meow with a stack trace.",
+  "quiz": [
+    {
+      "prompt": "A findById method is often called with ids that no longer exist, and callers handle that case. Which return signature is best?",
+      "options": [
+        "Order, returning null when absent",
+        "Optional<Order>",
+        "Order, throwing an unchecked exception when absent",
+        "An empty Order object with a blank id"
+      ],
+      "answer": 1,
+      "explanation": "Absence is a normal outcome here, so the type should say so and force the caller to handle it. Throwing is right where absence is exceptional (a load method that cannot continue), and both null and a blank placeholder let the caller proceed on a value that is not real."
+    },
+    {
+      "prompt": "A payment client call times out and the code retries it immediately. Under what condition is that retry safe?",
+      "options": [
+        "Whenever the timeout was shorter than the server's p99 latency",
+        "Only when the operation is idempotent, for example because the request carries an idempotency key",
+        "Always, because a timeout means the request never arrived",
+        "Only when the client catches Exception rather than a specific type"
+      ],
+      "answer": 1,
+      "explanation": "A timeout does not tell you whether the charge happened, so repeating a non-idempotent call risks a double charge; an idempotency key makes the repeat harmless. The third option is the classic mistake: the reply may have been lost after the work was done."
+    }
+  ],
+  "cards": [
+    {
+      "q": "What is the difference between checked and unchecked exceptions in Java, and what does modern practice favour?",
+      "a": "Checked exceptions must be caught or declared in throws and were meant for recoverable conditions; unchecked ones (RuntimeException, Error and their subclasses) propagate without declaration. Most modern code favours documented unchecked exceptions, because checked ones leak through layers and do not compose with lambdas, keeping checked for the rare case where every caller must decide."
+    },
+    {
+      "q": "A teammate adds try/catch with a log line to every layer of a request path. What goes wrong?",
+      "a": "One failure produces a log line per layer with no added information, and if any layer swallows the exception the caller proceeds on bad state. Catch where you can act; otherwise wrap with context and rethrow, and log once at the top-level boundary with request and entity ids."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    {
+      "title": "The Java Language Specification, SE 21, ch. 11 Exceptions (11.1.1 kinds of exception classes; 11.2 compile-time checking)",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-11.html",
+      "accessed": "2026-11-22",
+      "supports": "RuntimeException, Error and their subclasses are unchecked; checked exceptions must be caught or declared in a throws clause",
+      "status": "verified"
+    },
+    {
+      "title": "Java SE 21 API: java.util.Optional",
+      "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Optional.html",
+      "accessed": "2026-11-22",
+      "supports": "the API note that Optional is primarily intended as a method return type for 'no result'; orElseThrow",
+      "status": "verified"
+    },
+    {
+      "title": "Joshua Bloch, Effective Java, 3rd ed. (Addison-Wesley, 2018), ch. 10 Exceptions (Items 69-77)",
+      "url": "https://www.informit.com/store/effective-java-9780134685991",
+      "accessed": "2026-11-22",
+      "supports": "checked for recoverable conditions and runtime exceptions for programming errors; avoid unnecessary checked exceptions; include failure-capture information; do not ignore exceptions",
+      "status": "reference"
+    },
+    {
+      "title": "JEP 409: Sealed Classes (JDK 17) and JEP 441: Pattern Matching for switch (JDK 21)",
+      "url": "https://openjdk.org/jeps/441",
+      "accessed": "2026-11-22",
+      "supports": "sealed interfaces are final in Java 17; a pattern-matching switch over a sealed type must be exhaustive in Java 21",
+      "status": "reference"
+    },
+    {
+      "title": "Java SE 21 API: java.util.concurrent.Future and ExecutorService",
+      "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Future.html",
+      "accessed": "2026-11-22",
+      "supports": "an exception thrown by a task submitted to an executor is reported only through Future.get(), as an ExecutionException",
+      "status": "reference"
+    }
+  ]
+}

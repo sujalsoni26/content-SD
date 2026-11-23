@@ -1,0 +1,69 @@
+**SQL / relational** databases (PostgreSQL, MySQL) store tables with a fixed schema, foreign keys and JOINs, and give strong ACID transactions (the [next lesson](/learn/acid)).
+
+**NoSQL** is a family, not one thing:
+
+| Type | Data shape | Examples | Good for |
+| --- | --- | --- | --- |
+| Key-value | key → value | Redis, DynamoDB | Sessions, caching, simple lookups |
+| Document | JSON-like documents | MongoDB | Profiles, catalogs, flexible fields |
+| Wide-column | Rows with large, flexible column sets spread over many nodes | Cassandra, HBase | Massive write-heavy data: messages, events, time series |
+| Graph | Nodes + edges | Neo4j | Social graphs, recommendations, fraud detection |
+
+<Callout type="warning" title={"Myth: \"SQL can't scale, NoSQL always does\""}>
+
+Relational databases scale far with replicas and sharding, and distributed SQL databases such as Spanner and CockroachDB exist. Many NoSQL databases now support transactions too.
+
+</Callout>
+
+## How to choose
+
+- **Data model**: relational, or flexible?
+- **Access patterns**: complex joins, or key lookups at huge scale?
+- **Consistency**: is it money, or likes?
+- **Expected scale**.
+
+## Start from the queries
+
+The most reliable test is to write the two or three queries that matter most and see how each store would answer them. For a chat app the hot query is "the latest 50 messages in chat 42":
+
+```sql
+-- Relational: one table, one composite index does the work
+CREATE INDEX idx_messages_chat_time ON messages (chat_id, created_at DESC);
+SELECT * FROM messages WHERE chat_id = 42 ORDER BY created_at DESC LIMIT 50;
+```
+
+```sql
+-- Wide-column (Cassandra): the table is designed around that one query
+CREATE TABLE messages_by_chat (
+  chat_id    bigint,
+  created_at timeuuid,
+  sender_id  bigint,
+  body       text,
+  PRIMARY KEY ((chat_id), created_at)
+) WITH CLUSTERING ORDER BY (created_at DESC);
+```
+
+Both work at small scale. The difference shows at hundreds of thousands of writes per second: the wide-column table is partitioned by `chat_id` from day one and appends in order, while the relational version needs sharding (see [Sharding and partitioning](/learn/sharding)) and gives up cross-chat queries once you do. If you also need "all messages by user Y across chats", the wide-column design needs a second table written in parallel; the relational one needs another index.
+
+<Mermaid caption="A decision path, not a law: start at the top and stop at the first yes." chart={`flowchart TD
+    Q1{"Transactions or joins across rows?"} -- yes --> REL["Relational (PostgreSQL, MySQL)"]
+    Q1 -- no --> Q2{"Mostly key lookups at very high write volume?"}
+    Q2 -- yes --> KV["Key-value or wide-column (Redis, DynamoDB, Cassandra)"]
+    Q2 -- no --> Q3{"Documents with varying shape?"}
+    Q3 -- yes --> DOC["Document (MongoDB)"]
+    Q3 -- no --> Q4{"Queries that walk relationships?"}
+    Q4 -- yes --> G["Graph (Neo4j)"]
+    Q4 -- no --> REL
+`} />
+
+## The line is blurring
+
+**Distributed SQL** systems (Google Spanner, CockroachDB, TiDB) keep SQL and transactions while splitting data into ranges that are replicated with a consensus protocol and rebalanced automatically; CockroachDB, for example, keeps three copies of each range by default. **NewSQL** is the umbrella term. You pay in write latency, because a commit waits for a majority of replicas, and in operational complexity, but "we need to shard, so we must leave SQL" is no longer automatically true. The reverse is also true: MongoDB and DynamoDB offer multi-item transactions today. How distributed SQL systems combine ranges, consensus and distributed transactions: [Distributed SQL and NewSQL](/learn/distributed-sql).
+
+<mark>Default to relational.</mark> Large systems often run both, which is called **polyglot persistence**: Instagram has used PostgreSQL alongside Cassandra.
+
+<Callout type="idea" title="Capacity to remember">
+
+One PostgreSQL node handles roughly **1–5k writes/s** and about **10× more reads** (see [Numbers to memorize](/learn/estimation-numbers)).
+
+</Callout>

@@ -1,0 +1,137 @@
+A **creational pattern** separates the decision of *which* object to build, and *how*, from the code that uses the object. The four to know, from the Gang of Four (GoF) catalogue, are Factory Method, Abstract Factory, Builder and Singleton. Each answers a problem a plain `new` cannot, and each is clutter when that problem is absent.
+
+Without them:
+
+```java
+class NotificationService {
+    void send(String channel, String text) {
+        if (channel.equals("email")) new SmtpEmailSender("smtp.internal", 587).send(text);
+        else if (channel.equals("sms")) new VendorSmsSender(API_KEY).send(text);
+        // every new channel edits this method; every test sends a real email
+    }
+}
+```
+
+Three problems hide in six lines: the service knows every concrete class and constructor, adding a channel edits working code, and no test can substitute a fake sender because the `new` is hard-wired (see [Interfaces, abstractions and dependency injection](/learn/interfaces-abstractions-di)).
+
+## Factory Method: let someone else choose the class
+
+A **Factory Method** returns an object of an interface type, so callers depend on the interface and the choice of concrete class lives in one place. In Gamma et al.'s original form the method is abstract and subclasses override it; modern Java usually passes a small object or lambda instead:
+
+```java
+interface Sender { void send(String text); }
+interface SenderFactory { Sender forChannel(String channel); }
+
+class NotificationService {
+    private final SenderFactory factory;
+    NotificationService(SenderFactory factory) { this.factory = factory; }
+    void send(String channel, String text) { factory.forChannel(channel).send(text); }
+}
+```
+
+The `if` chain still exists inside the production `SenderFactory`, but once, and the test passes a factory that returns a recording fake. What most codebases call "a factory", a class with a static `create` method and a switch, is this pattern's simpler cousin: not in the catalogue, and often the right first step.
+
+## Abstract Factory: objects that must match
+
+Sometimes several objects must come from the same family. A checkout needs a charger, a refunder and a webhook verifier from one payment provider, and a Razorpay charge cannot be refunded through a Stripe refunder. An **Abstract Factory** is an interface with one creation method per family member; each concrete factory produces one consistent family, and the client never names a vendor class.
+
+<Mermaid caption="Abstract Factory: Checkout sees only the interfaces; each concrete factory produces one matching family." chart={`classDiagram
+    class GatewayFactory {
+        <<interface>>
+        +charger() Charger
+        +refunder() Refunder
+    }
+    class Charger {
+        <<interface>>
+        +charge(Order order) Receipt
+    }
+    class Refunder {
+        <<interface>>
+        +refund(Receipt receipt)
+    }
+    class StripeFactory
+    class RazorpayFactory
+    class StripeCharger
+    class RazorpayCharger
+    class Checkout
+    StripeFactory ..|> GatewayFactory
+    RazorpayFactory ..|> GatewayFactory
+    StripeCharger ..|> Charger
+    RazorpayCharger ..|> Charger
+    StripeFactory ..> StripeCharger : creates
+    RazorpayFactory ..> RazorpayCharger : creates
+    Checkout --> GatewayFactory : uses
+`} />
+
+The cost is an interface and a class per member per family; a "family" with one member is a Factory Method with a longer name.
+
+## Builder: many optional parts, one valid object
+
+A food-delivery order has a restaurant, items and an address, then a dozen optional fields. A constructor with twelve parameters, most of them `null`, is unreadable at the call site and cannot validate combinations. A **Builder** collects the parts step by step, validates once, and produces an immutable object:
+
+```java
+record Order(Restaurant restaurant, List<Item> items, Address to, String note, int tipPaise) {
+    static Builder builder(Restaurant r, Address to) { return new Builder(r, to); }
+    static final class Builder {
+        private final Restaurant r; private final Address to;
+        private final List<Item> items = new ArrayList<>();
+        private String note = ""; private int tipPaise;
+        Builder(Restaurant r, Address to) { this.r = r; this.to = to; }
+        Builder item(Item i) { items.add(i); return this; }
+        Builder note(String n) { note = n; return this; }
+        Builder tip(int paise) { tipPaise = paise; return this; }
+        Order build() {
+            if (items.isEmpty()) throw new IllegalStateException("an order needs at least one item");
+            return new Order(r, List.copyOf(items), to, note, tipPaise);
+        }
+    }
+}
+```
+
+Required parts go in the builder's constructor so they cannot be forgotten; optional parts are named at the call site: `Order.builder(r, home).item(biryani).tip(2000).build()`. The JDK uses the shape in `HttpRequest.newBuilder()`. The over-use smell is a two-field class with a forty-line builder.
+
+## Singleton: one instance, global access
+
+A **Singleton** guarantees a class has exactly one instance and gives global access to it through something like `Config.getInstance()`. One instance is often legitimate (a connection pool, a metrics registry); global access is the smell. Every caller of `getInstance()` has a hidden dependency its constructor does not declare, tests cannot replace it, and state leaks between tests, which pass alone and fail together. Lazy initialisation adds a race unless written carefully (see [Concurrency and thread safety](/learn/concurrency-basics)), and a singleton is one instance *per JVM*: on two machines, "only one" needs a lock or a leader (see [Distributed locks](/learn/distributed-locks)).
+
+The answer: create the one instance at the composition root and inject it.
+
+```java
+class ReportService {
+    private final Database db;                      // declared, replaceable, visible in the constructor
+    ReportService(Database db) { this.db = db; }    // one Database is built at start-up and passed in
+}
+```
+
+**Prototype**, the fifth creational pattern, copies an existing object instead of building one from scratch; in Java it mostly appears as copy constructors, and you will rarely need to name it.
+
+<Callout type="analogy" title="A restaurant kitchen">
+
+Factory Method is the counter where you say "one biryani" and the kitchen decides which cook makes it. Abstract Factory is the thali: every dish comes from the same regional kitchen, never half Punjabi and half Kerala. Where the analogy breaks: in a kitchen you can see who cooked what; in code the whole point is that the caller cannot.
+
+</Callout>
+
+## Choosing from the problem, not the catalogue
+
+| You notice | Reach for | Not when |
+| --- | --- | --- |
+| A class picks its collaborators with `new`; tests cannot swap them | Factory Method, or plain constructor injection | There is one implementation and no test needs another |
+| Several objects must come from the same vendor or format | Abstract Factory | The family has one member |
+| A constructor has many optional parameters or needs validation first | Builder | The class has two or three fields |
+| Exactly one instance should exist | Create it once at the root and inject it | Anything reaches for `getInstance()` |
+
+<mark>Name the problem first; the pattern is the answer, never the starting point.</mark> An interviewer who hears "I will use Abstract Factory" wants to know which family must stay consistent; if you cannot say, you do not need it.
+
+<Callout type="interview" title="Say the smell, then the pattern">
+
+"This constructor would have nine parameters, five optional, so I will use a Builder and validate in build()" is a design decision; "I would use Builder" is a vocabulary word. Add the trade-off: one more class, and required fields are only enforced via the builder's constructor.
+
+</Callout>
+
+Applied in the case studies: creating tickets and spots in [Parking lot](/learn/lld-parking-lot), obtaining a logger in [Logging framework](/learn/lld-logging-framework), and assembling a ride request with optional preferences in [Ride booking](/learn/lld-ride-booking).
+
+<DeepDive title="Go deeper: if you must write a Singleton">
+
+If a framework or legacy codebase forces a Singleton on you, avoid the lazy `if (instance == null) instance = new Config();` check, which two threads can pass at the same time. The two idioms correct under the Java memory model are a single-element `enum` and the initialisation-on-demand holder, a static nested class whose static field the JVM initialises exactly once; both appear in Joshua Bloch's Effective Java. Even then, pass the instance into constructors rather than calling `getInstance()` deep inside business logic.
+
+</DeepDive>

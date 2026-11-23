@@ -1,0 +1,119 @@
+{
+  "slug": "authorization",
+  "title": "Authorisation: RBAC, ABAC and policy",
+  "moduleId": "security",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Authentication tells you the request is from user 42; nothing yet says whether user 42 may read order 10024, and that gap tops the OWASP API Top 10.",
+  "summary": "Authorisation decides whether an authenticated caller may act on this object. Model permissions with roles, attributes or relationships, separate the decision point from the enforcement point, check coarse rules at the gateway and object-level rules in the service, and scope every query by tenant.",
+  "catTip": "The kitchen door knows I am Cache; that is authentication. The fridge still will not open for me; that is authorisation. The humans check it every single time, however hard I purr. Deny by default is a cruel, correct policy.",
+  "recall": {
+    "q": "A GET /orders endpoint checks the caller's token at the gateway and returns the requested order. A user changes the id and sees a stranger's order. Name the flaw and the fix.",
+    "a": "Broken object level authorisation (OWASP API1:2023): the endpoint was authorised, the object was not. The service must load the order and check, on every request, that the caller owns it or belongs to its tenant; the gateway cannot do this because it never loads the object."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without per-object checks any authenticated user reads or changes other users' data by editing an id, and without a tenant predicate on every query one customer's bug or malice reads another customer's rows.",
+    "tradeoffs": "A central policy engine gives one auditable ruleset but becomes a latency and availability dependency, while permissions cached inside tokens are fast but stale until the token expires.",
+    "explainSimply": "Knowing who someone is does not tell you what they may touch. A badge gets you into the building and onto your floor, but the filing cabinet has its own lock, and whether your key fits depends on what is inside. Software has to check that cabinet lock on every single request.",
+    "hint": "Ask what was checked (the route) and what was not (the row), and which component could have known."
+  },
+  "meow": "Badge says Cache: allowed in. Fridge asks: is this Cache's fish? No. Every meow checked, every door, every time.",
+  "quiz": [
+    {
+      "prompt": "Which check can an API gateway not perform reliably, so that it must live inside the service?",
+      "options": [
+        "Whether the access token's signature and expiry are valid",
+        "Whether the token carries the scope required for the route",
+        "Whether the caller owns the specific object identified in the URL",
+        "Whether the caller has exceeded their rate limit"
+      ],
+      "answer": 2,
+      "explanation": "Ownership depends on data the gateway has not loaded; only the service that reads post 9812 knows its author. Scope checks are exactly what gateways are for."
+    },
+    {
+      "prompt": "A SaaS product adds a tenant filter in most queries, but a new report endpoint forgets it. Which design would have failed closed?",
+      "options": [
+        "Encrypting the tenant id column at rest",
+        "PostgreSQL row-level security enabled on the table with a tenant policy, and the app connecting as a non-owner role",
+        "Putting the tenant id in the URL path so it is always visible",
+        "A faster index on the tenant id column"
+      ],
+      "answer": 1,
+      "explanation": "With row-level security enabled, a query with no matching policy sees no rows, so the forgotten predicate leaks nothing. Encryption, URLs and indexes do not restrict which rows a query returns."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Give one rule each in RBAC, ABAC and ReBAC style for the same app, and say which model OWASP recommends for application data.",
+      "a": "RBAC: moderators may delete any post. ABAC: a private post is visible if the viewer follows the author and is not blocked. ReBAC: members of group eng may view documents shared with the group (Zanzibar-style tuples). OWASP recommends ABAC or ReBAC for application data; RBAC fits coarse organisational roles."
+    },
+    {
+      "q": "What is the difference between a policy decision point and a policy enforcement point, and why separate them?",
+      "a": "The enforcement point sits in the request path and blocks or allows; the decision point evaluates policy against the facts and returns the verdict. Separating them puts policy in one auditable place (for example OPA with Rego) so rules change without redeploying every service."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "RBAC",
+      "full": "Role-Based Access Control",
+      "note": "Users hold roles, roles hold permissions; good for coarse organisational rights, weak for per-object decisions."
+    },
+    {
+      "term": "ABAC",
+      "full": "Attribute-Based Access Control",
+      "note": "Policies over attributes of the subject, object, action and environment; defined in NIST SP 800-162 and preferred by OWASP for application data."
+    }
+  ],
+  "sources": [
+    {
+      "title": "Pang et al., \"Zanzibar: Google's Consistent, Global Authorization System\", USENIX ATC 2019",
+      "url": "https://www.usenix.org/conference/atc19/presentation/pang",
+      "accessed": "2026-11-22",
+      "supports": "relation tuples of the form object#relation@user and the example tuples; folder-to-document inheritance via userset rewrites; trillions of ACLs, millions of requests per second, p95 under 10 ms; the new enemy problem and zookies",
+      "status": "verified"
+    },
+    {
+      "title": "Open Policy Agent documentation: Introduction",
+      "url": "https://www.openpolicyagent.org/docs/latest/",
+      "accessed": "2026-11-22",
+      "supports": "OPA as a general-purpose policy engine that decouples decision-making from enforcement, with policies in Rego and JSON input",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP Cheat Sheet Series: Authorization Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html",
+      "accessed": "2026-11-22",
+      "supports": "deny by default, validate permissions on every request, prefer ABAC and ReBAC over RBAC because of role explosion, insecure direct object references",
+      "status": "verified"
+    },
+    {
+      "title": "OWASP API Security Top 10 2023: API1:2023 Broken Object Level Authorization",
+      "url": "https://api-security.owasp.org/editions/2023/en/0xa1-broken-object-level-authorization/",
+      "accessed": "2026-11-22",
+      "supports": "the id-manipulation attack, its description as extremely common, and the prevention list (per-record checks, random ids, tests)",
+      "status": "verified"
+    },
+    {
+      "title": "NIST SP 800-207, Zero Trust Architecture (August 2020), section 3",
+      "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-207.pdf",
+      "accessed": "2026-11-22",
+      "supports": "the policy engine, policy administrator and policy enforcement point split; policy decision point terminology",
+      "status": "verified"
+    },
+    {
+      "title": "NIST SP 800-162, Guide to Attribute Based Access Control (ABAC) Definition and Considerations",
+      "url": "https://csrc.nist.gov/pubs/sp/800/162/upd2/final",
+      "accessed": "2026-11-22",
+      "supports": "the definition of ABAC used in the glossary and table",
+      "status": "verified"
+    },
+    {
+      "title": "PostgreSQL documentation: Row Security Policies",
+      "url": "https://www.postgresql.org/docs/current/ddl-rowsecurity.html",
+      "accessed": "2026-11-22",
+      "supports": "ENABLE ROW LEVEL SECURITY, default-deny when no policy exists, owners and superusers bypassing unless FORCE is set",
+      "status": "verified"
+    }
+  ]
+}

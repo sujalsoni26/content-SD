@@ -1,0 +1,98 @@
+**Clean code** is code whose intent a reader can recover without running it or asking its author. It matters because code is read far more often than it is written, and most of a system's life is maintenance: the next change is made by someone who was not there for the first version, often you, a year later. The habits below serve that reader; the smells tell you when code works against them.
+
+Code that passes its tests and is still a problem:
+
+```java
+double calc(List<Item> l, int t, boolean f, double d, String c) {
+    double s = 0;
+    for (Item i : l) s += i.p * i.q;
+    if (t == 2) s = s * 0.82;                       // what is 2? what is 0.82?
+    if (f) s = s - d;                               // f switches between two different jobs
+    if (c != null && c.length() > 0) s = s - 50;    // a business rule hidden behind a null check
+    return s;
+}
+```
+
+Every call site reads `calc(items, 2, true, 40.0, code)` and says nothing; a reviewer must reconstruct the business rules from arithmetic.
+
+## Names that reveal intent
+
+A name should answer the question the reader is about to ask. `t` becomes `customerTier`; `0.82` becomes a named constant, or better, the tier becomes an `enum` that knows its own discount. Functions are verbs, booleans read as questions (`isExpired`, `hasCoupon`), and one concept gets one word across the codebase: not `fetch`, `get` and `retrieve` for the same thing.
+
+## Small functions, one level of abstraction
+
+A function should do one thing, with every statement at the same level of detail. "Compute the subtotal, apply the membership discount, apply the first-order offer" is one level; mixing in "multiply price by quantity" makes two. When a function reads as steps at the same height, each step can be named, extracted and tested:
+
+```java
+private static final double PRIME_DISCOUNT = 0.18;
+private static final Money FIRST_ORDER_OFF = Money.rupees(50);
+
+Money orderTotal(Cart cart, Customer customer) {
+    Money total = cart.subtotal();
+    if (customer.isPrime()) total = total.minusPercent(PRIME_DISCOUNT);
+    if (customer.isFirstOrder()) total = total.minus(FIRST_ORDER_OFF);
+    return total;
+}
+
+Money applyCoupon(Money total, Coupon coupon) { return total.minus(coupon.value()); }   // was the flag argument
+```
+
+Five loose parameters became two objects that belong together, the flag argument became a second named function, and the magic numbers became constants a product manager would recognise.
+
+## Cohesion and coupling
+
+**Cohesion** is how strongly the parts of a class belong together: a class is cohesive when most of its methods use most of its fields. **Coupling** is how much one piece must know about another to work. Good design has high cohesion and low coupling, the goal the single-responsibility principle and interfaces pursue too (see [SOLID principles](/learn/solid) and [Interfaces, abstractions and dependency injection](/learn/interfaces-abstractions-di)). Two clusters of methods that never touch each other's fields are two classes. A method that reaches through three objects, `order.getCustomer().getAddress().getCity()`, is coupled to all three and has broken the encapsulation from [the OOP pillars](/learn/oop-pillars).
+
+## Comments that explain why
+
+Code says what it does; a comment should say why, when the why is not obvious. "Retry three times because the vendor returns 503 during its nightly deploy" is worth keeping; "increment counter" above `counter++` is noise. Delete commented-out code: version control remembers it.
+
+## Smells and the refactoring that answers them
+
+| Smell | Why it hurts | Refactoring |
+| --- | --- | --- |
+| Long parameter list | Callers mix up the order; every new option edits every call site | Introduce Parameter Object |
+| Magic numbers and strings | The reader guesses what 0.82 means; the value drifts across files | Replace Magic Literal with a named constant or enum |
+| Flag argument | One function does two jobs; the call site reads true and learns nothing | Remove Flag Argument: two named functions |
+| God class | Everything depends on it, so every change risks everything | Extract Class along responsibility lines |
+| Long method | Cannot be understood or tested in pieces | Extract Function, one step per name |
+| Duplicated code | A fix in one copy is missed in the other | Extract and call |
+
+<Callout type="analogy" title="A recipe, not a lab notebook">
+
+A good recipe lists its ingredients up front (the parameters), gives steps at one level of detail ("make the sauce", not "move your wrist clockwise"), and explains the odd instruction ("rest the dough so the gluten relaxes"), a comment that says why. Where the analogy fails: a recipe is read top to bottom, once; code is read in fragments, out of order, by someone looking for one thing, which is why names matter more than flow.
+
+</Callout>
+
+## Refactoring safely
+
+Martin Fowler defines **refactoring** as changing the internal structure of code without changing its observable behaviour. The safety comes from the method, not from courage:
+
+<Steps>
+
+1. If the code has no tests, write characterisation tests that pin what it does today, right or wrong; code without tests is, in Michael Feathers' phrase, legacy code, whatever its age.
+2. Make one named transformation: extract, rename, inline, move.
+3. Run the tests. A failure is now one step old and easy to undo.
+4. Commit, and repeat. Never mix in a behaviour change; if the tests fail you will not know which half broke them.
+
+</Steps>
+
+Step 1's tests are the subject of [Unit testing and designing for extensibility](/learn/testing-extensibility).
+
+<Callout type="warning" title="Clean is not the same as tiny">
+
+Over-applied, these rules produce twenty three-line methods for a fifteen-line algorithm, and the reader hops between them to follow one idea. A helper with one caller and a name no clearer than its body has made things worse. The test is always the reader: would they rather see it inline?
+
+</Callout>
+
+<Callout type="interview" title="Name things the way the interviewer does">
+
+Use the words from the problem statement as class and method names, keep each method short enough to read aloud, and say "I would extract this" rather than writing a forty-line method on the whiteboard. Interviewers mark naming and the size of the pieces as much as correctness.
+
+</Callout>
+
+<DeepDive title="Go deeper: the stepdown rule">
+
+Robert Martin suggests reading a file as paragraphs that descend one level of abstraction at a time: the public method at the top reads as a short story in domain words, each function it calls is defined just below, one notch more detailed, down to the arithmetic. A reader who wants the gist stops after the first paragraph; a reader hunting a bug reads down to where it lives.
+
+</DeepDive>

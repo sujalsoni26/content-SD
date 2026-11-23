@@ -1,0 +1,64 @@
+{
+  "slug": "capacity-planning",
+  "title": "Capacity planning and load testing",
+  "moduleId": "operations",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Servers run at 95% to save money until the IPL final, when queues form, latency explodes, autoscaling arrives five minutes late and losing one zone overloads the rest.",
+  "summary": "Plan supply against peak demand with headroom: keep utilisation below the queueing knee, size for losing a zone, use Little's law for pools, measure capacity with load tests, and turn the forecast into autoscaling targets and a cost per request.",
+  "catTip": "A food bowl queue at 95% full is a brawl. I plan my bowls for the dinner rush, keep one spare in case a bowl breaks, and once a quarter I invite the neighbourhood over to find out where the kitchen falls apart.",
+  "recall": {
+    "q": "Why can a service not run near 100% utilisation, and what target follows from that?",
+    "a": "Queueing: with random arrivals, time in the system grows as service time ÷ (1 − utilisation), so latency has doubled by 50% and climbs almost vertically past 90%. Latency-sensitive services target roughly 50–70% at peak, and lower still per zone when they must also absorb a lost zone."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without headroom a modest spike forms queues and latency explodes, a lost zone overloads the survivors before autoscaling reacts, and connection pools sized for the fast case exhaust the moment the database slows.",
+    "tradeoffs": "Headroom is paid-for idle capacity, load tests need production-like environments and data, and forecasts are wrong in both directions, so you buy insurance against the expensive mistake rather than the cheap one.",
+    "explainSimply": "A road at 95% full jams the moment one driver brakes, so you plan traffic with empty lanes to spare. Capacity planning is deciding how many lanes to have for the busiest hour, keeping extra in case one closes, and testing the road with fake traffic to find out where it clogs.",
+    "hint": "Think of latency as queue length, and ask what happens to a queue as the server gets busier."
+  },
+  "meow": "Ninety-five percent full bowl queue equals brawl. Plan for the dinner rush, keep a spare bowl, rehearse the rush.",
+  "quiz": [
+    {
+      "prompt": "A service runs across three zones and must survive losing one at peak. At most what utilisation can each zone run at on a normal peak day?",
+      "options": [
+        "100%, because the other two zones will autoscale when one is lost",
+        "About 67%, so that the remaining two zones can absorb the lost zone's share",
+        "33%, so that any single zone could carry the whole peak alone",
+        "90%, because cloud zones fail too rarely to plan for"
+      ],
+      "answer": 1,
+      "explanation": "Two zones must carry the whole peak, so each is sized for half of it and runs at two-thirds of its capacity when all three are up. Autoscaling is the strongest distractor: it takes minutes, and in a zone event the other zones are already absorbing everyone's failover, so the capacity must exist in advance."
+    },
+    {
+      "prompt": "In a stress test, p99 latency is flat up to 4,000 requests per second, doubles by 5,000, and at 6,000 the error rate climbs while throughput stops increasing. Which number is the capacity to plan around?",
+      "options": [
+        "6,000, the maximum throughput before it fell",
+        "5,000, since latency merely doubled",
+        "About 4,000, the knee where p99 is still inside the SLO, with headroom on top",
+        "Whatever the autoscaler reports as the current target"
+      ],
+      "answer": 2,
+      "explanation": "Capacity is the throughput at which latency still meets the objective; past the knee each extra request costs disproportionate latency and, soon, errors. 5,000 is the strongest distractor, but doubled p99 is already outside most latency SLOs."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Your database connection pool is 50, the service does 2,000 requests per second and each database call takes 20 ms. The database slows to 60 ms. What happens?",
+      "a": "Little's law: 2,000 × 0.02 = 40 connections busy normally; at 60 ms it needs 120, so the pool of 50 saturates, requests queue for a connection and user-visible latency climbs far beyond the 60 ms the database added. Size pools for the slow case you will tolerate, cap the wait with a timeout and shed beyond it."
+    },
+    {
+      "q": "Name four load-test types and what each one is for.",
+      "a": "Load (expected traffic: are SLOs met?), stress (above expected: where is the knee and how does it fail?), soak (normal load for hours: leaks and drift), spike (sudden surge: autoscaler lag and load shedding). Smoke and breakpoint tests round out the set."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Wikipedia, \"M/M/1 queue\"", "url": "https://en.wikipedia.org/wiki/M/M/1_queue", "accessed": "2026-11-22", "supports": "utilisation ρ = λ/μ, stability only for ρ below 1, mean number in system ρ/(1−ρ) and mean response time 1/(μ−λ), from which the service-time ÷ (1 − utilisation) table is derived", "status": "secondary" },
+    { "title": "Wikipedia, \"Little's law\"", "url": "https://en.wikipedia.org/wiki/Little%27s_law", "accessed": "2026-11-22", "supports": "L = λW, proved by John Little in 1961, independent of the arrival and service distributions", "status": "secondary" },
+    { "title": "Google SRE Book, ch. 22 \"Addressing Cascading Failures\"", "url": "https://sre.google/sre-book/addressing-cascading-failures/", "accessed": "2026-11-22", "supports": "the N+2 example (six clusters for a 19,000 QPS peak with clusters breaking at 5,000 QPS); load test components until they break; an overloaded cluster offered 1,200 QPS handling well below 1,000 QPS", "status": "verified" },
+    { "title": "Grafana k6 documentation, \"Load test types\"", "url": "https://grafana.com/docs/k6/latest/testing-guides/test-types/", "accessed": "2026-11-22", "supports": "smoke, average-load, stress, soak, spike and breakpoint tests and their purposes", "status": "verified" },
+    { "title": "Kubernetes documentation, \"Horizontal Pod Autoscaling\"", "url": "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/", "accessed": "2026-11-22", "supports": "desiredReplicas = ceil(currentReplicas × currentMetricValue ÷ desiredMetricValue); default sync period of 15 seconds; default tolerance of 10%; default downscale stabilisation window of 5 minutes; utilisation measured against the resource request", "status": "verified" }
+  ]
+}

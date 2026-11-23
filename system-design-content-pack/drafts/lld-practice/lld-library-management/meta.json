@@ -1,0 +1,65 @@
+{
+  "slug": "lld-library-management",
+  "title": "LLD: Library management system",
+  "moduleId": "lld-practice",
+  "level": "intermediate",
+  "minutes": 12,
+  "problem": "A Book class with one status field cannot say 'all three copies are out, queue me', so reservations, fines and lost copies all end up wrong.",
+  "summary": "Split the title (Book) from the physical item (BookCopy), attach search and reservations to the title and loans, status and fines to the copy, enforce the rules in one LendingService with Strategy fine policies, and notify through Observer listeners.",
+  "catTip": "There is one idea of 'cardboard box' and several actual boxes in this flat. I reserve the idea and sit in whichever box comes free first, but only an actual box can be chewed, lost or returned with a fine.",
+  "recall": {
+    "q": "What is the key design decision in the library case study, and which rules attach to each side of it?",
+    "a": "Model the title (Book: ISBN, title, authors) separately from the physical item (BookCopy: barcode, status, holder). Search and reservations attach to the Book, because a member waits for a title; loans, status, holds and fines attach to the BookCopy, because only a physical item can be out, late or lost."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "With one Book object carrying a status, three copies of the same title cannot be told apart, so a reservation cannot queue for 'any copy', a lost copy takes the whole title with it, and two desks can lend the same barcode twice.",
+    "tradeoffs": "Two objects where most people draw one means an available-count per title for search results, a copy status that is a cache of loans and holds and must change in step with them, and extra classes for per-tier policies and listeners.",
+    "explainSimply": "A library has one catalogue entry for a book and several physical copies of it on the shelf. You queue for the title, but you borrow, return, lose and pay fines for one particular copy. Keeping those two ideas apart is what makes 'all copies are out, add me to the queue' possible to say at all.",
+    "hint": "Ask what a member waits for, and what a member actually carries home."
+  },
+  "meow": "One title, three copies. I queue for the title and pounce on whichever copy comes back first. Late? Fine. Literally, a fine.",
+  "quiz": [
+    {
+      "prompt": "Two desks scan the same copy within a few milliseconds. Which design guarantees it is lent only once?",
+      "options": [
+        "Read the status with get, check it is AVAILABLE, then put the copy back as ON_LOAN",
+        "Do the status check and the change to ON_LOAN inside one ConcurrentHashMap.compute call on the copy's barcode",
+        "Declare the status field volatile so the second desk sees ON_LOAN",
+        "Take one lock on the whole catalogue around every borrow"
+      ],
+      "answer": 1,
+      "explanation": "compute runs the check and the change atomically for that key, and a function that throws leaves the mapping unchanged. A lock on the whole catalogue also prevents the double loan but makes every desk and every search take turns on one lock, while get-then-put is the check-then-act race itself."
+    },
+    {
+      "prompt": "Why does the design model Book and BookCopy as two classes rather than one Book with a status?",
+      "options": [
+        "So that each copy can carry its own ISBN",
+        "Because reservations queue for a title while loans, status and fines belong to one physical copy",
+        "To save memory when a title has many copies",
+        "Because UML composition requires two classes"
+      ],
+      "answer": 1,
+      "explanation": "A member waits for any copy of a title but borrows exactly one physical item, so the rules split along that line. The ISBN option is the tempting one, but an ISBN identifies an edition, not a physical copy, so every copy of the same edition shares it."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A member reserves a title and a copy comes back three days later. Which pattern tells the member, and what stops a librarian handing that copy to someone else meanwhile?",
+      "a": "Observer: LendingService publishes HoldReady to its LibraryListener implementations, such as the notification service, without knowing who listens. The copy is set to ON_HOLD with the member's id, and borrow refuses every other member until the hold expires and passes to the next reservation."
+    }
+  ],
+  "glossary": [
+    { "term": "ISBN", "full": "International Standard Book Number", "note": "Identifies an edition or format of a book, not a physical copy; 13 digits for numbers assigned since 2007." },
+    { "term": "FIFO", "full": "First In, First Out", "note": "Queue order in which the earliest entry is served first, as in the library's reservation queue." }
+  ],
+  "sources": [
+    { "title": "Java SE 21 API: java.util.concurrent.ConcurrentHashMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html", "accessed": "2026-11-22", "supports": "compute and computeIfPresent perform the entire invocation atomically; the function should be short and must not modify the map because other updates may block; a function that throws leaves the mapping unchanged; retrieval operations do not block", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.ScheduledExecutorService", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html", "accessed": "2026-11-22", "supports": "schedule submits a one-shot task enabled after a delay and returns a ScheduledFuture, used for the three-day hold expiry", "status": "verified" },
+    { "title": "Java SE 21 API: java.time.Clock", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/time/Clock.html", "accessed": "2026-11-22", "supports": "passing a Clock into code that needs the current date, and using fixed or offset clocks in tests; LocalDate.now(clock)", "status": "verified" },
+    { "title": "Java SE 21 API: java.util.concurrent.atomic.AtomicInteger", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/atomic/AtomicInteger.html", "accessed": "2026-11-22", "supports": "incrementAndGet and decrementAndGet are atomic, used for the member's loan count and the per-title available count", "status": "verified" },
+    { "title": "The Java Tutorials: Intrinsic Locks and Synchronization", "url": "https://docs.oracle.com/javase/tutorial/essential/concurrency/locksync.html", "accessed": "2026-11-22", "supports": "a synchronized block on the reservation queue object gives mutual exclusion and a happens-before edge between release and the next acquire", "status": "verified" },
+    { "title": "Wikipedia: ISBN", "url": "https://en.wikipedia.org/wiki/ISBN", "accessed": "2026-11-22", "supports": "ISBN stands for International Standard Book Number; each edition and format gets its own ISBN while a plain reprint does not; 13 digits for ISBNs assigned since 1 January 2007", "status": "secondary" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Strategy, Observer, State, Command and Singleton as used and as deliberately not used", "status": "reference" }
+  ]
+}

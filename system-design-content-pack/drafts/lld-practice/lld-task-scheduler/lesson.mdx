@@ -1,0 +1,336 @@
+A task scheduler sits underneath every "send the digest at 7 a.m.", "retry the webhook in 30 seconds" and "poll the bank every five minutes". Its design turns on one decision: **separate what runs (a `Task`), when it runs next (a `Schedule`) and the machinery that runs it (one dispatcher thread draining a time-ordered queue into a bounded worker pool)**. A job is never in the queue while it is running, and the schedule computes the next run only after the current one has finished; that sentence settles overlap, pile-up and retries in one go.
+
+## Requirements and assumptions
+
+State the scope before drawing anything, because "scheduler" is a word people stretch from a `Timer` replacement to a workflow engine.
+
+**Functional requirements**
+
+- Run a task once, at an instant or after a delay.
+- Run a task repeatedly: at a **fixed rate** (every 10 minutes by the clock), with a **fixed delay** (10 minutes after the previous run finished), or on a **cron-like** expression (`0 7 * * 1-5`: 07:00 on weekdays).
+- Retry a failed run with exponential backoff up to a maximum, then mark the job failed; give every run a timeout.
+- Cancel a job: a cancelled job never runs again, a running one is asked to stop.
+- Shut down gracefully: stop dispatching, let running tasks finish within a grace period, then interrupt the rest.
+
+**Assumptions**, stated so they can be challenged: about 10,000 jobs in one process, 16 worker threads, task durations from milliseconds to minutes, one-second granularity, task code in the same JVM, job identity by a caller-supplied id, and an injected `Clock` so tests never sleep (the trick the [rate limiter](/learn/lld-rate-limiter) used to test its buckets).
+
+**Out of scope**: dependencies between tasks (a workflow engine), a user interface, and several machines; we design the seam for the last and stop.
+
+**Non-functional**: a job never runs concurrently with itself; a due job starts within milliseconds when a worker is free; dispatch cost per job is logarithmic in the number of jobs; one misbehaving task cannot delay every other job.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility | Knows |
+| --- | --- | --- |
+| Task | The work: a Command with one `run` method; must be safe to run twice | its id, nothing about time |
+| Schedule | The timing rule: from when the last run was due and when it finished, the next due instant or "no more" | its parameters |
+| OneShot, FixedRate, FixedDelay, CronSchedule | The four timing rules | an instant, a period, a delay, five cron fields |
+| ScheduledJob | Binds a task to a schedule and a retry policy; carries state, next run and attempt count; is the queue element | task, schedule, retry policy, state, next run, attempt |
+| Scheduler | Facade: schedule, cancel, shut down; owns queue, dispatcher and pool | queue, dispatcher, pool, clock |
+| Dispatcher | One thread that blocks until the earliest job is due and hands it to the pool | queue, pool, a permit per worker |
+| RetryPolicy | Whether, and how long after, attempt *n* follows a failure | base delay, cap, maximum attempts |
+| JobHandle | What the caller keeps: cancel and status | its job |
+| JobStore | Persistence seam so a restart can continue | storage client |
+
+The split that matters is Schedule versus ScheduledJob. A schedule is a pure function and a value: shared by a thousand jobs, unit-tested with two instants. The job is the one mutable thing per scheduled task, so running, retrying and cancelling all live in one object with one status field, and every change to it is a compare-and-set.
+
+## Class design
+
+<Mermaid caption="The four schedules and the backoff policy are Strategies; the job binds one of each to a task. Only the dispatcher touches the queue, and it never runs a task itself." chart={`classDiagram
+    class Scheduler {
+        +schedule(Task task, Schedule when, RetryPolicy retry) JobHandle
+        +shutdown(Duration grace)
+    }
+    class Dispatcher {
+        -DelayQueue queue
+        -ExecutorService workers
+        -Semaphore freeWorkers
+        +run()
+    }
+    class ScheduledJob {
+        -AtomicReference state
+        -Instant nextRunAt
+        -int attempt
+        +getDelay(TimeUnit unit) long
+        +compareTo(Delayed other) int
+        +move(JobState from, JobState to) boolean
+    }
+    class JobHandle {
+        +cancel() boolean
+        +status() JobStatus
+    }
+    class Task {
+        <<interface>>
+        +id() String
+        +run(TaskContext ctx)
+    }
+    class Schedule {
+        <<interface>>
+        +firstRun(Instant now) Instant
+        +nextRun(Instant dueAt, Instant finishedAt) Optional
+    }
+    class OneShot
+    class FixedRate
+    class FixedDelay
+    class CronSchedule
+    class RetryPolicy {
+        <<interface>>
+        +delayBefore(int attempt, Throwable failure) Optional
+    }
+    class ExponentialBackoff
+    Scheduler *-- Dispatcher
+    Scheduler --> ScheduledJob : creates
+    Dispatcher --> ScheduledJob : takes and requeues
+    ScheduledJob --> Task
+    ScheduledJob --> Schedule
+    ScheduledJob --> RetryPolicy
+    JobHandle --> ScheduledJob
+    OneShot ..|> Schedule
+    FixedRate ..|> Schedule
+    FixedDelay ..|> Schedule
+    CronSchedule ..|> Schedule
+    ExponentialBackoff ..|> RetryPolicy
+`} />
+
+Two choices are deliberate. The queue is a `DelayQueue`, so the job implements `Delayed` and the queue blocks the dispatcher until the earliest job is due: no polling, no sleeping for "about a second". And the dispatcher is one thread, so two dispatchers can never take the same job; parallelism lives entirely in the worker pool.
+
+## Key interfaces and methods
+
+The task is a Command the scheduler can queue, retry and cancel without knowing what it does. The schedule gets *both* instants, because the two periodic rules differ in which one they use:
+
+```java
+interface Task {
+    String id();
+    void run(TaskContext ctx) throws Exception;       // ctx carries attempt number, deadline and a cancellation check
+}
+
+interface Schedule {
+    Instant firstRun(Instant now);
+    Optional<Instant> nextRun(Instant dueAt, Instant finishedAt);     // empty means no further run
+}
+record FixedRate(Duration period) implements Schedule {
+    public Instant firstRun(Instant now) { return now.plus(period); }
+    public Optional<Instant> nextRun(Instant dueAt, Instant finishedAt) { return Optional.of(dueAt.plus(period)); }
+}
+record FixedDelay(Duration delay) implements Schedule {
+    public Instant firstRun(Instant now) { return now.plus(delay); }
+    public Optional<Instant> nextRun(Instant dueAt, Instant finishedAt) { return Optional.of(finishedAt.plus(delay)); }
+}
+```
+
+`OneShot` returns its instant from `firstRun` and `Optional.empty()` from `nextRun`. `CronSchedule` holds five sets of allowed values (minute, hour, day of month, month, day of week) and searches forward from the finish, one field at a time:
+
+```text
+nextRun(dueAt, finishedAt):
+    t = finishedAt truncated to the minute, plus one minute     // never twice in one minute
+    loop:
+        if month(t) not allowed:      t = first minute of the next allowed month, continue
+        if day(t) not allowed:        t = first minute of the next day, continue
+        if hour(t) not allowed:       t = next allowed hour, minute 0, continue
+        if minute(t) not allowed:     t = next allowed minute, continue
+        return t
+```
+
+Searching from `finishedAt` means a cron job that overran its next slot skips it; the edge cases return to that policy.
+
+The job is the queue element. Its ordering key, `nextRunAt`, is written only while the job is *outside* the queue, because changing an element's key inside a heap silently breaks the heap:
+
+```java
+enum JobState { SCHEDULED, RUNNING, COMPLETED, FAILED, CANCELLED }
+
+final class ScheduledJob implements Delayed {
+    final Task task; final Schedule schedule; final RetryPolicy retry; final Clock clock;
+    private final AtomicReference<JobState> state = new AtomicReference<>(JobState.SCHEDULED);
+    private volatile Instant nextRunAt;        // written only while the job is out of the queue
+    private int attempt = 0;                   // touched only by the one worker currently running the job
+
+    public long getDelay(TimeUnit unit) {
+        long nanos = Duration.between(clock.instant(), nextRunAt).toNanos();
+        return unit.convert(nanos, TimeUnit.NANOSECONDS);
+    }
+    public int compareTo(Delayed other) { return nextRunAt.compareTo(((ScheduledJob) other).nextRunAt); }
+    boolean move(JobState from, JobState to) { return state.compareAndSet(from, to); }   // every transition goes through here
+}
+```
+
+The dispatcher is the loop interviews want to see written. It takes a permit before it takes a job, so a full pool makes it wait rather than piling tasks into an unbounded hand-off queue:
+
+```java
+final class Dispatcher implements Runnable {
+    private final DelayQueue<ScheduledJob> queue;
+    private final ExecutorService workers;                     // ThreadPoolExecutor with 16 threads
+    private final Semaphore freeWorkers = new Semaphore(16);
+
+    public void run() {
+        try {
+            while (true) {
+                freeWorkers.acquire();                         // wait for a worker before taking a due job
+                ScheduledJob job = queue.take();               // blocks until the earliest job is due
+                if (!job.move(JobState.SCHEDULED, JobState.RUNNING)) { freeWorkers.release(); continue; }  // cancelled meanwhile
+                workers.execute(() -> { try { execute(job); } finally { freeWorkers.release(); } });
+            }
+        } catch (InterruptedException e) { /* shutdown: stop dispatching */ }
+    }
+
+    private void execute(ScheduledJob job) {
+        Instant dueAt = job.nextRunAt();
+        try {
+            job.task().run(job.context());
+            job.resetAttempts();
+        } catch (Exception e) {
+            Optional<Duration> wait = job.retry().delayBefore(job.nextAttempt(), e);
+            if (wait.isPresent()) { requeue(job, clock.instant().plus(wait.get())); return; }
+            job.move(JobState.RUNNING, JobState.FAILED);
+            return;
+        }
+        job.schedule().nextRun(dueAt, clock.instant())
+            .ifPresentOrElse(next -> requeue(job, next), () -> job.move(JobState.RUNNING, JobState.COMPLETED));
+    }
+
+    private void requeue(ScheduledJob job, Instant at) {
+        job.setNextRunAt(at);                                  // safe: the job is not in the queue right now
+        if (job.move(JobState.RUNNING, JobState.SCHEDULED)) queue.offer(job);   // a cancel during the run wins here
+    }
+}
+```
+
+Backoff doubles from a base, is capped, carries jitter so a hundred jobs that failed together do not retry together, and gives up after a maximum or on a failure marked not worth retrying (the reasoning is in [Timeouts and retries](/learn/timeouts-retries)):
+
+```java
+interface RetryPolicy {
+    Optional<Duration> delayBefore(int attempt, Throwable failure);     // empty means give up
+}
+record ExponentialBackoff(Duration base, Duration cap, int maxAttempts) implements RetryPolicy {
+    public Optional<Duration> delayBefore(int attempt, Throwable failure) {
+        if (attempt > maxAttempts || failure instanceof NonRetryable) return Optional.empty();
+        long millis = Math.min(cap.toMillis(), base.toMillis() << (attempt - 1));         // 1 s, 2 s, 4 s, ... up to cap
+        return Optional.of(Duration.ofMillis(millis + ThreadLocalRandom.current().nextLong(millis / 2 + 1)));
+    }
+}
+```
+
+Cancellation is two compare-and-sets, one for each state a live job can be in:
+
+```java
+boolean cancel() {
+    if (job.move(JobState.SCHEDULED, JobState.CANCELLED)) { queue.remove(job); return true; }      // never runs again
+    if (job.move(JobState.RUNNING, JobState.CANCELLED)) { job.runningFuture().ifPresent(f -> f.cancel(true)); return true; }
+    return false;                                                                                   // already finished
+}
+```
+
+## Interactions
+
+<Mermaid caption="Schedule, fail, retry, succeed, reschedule. The job leaves the queue when taken and returns only after the run, so it can never be taken twice." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client
+    participant S as Scheduler
+    participant Q as DelayQueue
+    participant D as Dispatcher
+    participant W as Worker thread
+    participant T as Task syncRates
+    participant R as RetryPolicy
+    participant F as FixedDelay 10 min
+    C->>S: schedule(syncRates, FixedDelay 10 min, backoff)
+    S->>Q: offer(job, due 10:10)
+    S-->>C: JobHandle
+    Note over D: take() blocks until 10:10
+    Q-->>D: job (Scheduled to Running)
+    D->>W: execute(job)
+    W->>T: run(ctx), attempt 1
+    T-->>W: throws TimeoutException
+    W->>R: delayBefore(1, failure)
+    R-->>W: 2 s
+    W->>Q: offer(job, due 10:10:02)
+    Q-->>D: job
+    D->>W: execute(job)
+    W->>T: run(ctx), attempt 2
+    T-->>W: ok
+    W->>F: nextRun(dueAt 10:10, finishedAt 10:11)
+    F-->>W: 10:21
+    W->>Q: offer(job, due 10:21)
+`} />
+
+The job's lifecycle is small, and the two arrows back into Scheduled are the ones that make retries and recurrence the same mechanism: a retry is just a reschedule with a different next-run time.
+
+<Mermaid caption="Job lifecycle. A retry and a recurrence are the same arrow with a different next-run time, and cancel is legal from both live states." chart={`stateDiagram-v2
+    [*] --> Scheduled: schedule() computes firstRun
+    Scheduled --> Running: due, and a worker permit is free
+    Running --> Scheduled: finished, schedule gives a next run
+    Running --> Scheduled: failed, retry policy gives a delay
+    Running --> Completed: finished, no further run
+    Running --> Failed: failed, retries exhausted or not retryable
+    Scheduled --> Cancelled: cancel() removes it from the queue
+    Running --> Cancelled: cancel() marks it, requeue is refused
+    Completed --> [*]
+    Failed --> [*]
+    Cancelled --> [*]
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Strategy | Schedule | Four timing rules today, a fifth next quarter; each is a record tested with two instants | You only ever run things once |
+| Strategy | RetryPolicy | Backoff, "retry once", "never retry" vary per job | Every task shares one retry rule |
+| Command | Task | The scheduler queues, retries and cancels objects whose work it cannot see | Never: without it a scheduler is a loop with a switch |
+| Facade | Scheduler | Callers see schedule and cancel, never the queue, pool or permits | There is one caller and it is you |
+
+Absent on purpose: an Observer for job events until metrics need one (then a listener list notified after `execute`), and a Singleton, because one instance built at start-up and injected is all that "one" needs.
+
+## Edge cases and error handling
+
+- **A run overruns its period.** The job is out of the queue while it runs, so no second instance can start; that is non-negotiable. What happens next is the schedule's policy. Fixed-rate computes `dueAt + period`, which may already be in the past, so the queue releases it at once and late runs follow back to back until the schedule catches up. Fixed-delay computes `finishedAt + delay`, always in the future, so nothing piles up. The condition that decides: if every scheduled run is work that must happen (a billing cycle, an hourly report), use fixed-rate and let it catch up; if a run only refreshes "now" (a cache sync, a heartbeat), use fixed-delay or a fixed-rate variant that skips to the next future slot. Overlapping instances are right only for a task that is reentrant and idempotent.
+- **The task throws.** The worker catches it, so a pool thread never dies with it. The policy decides between a retry and `Failed`; a task says "do not bother" by throwing a `NonRetryable` subtype, and the maximum attempts stops one poison task from occupying a worker for ever.
+- **The task hangs.** The `TaskContext` carries a deadline that well-behaved tasks check. For the others, the scheduler schedules its own watchdog: a one-shot job at `now + timeout` that calls `cancel(true)` on the running `Future`. Interruption is cooperative: it throws inside a blocking `sleep`, `wait` or `join` and otherwise only sets a flag, so a loop that never checks keeps running, which is why the deadline comes first.
+- **Cancel during a run.** `cancel` moves Running to Cancelled; at the end of the run `requeue` tries Running to Scheduled, fails its compare-and-set and does not offer the job.
+- **Missed schedules after a restart.** Every persisted job whose `nextRunAt` is in the past needs a misfire decision: a one-shot runs now, once; a fixed-rate job runs once and skips to the next future slot rather than replaying 400 missed runs; cron picks the next matching minute. The overrun condition decides again.
+- **The process dies between the work and the bookkeeping.** The task ran, the state was not saved, the restart runs it again. Tasks must be idempotent (see [Idempotency](/learn/idempotency)): a report keyed by its period, a webhook with a delivery id, a sync that upserts.
+
+<Callout type="analogy" title="The out-patient desk">
+
+An appointments book sorted by time is the queue. The receptionist (the dispatcher) calls the next patient only when their time has come *and* a consulting room (a worker permit) is free. A doctor who overruns makes later patients start late, never two patients in one room. "Come back two weeks after today's visit" is fixed-delay; "every Monday at 9" is fixed-rate, and a clinic running late squeezes the backlog in. A no-show is rebooked with growing gaps, then struck off: backoff. Where the analogy fails: the receptionist watches the clock; our dispatcher sleeps inside `take()` and is woken by the queue the instant the head is due.
+
+</Callout>
+
+## Concurrency
+
+Name the shared mutable state first, as [Concurrency and thread safety](/learn/concurrency-basics) insists: the queue, each job's state, next-run time and attempt counter, and the pool.
+
+The queue is thread-safe and the dispatcher is one thread, so the only producers competing with it are workers requeueing and callers scheduling, both through `offer`. Job state is an `AtomicReference` and every transition is a `compareAndSet`, so whichever of cancel, requeue or dispatch runs second fails and does nothing. `nextRunAt` is written only while the job is outside the queue, and is `volatile` so a status reader sees the latest value. The attempt counter is confined: at most one worker runs a job at a time. Passing a job through the queue and the executor gives the happens-before edge that lets the worker see what the dispatcher wrote.
+
+The pool is bounded by a `Semaphore` rather than the executor's rejection policy, for a reason worth saying out loud: `CallerRunsPolicy` would make the *dispatcher* run the overflow task, and a dispatcher stuck in a 20-minute task dispatches nothing for 20 minutes. Waiting on a permit keeps it free.
+
+Neither `DelayQueue` nor `PriorityBlockingQueue` promises first-in-first-out among jobs due at the same instant; the latter's documentation suggests a sequence number as tie-breaker, and `compareTo` above should carry one. No code path holds two locks, so there is no ordering to get wrong.
+
+## Extensibility and trade-offs
+
+- **A new timing rule.** One record implementing `Schedule`; "run again when the previous run says so" is a schedule whose `nextRun` reads a value the task left in the context.
+- **Persistence.** The `JobStore` is written before `offer` and after every state change; a restart rebuilds the queue from it and applies the misfire policy.
+- **Several machines.** Either one dispatcher is active and the others stand by, which is [leader election](/learn/leader-election), or every machine dispatches from a shared store and claims a job with a conditional update, a [distributed lock](/learn/distributed-locks) per job. `move` becomes that conditional update; nothing else changes.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| One dispatcher thread | No race between dispatchers, easy reasoning | Serial dispatch: fine at thousands of jobs a second, a bottleneck beyond |
+| DelayQueue of jobs | Blocks until due for free, log *n* insert | No priority among jobs due at the same instant |
+| Next run computed after the run | No overlap; retries and recurrence share a path | A late fixed-rate job catches up in a burst |
+| Semaphore of worker permits | Back-pressure without a hand-off queue | A full pool delays even a due job |
+| State in one process | Simple, fast, testable with a fixed clock | A second machine needs a store and a conditional claim |
+
+<Callout type="interview" title="The two-minute version">
+
+"A Task is a Command; a Schedule is a Strategy that, given when the last run was due and when it finished, returns the next due time; a ScheduledJob binds the two with a retry policy and sits in a DelayQueue ordered by next run. One dispatcher thread blocks on the queue, takes a worker permit and hands the job to a bounded pool. The job is out of the queue while it runs, so it never overlaps itself; fixed-rate adds the period to the due time and catches up, fixed-delay adds it to the finish time and cannot pile up. Failures get capped exponential backoff, and every state change is a compare-and-set, so cancelling a running job just makes its requeue fail." Then ask about persistence or several machines.
+
+</Callout>
+
+<DeepDive title="Go deeper: why not just use ScheduledThreadPoolExecutor">
+
+The JDK's `ScheduledThreadPoolExecutor` is this design minus the retry policy, the timeout and the persistence seam, and it is the right answer when you need none of them. Its documented behaviour explains several choices above. Periodic executions "do not overlap", and a long fixed-rate run makes later ones "start late, but will not concurrently execute". It is a fixed-size pool on an *unbounded* queue, so `maximumPoolSize` has no effect and there is no back-pressure. An execution that throws suppresses every later execution of that periodic task, with no retry: one network blip silently ends your "every five minutes" job, the most common production surprise with it. A cancelled task stays queued until its delay elapses unless you call `setRemoveOnCancelPolicy(true)`, and on `shutdown()` delayed one-shots still run by default while periodic tasks are cancelled. `CompletableFuture.orTimeout` does not rescue a hang either: it completes the future exceptionally and `cancel` ignores `mayInterruptIfRunning`, so the running code is not stopped. Wrap the JDK class for "run this later"; build the version above when a job must survive a failure, a hang or a restart.
+
+</DeepDive>

@@ -1,0 +1,150 @@
+{
+  "slug": "design-youtube",
+  "title": "Design YouTube",
+  "moduleId": "hld",
+  "level": "advanced",
+  "minutes": 18,
+  "problem": "A single upload must become a video that starts in two seconds on any network, served at ninety terabits a second, with a view count that stays honest.",
+  "summary": "An asynchronous transcoding pipeline turns each upload into a ladder of renditions cut into six-second segments; players pick a rung per segment over HLS or DASH; a CDN serves nearly every byte; views are events in a log aggregated by a stream job.",
+  "catTip": "I nap on the transcoding racks because they are warm. Every video gets baked into six loaves and sliced at the same six-second marks, the corner shops at the edge hand out the slices, and when the wifi thins I take a lighter loaf.",
+  "recall": {
+    "q": "A premiere draws two million viewers to one video in its first minute. Why does the origin barely notice, and which component does feel it?",
+    "a": "Segments are immutable, keyframe-aligned files with fixed URLs, so every CDN edge caches them after one miss and the origin shield means object storage serves each segment a handful of times; the player adapts by choosing a rung per segment from the manifest, so no server keeps per-viewer state. What feels it is the view counter: two million heartbeats land on one video id's log partition, which must be split with a suffix and aggregated by a stream job."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Pushing bytes through application servers and counting views with row updates collapses the first time a million people watch one video at once, and a single bitrate stalls every viewer on a weak network.",
+    "tradeoffs": "Pre-transcoding a full ladder costs hundreds of thousands of cores and a storage multiplier for videos nobody may watch, and the counts viewers see are minutes stale and may later be revised.",
+    "explainSimply": "Think of a bakery that bakes each video once into six loaves of different richness, all sliced at the same marks. Corner shops everywhere keep copies of the slices, so the bakery hardly hears from customers. When your arms get tired you switch to a lighter loaf at the next slice.",
+    "hint": "Ask what property of a segment lets thousands of caches serve it without asking anyone, and who decides which quality comes next."
+  },
+  "meow": "Bake once, slice at six seconds, six loaves. Corner shops hand them out. Thin wifi? Lighter loaf. Meow.",
+  "quiz": [
+    {
+      "prompt": "A channel with ten million subscribers uploads a two-hour 1080p video and expects viewers within minutes. Which pipeline design meets that without wasting the transcoding fleet?",
+      "options": [
+        "Encode the whole file serially at the highest quality first, because the most demanding viewers arrive first",
+        "Split the source at keyframes into chunks, encode chunks in parallel as idempotent queue jobs, publish the 360p rendition as soon as its chunks stitch, and add higher rungs and costlier codecs as they finish",
+        "Store only the original and let the CDN transcode each rung on the first request for it",
+        "Encode every rung and codec in parallel and publish only when the complete ladder is ready, so adaptive switching works from the first viewer"
+      ],
+      "answer": 1,
+      "explanation": "Chunk-level parallelism turns twenty core-hours into minutes of wall-clock time, and publishing the cheap rung first meets the deadline while the rest encodes. Waiting for the complete ladder is the strongest distractor: it does give full adaptation from the first view, but time to playable then grows with the most expensive codec in the ladder."
+    },
+    {
+      "prompt": "A video premiere draws two million concurrent viewers in its first minute. Which statement about where the load lands is correct?",
+      "options": [
+        "Object storage streams to two million players, so the bucket needs read replicas in every region",
+        "CDN edges serve the segments from cache after one miss each and the origin shield means storage sees each segment a handful of times; the hot spot that remains is the view counter's log partition for that one video id, which must be split by a suffix and aggregated",
+        "The metadata database takes two million reads a second for the title and description and must be sharded by video id before the premiere",
+        "The transcoding fleet re-encodes the video at higher bitrates during the premiere to keep up with demand"
+      ],
+      "answer": 1,
+      "explanation": "Immutable segment URLs let edges and the shield absorb the viewers, so the only component that scales with concurrent viewers of one video is the counter for that video's key. The metadata option is the strongest distractor: the read happens once per playback, not per segment, and a cache serves it, so the database sees a trickle."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: a two-hour upload must be watchable within minutes and end up as six rungs in two codecs, while 300k cores of transcoding are the single largest compute cost. Decision and why?",
+      "a": "Run a DAG of small idempotent jobs: probe, split at keyframes into about ten-second chunks, encode each (chunk, rung, codec) in parallel from a priority queue, stitch into aligned six-second segments, and publish the 360p rung first with the manifest updated as rungs finish. Encode the expensive codec (VP9 costs about five times H.264 to encode) only for videos whose view forecast pays it back in saved egress. The DAG is a cost model with a scheduler: cheap and urgent first, expensive and optional when earned."
+    },
+    {
+      "q": "Problem: 90 Tbps of egress and 18M segment requests a second at peak, to players on everything from 2G to fibre. Decision and why?",
+      "a": "Adaptive bitrate over HLS or DASH: a manifest lists each rung's bandwidth and resolution, every rung is cut into six-second segments aligned on the same boundaries, and the player picks a rung per segment from its throughput and buffer. Segments are immutable files with fixed URLs, so thousands of CDN edges cache them for a year and an origin shield means object storage serves a hot segment a handful of times. The server's job is to be boring: static, aligned, cacheable files, with no per-viewer state anywhere."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "HLS",
+      "full": "HTTP Live Streaming",
+      "note": "Apple's adaptive streaming format (RFC 8216): a master playlist of variant streams, a media playlist of short segments per variant, all over plain HTTP."
+    },
+    {
+      "term": "DASH",
+      "full": "Dynamic Adaptive Streaming over HTTP",
+      "note": "The MPEG standard (ISO/IEC 23009-1) for adaptive streaming: an MPD manifest describing representations and segments fetched over HTTP."
+    },
+    {
+      "term": "ABR",
+      "full": "Adaptive Bitrate (streaming)",
+      "note": "The player chooses a quality rung for each segment from measured throughput and buffer, so quality follows the network instead of stalling."
+    },
+    {
+      "term": "DRM",
+      "full": "Digital Rights Management",
+      "note": "Encrypted media segments that a player can only decrypt with a licence from a licence server; the one case where a video stops being a plain cacheable file."
+    }
+  ],
+  "sources": [
+    {
+      "title": "YouTube Official Blog, \"Reimagining video infrastructure to empower YouTube\" (21 April 2021)",
+      "url": "https://blog.youtube/inside-youtube/new-era-video-infrastructure/",
+      "accessed": "2026-11-22",
+      "supports": "more than 500 hours of video uploaded every minute on average; video is uploaded in one format and transcoded for many devices and resolutions; YouTube's custom transcoding chip (VCU) with 20 to 33 times better compute efficiency than the previous system; VP9 uses about five times the compute of H.264 to encode; AV1 as the next codec",
+      "status": "verified"
+    },
+    {
+      "title": "Ranganathan et al., \"Warehouse-scale video acceleration: co-design and deployment in the wild\", ASPLOS 2021 (abstract)",
+      "url": "https://research.google/pubs/warehouse-scale-video-acceleration-co-design-and-deployment-in-the-wild/",
+      "accessed": "2026-11-22",
+      "supports": "video sharing accounts for the majority of internet traffic; a warehouse-scale transcoding accelerator with 20 to 33 times improved efficiency; only the abstract was read",
+      "status": "verified"
+    },
+    {
+      "title": "RFC 8216, \"HTTP Live Streaming\" (Pantos and May, August 2017)",
+      "url": "https://datatracker.ietf.org/doc/html/rfc8216",
+      "accessed": "2026-11-22",
+      "supports": "a Media Playlist lists Media Segments and a Master Playlist lists Variant Streams (section 2); EXT-X-STREAM-INF with the required BANDWIDTH and recommended RESOLUTION attributes (section 4.3.4.2); EXT-X-TARGETDURATION as the maximum segment duration (section 4.3.3.1); data should be carried over HTTP; clients should switch between Variant Streams to adapt to network conditions",
+      "status": "verified"
+    },
+    {
+      "title": "Apple, \"HLS Authoring Specification for Apple Devices\"",
+      "url": "https://developer.apple.com/documentation/http-live-streaming/hls-authoring-specification-for-apple-devices",
+      "accessed": "2026-11-22",
+      "supports": "target durations should be 6 seconds (items 7.5 and 7.6); the example bit-rate ladder for 16:9 H.264 content from 145 kbit/s at 416x234 to 7,800 kbit/s at 1920x1080, whose rungs step roughly 1.3 to 1.5 times (item 1.25); the ladder is offered as one possible set, not a rule",
+      "status": "verified"
+    },
+    {
+      "title": "ISO/IEC 23009-1, \"Dynamic adaptive streaming over HTTP (DASH), Part 1: Media presentation description and segment formats\"",
+      "url": "https://www.iso.org/standard/83314.html",
+      "accessed": "2026-11-22",
+      "supports": "DASH as the MPEG standard for adaptive streaming with an MPD manifest; named, not re-read (the ISO page refused automated access)",
+      "status": "reference"
+    },
+    {
+      "title": "YouTube Help, \"Recommended upload encoding settings\"",
+      "url": "https://support.google.com/youtube/answer/1722171",
+      "accessed": "2026-11-22",
+      "supports": "recommended SDR upload bitrates at standard frame rates: 1080p 8 Mbps, 720p 5 Mbps, 480p 2.5 Mbps, 360p 1 Mbps, 2160p 35 to 45 Mbps; MP4 container and H.264 video codec",
+      "status": "verified"
+    },
+    {
+      "title": "YouTube Help, \"How engagement metrics are counted\"",
+      "url": "https://support.google.com/youtube/answer/2991785",
+      "accessed": "2026-11-22",
+      "supports": "views and other metrics are verified as coming from humans rather than programs; YouTube may temporarily slow, freeze or change a metric count while verifying it; low-quality playbacks such as many tabs or devices on the same video may be discarded; verified metrics can take several days to fully update",
+      "status": "verified"
+    },
+    {
+      "title": "Vitess documentation, \"History\"",
+      "url": "https://vitess.io/docs/overview/history/",
+      "accessed": "2026-11-22",
+      "supports": "Vitess was created in 2010 to solve the MySQL scalability challenges YouTube faced, when replicas no longer sufficed and write traffic required sharding; accepted by CNCF in 2018 and graduated in 2019",
+      "status": "verified"
+    },
+    {
+      "title": "Amazon S3, \"Storage classes\"",
+      "url": "https://aws.amazon.com/s3/storage-classes/",
+      "accessed": "2026-11-22",
+      "supports": "S3 Glacier Instant Retrieval returns data in milliseconds with a 90-day minimum storage duration; S3 Glacier Deep Archive is the lowest-cost class, restores within 12 hours (12 to 48 hours in the overview) and has a 180-day minimum; all classes designed for 99.999999999% durability",
+      "status": "verified"
+    },
+    {
+      "title": "Amazon S3 pricing",
+      "url": "https://aws.amazon.com/s3/pricing/",
+      "accessed": "2026-11-22",
+      "supports": "the order-of-magnitude assumption that an archive tier costs about a twentieth of the standard tier per GB-month; the page's price tables did not render for automated reading, so the ratio is stated in the lesson as an assumption",
+      "status": "reference"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+- **Timeout:** the longest you'll wait before giving up. Without one, a stuck ranking service ties up the feed service's threads until the feed service fails too. After a timeout, return an error or a **fallback** (a chronological feed instead of a ranked one). Set it a bit above the dependency's p99 (see [Latency, throughput and the numbers to know](/learn/latency)).
+- **Retry** transient failures (a network blip), but beware <mark>retry storms</mark>: 3 retries mean up to 4× the traffic on a service that is already struggling, multiplied at every layer that retries.
+
+<Callout type="idea" title="Safe retries">
+
+- **Exponential backoff** (wait 1 s, 2 s, 4 s, 8 s) plus **jitter** (randomness, so clients don't retry in sync).
+- Cap attempts with a **retry budget**.
+- Retry only transient errors (timeouts, 503); never 400.
+- Retry only idempotent operations, or use idempotency keys (see [Idempotency](/learn/idempotency)).
+
+</Callout>
+
+<Interactive name="backoff-jitter" />
+
+## Should I retry this?
+
+| Failure | Retry? |
+| --- | --- |
+| Timeout, connection reset | Yes, with backoff and jitter |
+| 503 Service Unavailable | Yes, with backoff and jitter |
+| 429 Too Many Requests | Only after Retry-After (see [Rate limiting](/learn/rate-limiting)) |
+| 400, 401, 404 | No: the same request will get the same answer |
+| POST that creates something, without an idempotency key | No: a retry may create a duplicate |
+
+<DeepDive title="Go deeper: how retries multiply">
+
+If the app, the API service and the data service each try up to 4 times (1 call + 3 retries), one user request can reach the database up to 4 × 4 × 4 = 64 times during an outage. That is why mature systems retry at *one* layer only, usually the one closest to the user.
+
+A popular backoff formula (from the AWS Architecture Blog's "full jitter"): `sleep = random(0, min(cap, base × 2^attempt))`. Spreading retries randomly over the whole window removes the synchronized spikes.
+
+</DeepDive>

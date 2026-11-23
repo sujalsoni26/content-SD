@@ -1,0 +1,80 @@
+{
+  "slug": "partitioning-internals",
+  "title": "Partitioning and rebalancing",
+  "moduleId": "internals",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "After sharding, a query by anything but the shard key fans out to every shard, adding a node reshuffles data, and one hot key still pins a single partition.",
+  "summary": "Local indexes make writes cheap and reads scatter-gather; global indexes invert that and go eventually consistent. Rebalance with fixed partitions, dynamic splits or per-node slices, route through a coordination service, gossip or a routing tier, and salt hot keys.",
+  "catTip": "Every room in the house has its own toy box, a local index: finding the red mouse means checking all of them. One master list of toys by colour is faster to read but always a little behind where I actually dropped it.",
+  "recall": {
+    "q": "A photo service partitioned by user needs all photos with a given tag. Compare a local and a global secondary index for that query.",
+    "a": "A local index lives with each user partition, so the tag query scatter-gathers across every partition and waits for the slowest. A global index is partitioned by tag, so the query hits one partition, but each write also updates a second partition asynchronously and reads from the index are eventually consistent."
+  },
+  "archNodes": ["db"],
+  "guide": {
+    "breaks": "Without a plan for secondary indexes every non-key query hits all shards; without a rebalancing strategy adding a node moves most of the data; without routing clients cannot find a moved partition; and a hot key saturates one partition however many you have.",
+    "tradeoffs": "Global indexes trade write cost and consistency for cheap reads, fixed partition counts trade flexibility for simplicity, dynamic splitting adds hot starts and background movement, and salting multiplies read work to spread writes.",
+    "explainSimply": "Once data is spread over many machines, new questions appear: how to find things by something other than the filing key, how to add a machine without re-filing everything, and how a request knows which machine to ask. Think of library branches: you can phone every branch, keep a central catalogue that lags a little, hand a new branch whole shelves, and spread one wildly popular book over many branches on purpose.",
+    "hint": "Think about where the index for a non-key attribute lives, and what a query has to do when it is not where the data is."
+  },
+  "meow": "Local index: ask every shard, meow. Global index: ask one, but it is a beat behind. Hot key? Salt it and spread the paws.",
+  "quiz": [
+    {
+      "prompt": "A DynamoDB table uses today's date as the partition key for event writes and is throttled at about 1,000 writes per second despite ample provisioned capacity. Which fix does the DynamoDB guide recommend?",
+      "options": [
+        "Add a local secondary index on the timestamp",
+        "Write-shard the key by appending a random or calculated suffix so one day's writes spread across many partitions, merging on read",
+        "Switch the table to on-demand capacity",
+        "Create a global secondary index on the date"
+      ],
+      "answer": 1,
+      "explanation": "A single partition-key value lives on one partition with a 1,000 write-unit ceiling, and salting spreads it. More capacity or more indexes do not change which partition one key maps to."
+    },
+    {
+      "prompt": "Which rebalancing approach lets a new node take over data by adopting whole pre-existing partitions, without splitting or re-hashing anything?",
+      "options": [
+        "Hash modulo the node count",
+        "A fixed number of partitions created at cluster start, many more than there are nodes",
+        "Dynamic range splitting",
+        "Rebuilding all secondary indexes"
+      ],
+      "answer": 1,
+      "explanation": "With a fixed oversupply of partitions, as in Riak's 64-partition ring or Elasticsearch's fixed shard count, a new node simply adopts some of them. Dynamic splitting creates partitions on size or load, and hash-mod-N remaps almost every key."
+    }
+  ],
+  "cards": [
+    {
+      "q": "HBase, Cassandra and MongoDB each answer the question of which node holds a key differently. Name the mechanism each uses.",
+      "a": "HBase: the hbase:meta catalogue table lists regions and their servers, ZooKeeper stores where hbase:meta is, and clients cache lookups. Cassandra: gossip spreads ring state to every node, and the node a client connects to coordinates and forwards. MongoDB: config servers hold the metadata and mongos routers direct client requests to shards."
+    },
+    {
+      "q": "Why does a DynamoDB global secondary index offer only eventually consistent reads while a local secondary index can be strongly consistent?",
+      "a": "An LSI's entries live on the same partition as their base items, so a write updates both in one place. A GSI is partitioned by its own key, so base-table writes propagate to the index partition asynchronously; the index can lag, and DynamoDB therefore offers only eventual consistency on it."
+    }
+  ],
+  "glossary": [
+    { "term": "LSI", "full": "Local Secondary Index", "note": "DynamoDB's index that shares the table's partition key with a different sort key; it lives with the data, so reads can be strongly consistent." },
+    { "term": "GSI", "full": "Global Secondary Index", "note": "DynamoDB's index with its own key schema and throughput, partitioned independently and updated asynchronously." }
+  ],
+  "sources": [
+    { "title": "Amazon DynamoDB Developer Guide, Local secondary indexes", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/LSI.html", "accessed": "2026-11-22", "supports": "same partition key with alternative sort key; created with the table; up to five per table; strongly consistent reads allowed; 10 GB item collection limit; item collections stored on one partition", "status": "verified" },
+    { "title": "Amazon DynamoDB Developer Guide, Using Global Secondary Indexes", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html", "accessed": "2026-11-22", "supports": "own key schema and throughput; indexes can be added at any time; asynchronous, eventually consistent updates", "status": "verified" },
+    { "title": "Amazon DynamoDB Developer Guide, Quotas", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html", "accessed": "2026-11-22", "supports": "five local and twenty global secondary indexes per table by default", "status": "verified" },
+    { "title": "Amazon DynamoDB Developer Guide, Using write sharding to distribute workloads evenly", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-sharding.html", "accessed": "2026-11-22", "supports": "random suffixes 1 to 200, calculated suffixes, and the need to query every suffix and merge", "status": "verified" },
+    { "title": "Amazon DynamoDB Developer Guide, Best practices for designing and using partition keys", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html", "accessed": "2026-11-22", "supports": "3,000 read units and 1,000 write units per partition", "status": "verified" },
+    { "title": "Apache Cassandra documentation, Indexing concepts", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/indexing/indexing-concepts.html", "accessed": "2026-11-22", "supports": "secondary indexes are local to each node and recommended only with a partition key", "status": "verified" },
+    { "title": "Apache Cassandra documentation, Dynamo", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html", "accessed": "2026-11-22", "supports": "gossip with a random peer every second; the coordinator hashes the partition key; virtual nodes and consistent hashing", "status": "verified" },
+    { "title": "Apache Cassandra documentation, cassandra.yaml (num_tokens)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/configuration/cass_yaml_file.html", "accessed": "2026-11-22", "supports": "num_tokens default of 16", "status": "verified" },
+    { "title": "Riak KV documentation, Configuration Reference (ring_size)", "url": "https://docs.riak.com/riak/kv/latest/configuring/reference/index.html", "accessed": "2026-11-22", "supports": "ring_size default 64, a power of two, valid only when first creating the cluster", "status": "verified" },
+    { "title": "Elasticsearch Guide, Index modules", "url": "https://www.elastic.co/guide/en/elasticsearch/reference/current/index-modules.html", "accessed": "2026-11-22", "supports": "number of primary shards fixed at index creation", "status": "verified" },
+    { "title": "Apache HBase documentation, Catalog Tables", "url": "https://hbase.apache.org/docs/architecture/catalog-tables/", "accessed": "2026-11-22", "supports": "hbase:meta lists all regions and its location is stored in ZooKeeper", "status": "verified" },
+    { "title": "Apache HBase documentation, Client", "url": "https://hbase.apache.org/docs/architecture/client/", "accessed": "2026-11-22", "supports": "clients query hbase:meta to locate a region and cache the result", "status": "secondary" },
+    { "title": "Apache HBase documentation, Regions", "url": "https://hbase.apache.org/docs/architecture/regions/", "accessed": "2026-11-22", "supports": "regions split when they reach a configured threshold and daughters are registered in hbase:meta", "status": "verified" },
+    { "title": "CockroachDB documentation, Distribution Layer", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/distribution-layer", "accessed": "2026-11-22", "supports": "ranges split at the default range size and merge when small", "status": "verified" },
+    { "title": "CockroachDB documentation, Replication Controls", "url": "https://docs.cockroachlabs.com/docs/stable/configure-replication-zones", "accessed": "2026-11-22", "supports": "range_max_bytes default 536870912 (512 MiB)", "status": "verified" },
+    { "title": "CockroachDB documentation, Load-based Splitting", "url": "https://docs.cockroachlabs.com/docs/stable/load-based-splitting", "accessed": "2026-11-22", "supports": "frequently accessed ranges are split by load; enabled by default", "status": "verified" },
+    { "title": "MongoDB Manual, Sharded Cluster Components", "url": "https://www.mongodb.com/docs/manual/core/sharded-cluster-components/", "accessed": "2026-11-22", "supports": "mongos as query router between clients and the cluster; config servers hold metadata", "status": "verified" },
+    { "title": "Martin Kleppmann, Designing Data-Intensive Applications, ch. 6 \"Partitioning\" (O'Reilly, 2017)", "url": "https://dataintensive.net/", "accessed": "2026-11-22", "supports": "local versus global secondary indexes, scatter/gather, the three rebalancing strategies and the three request-routing approaches, including that any Cassandra node can coordinate a request", "status": "reference" }
+  ]
+}

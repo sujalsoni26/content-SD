@@ -1,0 +1,48 @@
+Each card names a problem. Say the building block that solves it, then flip to check. Mark the ones you missed as "Again" and they will come back.
+
+<Interactive name="recall-cards" variant="revision" />
+
+<DeepDive title="Show the full table">
+
+| Problem | Building block |
+| --- | --- |
+| How big must it be? | [Back-of-the-envelope estimation](/learn/estimation-formulas) |
+| Finding the server | [DNS](/learn/dns) |
+| Moving bytes | [TCP (reliable), UDP (fast)](/learn/tcp-udp) |
+| Message format and security | [HTTP / HTTPS (TLS)](/learn/http) |
+| Where time goes | [Latency numbers, percentiles](/learn/latency) |
+| Hiding and routing to backends | [Reverse proxy](/learn/proxy) |
+| Spreading traffic, surviving server loss | [Load balancer + horizontal scaling (stateless servers)](/learn/load-balancing) |
+| Slow global delivery of static files | [CDN](/learn/cdn) |
+| Client ↔ backend API | [REST](/learn/rest) |
+| Fast internal calls | [gRPC](/learn/grpc) |
+| Real-time push | [WebSockets (or SSE)](/learn/websockets) |
+| Choosing storage | [SQL / NoSQL by data model and access pattern](/learn/sql-nosql) |
+| All-or-nothing writes | [Transactions / ACID](/learn/acid) |
+| Slow lookups | [Indexes](/learn/indexing) |
+| Joins vs duplication | [Normalization / denormalization](/learn/normalization) |
+| Too many reads, one DB failing | [Replication](/learn/replication) |
+| Too much data or too many writes | [Sharding](/learn/sharding) |
+| Copies disagreeing | [Consistency models, CAP, PACELC](/learn/consistency) |
+| Repeated identical reads | [Caching](/learn/caching) |
+| Large files | [Object storage](/learn/object-storage) |
+| Huge codebase, many teams | [Microservices + API gateway](/learn/microservices) |
+| Slow dependencies, traffic spikes | [Async communication + message queues](/learn/message-queues) |
+| Many systems reacting to one event | [Pub/sub, event-driven architecture](/learn/pubsub) |
+| How much downtime is acceptable? | [Availability target (the nines)](/learn/availability) |
+| Hanging calls, transient errors | [Timeouts, retries with backoff + jitter](/learn/timeouts-retries) |
+| A dead dependency spreading failure | [Circuit breaker](/learn/circuit-breaker) |
+| Sustained overload | [Backpressure, load shedding](/learn/backpressure) |
+| Abusive clients | [Rate limiting (per-client quotas)](/learn/rate-limiting) |
+| Duplicate requests | [Idempotency keys](/learn/idempotency) |
+| Which part limits the system? | [The bottleneck: the slowest component, usually the database](/learn/latency) |
+| Load swings up and down | [Elasticity (autoscaling)](/learn/scaling) |
+| Data loss and downtime after a disaster | [RPO / RTO targets, automatic failover](/learn/availability) |
+
+</DeepDive>
+
+<Callout type="interview" title="Use it backwards in interviews">
+
+When you add a box to a whiteboard design, say the problem from the left column first: "reads are 100× writes and the same links get hammered, so I'll add a cache." A box with no problem attached is a box you will be asked to remove.
+
+</Callout>

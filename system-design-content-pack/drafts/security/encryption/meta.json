@@ -1,0 +1,117 @@
+{
+  "slug": "encryption",
+  "title": "Encryption in transit and at rest",
+  "moduleId": "security",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "A stolen disk, a leaked database password and a curious administrator are three different attackers, and one tick-box called encrypted at rest defends against only the first.",
+  "summary": "Certificates bind keys to names, mutual TLS gives services identities, and encryption at rest comes in layers that stop different attackers. Envelope encryption keeps the master key in a KMS and wraps per-object data keys, so rotation and deletion become key operations.",
+  "catTip": "My treats are in a tin, the tin key is in an envelope, and the envelope only opens in the vault. The humans call this envelope encryption. I call it three layers between me and dinner, and all three work.",
+  "recall": {
+    "q": "You are asked to encrypt the users table at rest. What question do you ask first, and how do the answers change the design?",
+    "a": "Which attacker: a stolen disk or backup is covered by volume encryption or TDE, while a leaked database credential or an insider needs application-level field encryption with keys the database cannot reach. For the latter, use envelope encryption: per-record data keys wrapped by a KEK held in a KMS, stored alongside the ciphertext."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Encrypting only the disk leaves anyone with a database password reading plaintext, keys kept next to the data protect nothing, and a key nobody backed up turns a routine restore into permanent data loss.",
+    "tradeoffs": "Each layer costs CPU, a KMS round trip or the ability to index and search the field, and every key you create is something that can be lost, so you encrypt by named attacker rather than everywhere by default.",
+    "explainSimply": "Locking the warehouse door stops thieves outside; it does not stop someone with a staff badge from reading the files. So you also lock the sensitive drawers, keep those drawer keys in sealed envelopes, and only the vault can open the envelopes. Burn an envelope and that drawer is gone for good, even from the copies.",
+    "hint": "Name the attacker, then name the layer that stops that attacker and where its key lives."
+  },
+  "meow": "Tin locked. Tin key in envelope. Envelope opens only in the vault. Burn the envelope and the treats are gone forever, even the backup treats.",
+  "quiz": [
+    {
+      "prompt": "A company enables transparent data encryption on its SQL Server database and declares customer data safe from insiders. What does TDE actually protect against?",
+      "options": [
+        "Anyone who steals the data files, log files or backups without the key",
+        "A developer who connects with the application's database credentials",
+        "A SQL injection bug in the application",
+        "Eavesdropping on the connection between the app and the database"
+      ],
+      "answer": 0,
+      "explanation": "TDE encrypts pages on disk and decrypts them transparently for any authenticated connection, so stolen media is the attacker it stops. Credentials, injection and the network need other layers: field encryption, parameterised queries and TLS."
+    },
+    {
+      "prompt": "Why does envelope encryption encrypt data with a local data key and send only that key to the KMS?",
+      "options": [
+        "Because the KMS cannot perform symmetric encryption",
+        "So bulk data never travels to the KMS, each object can have its own key, and the master key never leaves the hardware module",
+        "Because data keys do not need to be stored anywhere",
+        "To avoid ever having to rotate keys"
+      ],
+      "answer": 1,
+      "explanation": "The KEK stays in the KMS and wraps small data keys that travel with the data; that is the whole trick. Data keys must still be stored (wrapped), and rotation still exists, at the key level."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Match the attacker to the encryption layer: a stolen disk, a leaked database credential, a copied backup.",
+      "a": "Stolen disk: volume encryption. Leaked database credential: application or field-level encryption with keys the database account cannot reach, since TDE decrypts transparently for any valid connection. Copied backup: TDE covers backups of the data files, and field-level ciphertext stays ciphertext in every copy; both depend on the key being backed up separately."
+    },
+    {
+      "q": "What is crypto-shredding, and what design choice makes it work for per-user deletion?",
+      "a": "Destroying the key that protects data so every copy, including backups, becomes unrecoverable (NIST's cryptographic erase). It works when each user or tenant has their own data key wrapped by the KMS, so deleting the user is deleting one key."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "PKI",
+      "full": "Public Key Infrastructure",
+      "note": "Certificate authorities, certificates, chains of trust and revocation: how a client decides that a public key belongs to a name."
+    },
+    {
+      "term": "mTLS",
+      "full": "Mutual TLS",
+      "note": "Both client and server present certificates, giving each service a cryptographic identity; service meshes automate issuance and rotation."
+    },
+    {
+      "term": "KMS",
+      "full": "Key Management Service",
+      "note": "Holds master keys in hardware modules, never releases them, and wraps or unwraps data keys with access control and an audit log."
+    }
+  ],
+  "sources": [
+    {
+      "title": "RFC 5280, Internet X.509 Public Key Infrastructure Certificate and CRL Profile (May 2008)",
+      "url": "https://www.rfc-editor.org/rfc/rfc5280",
+      "accessed": "2026-11-22",
+      "supports": "certificates binding public keys to subjects, the CA signing them, limited validity lifetimes, and certificate revocation lists",
+      "status": "verified"
+    },
+    {
+      "title": "Istio documentation: Security concepts",
+      "url": "https://istio.io/latest/docs/concepts/security/",
+      "accessed": "2026-11-22",
+      "supports": "sidecar-based mutual TLS with X.509 workload identities and automated certificate rotation",
+      "status": "verified"
+    },
+    {
+      "title": "Microsoft Learn: Transparent Data Encryption (TDE), SQL Server",
+      "url": "https://learn.microsoft.com/en-us/sql/relational-databases/security/encryption/transparent-data-encryption",
+      "accessed": "2026-11-22",
+      "supports": "page-level real-time encryption of data and log files, the stolen-media threat it addresses, no protection of communication channels, and the warning to back up the certificate",
+      "status": "verified"
+    },
+    {
+      "title": "AWS Key Management Service Developer Guide: Generate data keys",
+      "url": "https://docs.aws.amazon.com/kms/latest/developerguide/data-keys.html",
+      "accessed": "2026-11-22",
+      "supports": "GenerateDataKey returning a plaintext and an encrypted data key, removing the plaintext key from memory, storing the encrypted key with the data, and Decrypt reversing it",
+      "status": "verified"
+    },
+    {
+      "title": "AWS Key Management Service Developer Guide: Rotate AWS KMS keys",
+      "url": "https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html",
+      "accessed": "2026-11-22",
+      "supports": "the 365-day default rotation period, retention of old key material for decryption, rotation not re-encrypting data or data keys, KMS keys as wrapping or key-encryption keys",
+      "status": "verified"
+    },
+    {
+      "title": "NIST CSRC glossary: cryptographic erase (NIST SP 800-88 Rev. 2)",
+      "url": "https://csrc.nist.gov/glossary/term/cryptographic_erase",
+      "accessed": "2026-11-22",
+      "supports": "crypto-shredding as sanitisation by destroying the keys that protect the data",
+      "status": "verified"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+HTTP fixes the message format. A **request** has a method, a path, headers and an optional body. A **response** has a status code, headers and a body.
+
+```http
+GET /feed HTTP/1.1
+Host: api.example.com
+Authorization: Bearer <token>
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"posts": [ ... ]}
+```
+
+- **Methods:** `GET` read · `POST` create · `PUT`/`PATCH` update · `DELETE` remove.
+- **Status codes:** 2xx success (200, 201) · 3xx redirect · 4xx client error (400, 401, 404, 429) · 5xx server error (500, 503).
+- **Stateless:** each request stands alone; your login travels with it as a cookie or token. <mark>This is what makes horizontal scaling possible</mark> (see [Vertical vs horizontal scaling](/learn/scaling)). How that token is issued, stored and checked is the subject of [Authentication: sessions, tokens and passwords](/learn/authentication).
+
+## HTTPS = HTTP + TLS
+
+TLS (Transport Layer Security) adds three things:
+
+| Property | Stops |
+| --- | --- |
+| Encryption | Eavesdropping: the café Wi-Fi can't read your password |
+| Integrity | Tampering: nobody can change the bytes in transit unnoticed |
+| Authentication | Impostors: the certificate proves the server really is instagram.com |
+
+HTTPS is the default everywhere. Versions: **HTTP/1.1** → **HTTP/2** (many requests multiplexed on one connection) → **HTTP/3** (runs on QUIC). Certificates, mutual TLS and encrypting data at rest are covered in [Encryption in transit and at rest](/learn/encryption).
+
+## One request, end to end
+
+The chain: **Client → DNS → TCP + TLS → HTTP request → Server → response.** Step through it and watch where the milliseconds go.
+
+<Interactive name="request-journey" />
+
+<DeepDive title="Go deeper: why HTTP/2 and HTTP/3 exist">
+
+**HTTP/1.1** sends one request at a time per connection, so a slow response blocks the ones behind it (head-of-line blocking). Browsers worked around it by opening about six connections per site.
+
+**HTTP/2** multiplexes many requests as interleaved streams over one TCP connection. But if one TCP packet is lost, TCP holds back everything behind it until the resend arrives, so every stream stalls.
+
+**HTTP/3** runs on QUIC over UDP. Each stream is ordered independently, so one lost packet only stalls its own stream. QUIC also folds the transport and TLS handshakes into one round trip (zero on resumption), which helps most on mobile networks.
+
+</DeepDive>

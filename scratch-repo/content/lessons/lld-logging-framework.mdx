@@ -1,0 +1,354 @@
+A logging framework is the library every other library depends on, which makes it a sharp low-level design exercise: a call to `log.info` must cost almost nothing when nobody is listening, must never throw into business code, and must never make a payment thread wait for a disk. The decision that carries the design is to **separate four questions that a naive logger answers in one method**: *whether* to log is the logger's job and is one integer comparison; *where* it goes is an `Appender`; *what it looks like* is a `Layout`; and *the exceptions* to the level rule are a chain of filters. Once those are apart, asynchronous output is one more appender that wraps another and owns a bounded queue with an explicit answer to the only hard question: what happens when the queue is full.
+
+## Requirements and assumptions
+
+**Functional requirements**
+
+- A `Logger` per name, usually the class name, with levels `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`. Loggers form a hierarchy by dotted name; a logger without its own level inherits the nearest ancestor's.
+- Several destinations at once: console, file, a remote collector, each with its own format and filters.
+- Message parameters are formatted only if the message is actually written.
+- Per-request context, such as a request id, on every line written while that request is handled, without threading it through every method signature.
+- An asynchronous mode in which application threads hand events to a background writer. Levels change at runtime.
+
+**Assumptions**: one process; a peak of around a hundred thousand events per second as a sizing assumption; lines of a few hundred bytes; many threads logging, few reconfiguring.
+
+**Out of scope**: shipping, indexing and searching logs, which is [Logging](/learn/logging) at the system level; a vendor-neutral facade in front of this implementation, which appears under extensibility.
+
+**Non-functional**: a disabled call costs a method call and a comparison and allocates nothing. A logging call never throws. A slow or broken destination slows or breaks only itself. Under overload the framework states which events it drops, and `WARN` and `ERROR` go last.
+
+## Core entities and responsibilities
+
+| Entity | Responsibility | Knows |
+| --- | --- | --- |
+| Logger | Decides whether a request is enabled, builds the event, hands it to appenders up the hierarchy | name, parent, own level, appenders, additivity |
+| Level | The five severities in order, plus OFF | its ordinal |
+| LogEvent | Immutable record of one request: time, level, logger name, message and arguments, thread, throwable, context snapshot | its fields |
+| Appender | Where an event goes: console, file, socket, or another appender | its destination |
+| Layout | How an event becomes text: a pattern, or JSON | the pattern |
+| Filter | Accept, deny or stay neutral on one event; evaluated in order per appender | its rule |
+| AsyncAppender | A bounded queue and a worker thread in front of another appender | queue, worker, drop policy |
+| LoggerContext | The registry: one Logger per name, the root, configuration, shutdown | loggers, root |
+| Mdc | A per-thread map of context values copied into each event | a thread-local map |
+
+The split that matters is between `Logger` and `Appender`. The logger knows nothing about files or sockets, so adding a destination never touches the class every call site uses; the appender knows nothing about levels, so it is tested with a hand-built event. The second split is in time: `LogEvent` is created *after* the level check, so an application that logs at `DEBUG` in a loop and runs at `INFO` allocates nothing per iteration.
+
+## Class design
+
+<Mermaid caption="Loggers form a tree by name and hold appenders. Every appender runs its filter chain and a layout; AsyncAppender is an appender that holds another. LoggerContext owns the tree and is injected, not a global." chart={`classDiagram
+    class LoggerContext {
+        -Logger root
+        -ConcurrentHashMap loggers
+        +getLogger(String name) Logger
+        +stop()
+    }
+    class Logger {
+        -String name
+        -Logger parent
+        -Level level
+        -boolean additive
+        +effectiveLevel() Level
+        +isEnabled(Level level) boolean
+        +info(String message, Object args)
+    }
+    class Level {
+        +TRACE
+        +DEBUG
+        +INFO
+        +WARN
+        +ERROR
+        +OFF
+    }
+    class LogEvent {
+        +Instant at
+        +Level level
+        +String logger
+        +String message
+        +Map context
+    }
+    class Appender {
+        <<interface>>
+        +append(LogEvent event)
+        +stop()
+    }
+    class FilteringAppender {
+        <<abstract>>
+        -List filters
+        -Layout layout
+        #write(String line)
+    }
+    class ConsoleAppender
+    class FileAppender
+    class AsyncAppender {
+        -ArrayBlockingQueue queue
+        -Thread worker
+        -boolean neverBlock
+    }
+    class Layout {
+        <<interface>>
+        +format(LogEvent event) String
+    }
+    class Filter {
+        <<interface>>
+        +decide(LogEvent event) Decision
+    }
+    class Mdc {
+        +put(String key, String value)
+        +remove(String key)
+        +snapshot() Map
+    }
+    LoggerContext *-- Logger
+    Logger --> Logger : parent
+    Logger o-- Appender
+    Logger ..> LogEvent : creates
+    Logger ..> Mdc : snapshot
+    FilteringAppender ..|> Appender
+    ConsoleAppender --|> FilteringAppender
+    FileAppender --|> FilteringAppender
+    AsyncAppender ..|> Appender
+    AsyncAppender o-- Appender : wraps one
+    FilteringAppender --> Layout
+    FilteringAppender o-- Filter : ordered
+`} />
+
+## Key interfaces and methods
+
+The level enum's declaration order is the comparison, and the three interfaces are each one method wide, so a lambda can stand in for any of them in a test.
+
+```java
+enum Level { TRACE, DEBUG, INFO, WARN, ERROR, OFF }          // declaration order is severity order
+enum Decision { ACCEPT, DENY, NEUTRAL }
+
+record LogEvent(Instant at, Level level, String logger, String message, Object[] args,
+                String thread, Throwable error, Map<String, String> context) {}
+
+interface Appender { void append(LogEvent event); void stop(); }
+interface Layout { String format(LogEvent event); }
+interface Filter { Decision decide(LogEvent event); }
+```
+
+The logger is where the fast path lives. `isEnabled` walks to the first ancestor with a level set, the effective-level rule Logback documents; a production framework caches the result per logger and refreshes it when a level changes, turning the walk into one field read.
+
+```java
+final class Logger {
+    private final String name;
+    private final Logger parent;                                 // null for root
+    private volatile Level level;                                // null means inherit
+    private volatile boolean additive = true;
+    private final CopyOnWriteArrayList<Appender> appenders = new CopyOnWriteArrayList<>();
+    private final Clock clock;
+
+    Level effectiveLevel() {                                     // first non-null level, walking up
+        for (Logger l = this; l != null; l = l.parent) if (l.level != null) return l.level;
+        return Level.DEBUG;
+    }
+    boolean isEnabled(Level requested) { return requested.compareTo(effectiveLevel()) >= 0; }
+
+    void info(String message, Object... args) { log(Level.INFO, message, args, null); }
+    void log(Level requested, String message, Object[] args, Throwable error) {
+        if (!isEnabled(requested)) return;                       // the fast path: nothing is allocated below here
+        LogEvent event = new LogEvent(clock.instant(), requested, name, message, args,
+                                      Thread.currentThread().getName(), error, Mdc.snapshot());
+        for (Logger target = this; target != null; target = target.parent) {   // additivity: ancestors' appenders too
+            for (Appender a : target.appenders) a.append(event);
+            if (!target.additive) break;
+        }
+    }
+}
+```
+
+Every concrete appender has the same shape: run the filters, format, write, never let an exception escape. That last point has no clever design behind it, only discipline.
+
+```java
+abstract class FilteringAppender implements Appender {
+    private final List<Filter> filters;
+    protected final Layout layout;
+
+    public final void append(LogEvent event) {
+        for (Filter f : filters) {
+            Decision d = f.decide(event);
+            if (d == Decision.DENY) return;                      // dropped, remaining filters not consulted
+            if (d == Decision.ACCEPT) break;                     // written, remaining filters skipped
+        }                                                        // NEUTRAL all the way down means: write it
+        try { write(layout.format(event)); }
+        catch (Exception ex) { ErrorReporter.report(this, ex); } // to stderr, rate limited, never to the caller
+    }
+    protected abstract void write(String line);
+}
+```
+
+The asynchronous appender is a Decorator over any other appender: same interface, one added concern. Its whole design is the policy for a full queue, and the one below is Logback's default in spirit: cheap events are shed first, serious ones wait.
+
+```java
+final class AsyncAppender implements Appender {
+    private final Appender target;
+    private final ArrayBlockingQueue<LogEvent> queue = new ArrayBlockingQueue<>(8_192);
+    private final boolean neverBlock;
+    private final LongAdder dropped = new LongAdder();
+    private volatile boolean running = true;
+    private final Thread worker = new Thread(this::drain, "log-async");
+
+    public void append(LogEvent e) {
+        if (queue.offer(e)) return;                                             // normal case: space available
+        if (neverBlock || e.level().compareTo(Level.WARN) < 0) { dropped.increment(); return; }   // shed INFO and below
+        try { queue.put(e); }                                                   // WARN and ERROR wait for space
+        catch (InterruptedException ie) { Thread.currentThread().interrupt(); dropped.increment(); }
+    }
+    private void drain() {
+        while (running || !queue.isEmpty()) {
+            LogEvent e = queue.poll(100, TimeUnit.MILLISECONDS);
+            if (e != null) target.append(e);                                    // the target never throws, see above
+        }
+    }
+    public void stop() { running = false; worker.join(); target.stop(); }      // flush, then stop the wrapped appender
+}
+```
+
+The registry is the piece usually drawn as a Singleton, and it should not be one. It is an ordinary object created at start-up and handed to whoever needs loggers, with a static convenience for code that cannot be injected; tests build their own.
+
+```java
+final class LoggerContext {
+    private final ConcurrentHashMap<String, Logger> loggers = new ConcurrentHashMap<>();
+    private final Logger root = new Logger("", null);
+
+    Logger getLogger(String name) {
+        Logger existing = loggers.get(name);
+        if (existing != null) return existing;
+        Logger parent = name.isEmpty() ? root : getLogger(parentName(name));  // resolve the parent OUTSIDE the map update
+        return loggers.computeIfAbsent(name, n -> new Logger(n, parent));     // one instance per name, even under races
+    }
+}
+```
+
+The order of those two lines is not cosmetic. `ConcurrentHashMap` documents that a `computeIfAbsent` mapping function must not modify the map, and a recursive `getLogger` inside it would do exactly that for every ancestor not yet created.
+
+Context is a thread-local map. The event takes an immutable copy, so a worker thread formatting it later sees the values as they were at the call.
+
+```java
+final class Mdc {
+    private static final ThreadLocal<Map<String, String>> CTX = ThreadLocal.withInitial(HashMap::new);
+    static void put(String key, String value) { CTX.get().put(key, value); }
+    static void remove(String key) { CTX.get().remove(key); }
+    static Map<String, String> snapshot() { return Map.copyOf(CTX.get()); }
+}
+```
+
+## Interactions
+
+<Mermaid caption="Two calls from a payments thread. The debug call dies at the level check and allocates nothing. The info call builds one event, is queued in microseconds, and is formatted and written by the worker thread while the payments thread has long moved on." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant A as Payments thread
+    participant L as Logger payments.Refund
+    participant X as Mdc
+    participant Q as AsyncAppender
+    participant W as Worker thread
+    participant F as FileAppender
+    participant Y as PatternLayout
+    A->>L: debug(refund computed, args)
+    L->>L: isEnabled(DEBUG) is false at INFO
+    L-->>A: return, nothing allocated
+    A->>L: info(refund issued, args)
+    L->>L: isEnabled(INFO) is true
+    L->>X: snapshot()
+    X-->>L: requestId r-81
+    L->>Q: append(event)
+    Q->>Q: offer(event) succeeds
+    Q-->>L: return
+    L-->>A: return
+    W->>Q: poll()
+    Q-->>W: event
+    W->>F: append(event)
+    F->>F: filters all NEUTRAL
+    F->>Y: format(event)
+    Y-->>F: one line with r-81
+    F->>F: write(line)
+`} />
+
+The event's life is where the overload policy becomes visible.
+
+<Mermaid caption="Lifecycle of one logging request with an asynchronous appender. The two exits on the left are by design; the one at the bottom right is the shutdown hazard Logback documents, and the reason stop() drains the queue." chart={`stateDiagram-v2
+    state "Below effective level" as Discarded
+    state "Dropped, counted" as Dropped
+    state "Lost at shutdown" as Lost
+    [*] --> Requested: logger.info called
+    Requested --> Discarded: level check fails
+    Requested --> Created: level check passes, event built
+    Created --> Queued: offer succeeds
+    Created --> Dropped: queue full and level below WARN
+    Created --> Blocked: queue full and WARN or above
+    Blocked --> Queued: worker frees a slot
+    Queued --> Written: worker formats and writes
+    Queued --> Lost: process exits before the worker drains
+    Discarded --> [*]
+    Dropped --> [*]
+    Written --> [*]
+    Lost --> [*]
+`} />
+
+## Design patterns used and why
+
+| Pattern | Where | Why it earns its place | Drop it when |
+| --- | --- | --- | --- |
+| Strategy | Appender, Layout | Destinations and formats vary independently of every call site | There is one destination and one format, forever |
+| Chain of Responsibility | Filter list with ACCEPT, DENY, NEUTRAL | Per-appender exceptions to the level rule without touching the logger; the terminal handler is the implicit accept | Level alone is enough |
+| Decorator | AsyncAppender around any Appender | Same interface, one added concern, removable in tests where synchronous output is easier to assert on | Writes are already cheap |
+| Registry (a Flyweight in intent) | LoggerContext.getLogger | One Logger per name, so a level set on a name affects every holder of it | Loggers are created per call |
+| Template Method | FilteringAppender.append calling write | Filters, layout and error handling are shared; only the write differs | Appenders share nothing |
+
+The Singleton debate is the one most interviewers raise. Loggers feel global, and a static `LoggerFactory.getLogger` is convenient; what should not be a Singleton is the *context* behind it. A hard Singleton means every test shares one configuration, two applications in one process share one tree, and nothing is reconfigured without a global reset. Here `LoggerContext` is an object, the static method consults a default instance, and anyone who needs isolation builds another.
+
+## Edge cases and error handling
+
+- **An appender throws.** Caught inside `append`, reported to a rate-limited error handler on standard error, never propagated. A full disk at midnight must not fail a refund.
+- **Logging from inside an appender.** A remote appender that logs its own retries recurses forever; a thread-local re-entrancy guard in `Logger.log` drops nested calls.
+- **Fewer arguments than placeholders, or a throwable last.** The layout formats what it has and appends the stack trace; argument problems are rendered, never thrown.
+- **Context leaks.** Thread pools reuse threads, so a request id put into `Mdc` and not removed appears on the next request's lines. Remove in a `finally`, as Logback's manual says. Child threads do not inherit the map, so work handed to another thread carries the snapshot explicitly.
+- **Reconfiguration while logging.** `level` is `volatile`, so the next `isEnabled` sees a change; appender lists are `CopyOnWriteArrayList`, so writers see the old or the new list, never a half-built one.
+- **Queue full.** The explicit policy above. Counting drops matters as much as dropping: a `dropped` metric is the difference between silent loss and a known gap, and [Backpressure](/learn/backpressure) is the same decision one level up.
+- **Shutdown.** The worker must drain before the process exits, so the context registers a shutdown hook that calls `stop()`. Without it the queued events are lost, the hazard Logback documents for its asynchronous appender.
+
+<Callout type="analogy" title="The newsroom wire">
+
+Reporters file dispatches into a wire basket and go straight back to work. A desk editor's threshold decides which dispatches matter at all; those that pass are copied to print, web and the archive, each in its own house style, and each outlet's sub-editor may still spike a story. The basket is the queue: reporters never wait for the presses. Where the analogy fails: a newsroom can hold the presses for a big story. A logging framework must never hold the application for long, so the full-basket policy, wait or discard, is written down in advance.
+
+</Callout>
+
+## Concurrency
+
+Shared mutable state, named: the logger registry, each logger's level and appender list, each appender's destination, the queue, the drop counter. The context map is deliberately *not* shared: a thread-local gives every thread its own.
+
+The registry is a `ConcurrentHashMap`, with the parent resolved outside the atomic update for the reason above. Levels are `volatile` fields written rarely and read on every call, exactly what `volatile` is for: visibility of one field with no compound update. A level change and a log call can overlap, and the call sees either the old or the new level; both are valid, which is the point of keeping the fast path to a comparison with no compound state to corrupt. Appender lists are copy-on-write, changed at configuration time and iterated on every event.
+
+A file is a single resource, so the synchronous `FileAppender.write` is `synchronized`; without it two threads' lines interleave. That lock is also why the synchronous design does not scale: at a hundred thousand events per second every thread queues for one monitor and the disk's latency becomes every request's latency. The asynchronous appender replaces the lock with a hand-off. `ArrayBlockingQueue` is bounded; `offer` returns false immediately when it is full and `put` blocks until space appears, which is what lets `append` choose a policy per event. The worker is the only writer, so the target appender no longer needs its lock. Logback's `AsyncAppender` has the same shape: a `BlockingQueue` of 256 events by default, `TRACE`, `DEBUG` and `INFO` discarded once only a fifth of the capacity remains, blocking otherwise unless `neverBlock` is set. Log4j 2 replaces the queue with a lock-free ring buffer from the LMAX Disruptor, 256 thousand slots by default, with a policy of blocking or discarding at or below `INFO` when full; the deep dive explains what that buys.
+
+## Extensibility and trade-offs
+
+- **A new destination.** One subclass of `FilteringAppender` with a `write`. Nothing else changes, which is the test of whether the Strategy earned its place.
+- **Rolling files.** Logback splits it into two collaborators worth copying: a `RollingPolicy` that says *what* happens at rollover (rename, compress, delete beyond a history) and a `TriggeringPolicy` that says *when* (a size, a date boundary). `RollingFileAppender` is `FileAppender` plus two Strategies, not a rewrite.
+- **Structured output.** A `JsonLayout` that emits the event's fields and the context map as keys, so the collector in [Logging](/learn/logging) indexes them without parsing.
+- **A facade.** Libraries should depend on an interface they do not own; SLF4J is exactly that, a facade whose provider is chosen at deployment, and this design is what sits behind it.
+- **Context across threads, sampling.** A wrapper that captures `Mdc.snapshot()` at submission and installs it when the task runs; a filter that accepts one in N `DEBUG` events for a hot logger. Neither needs a new concept.
+
+| Choice made | What it buys | What it costs |
+| --- | --- | --- |
+| Level check before event creation | A disabled call allocates nothing | Expensive argument values need a lazy supplier |
+| Immutable event with a context copy | Safe to hand to another thread | One small map copy per enabled event |
+| Bounded queue, shed INFO first | Application threads never wait on the disk for cheap events | Some INFO lines vanish under overload, by design and counted |
+| Context as an object, not a Singleton | Isolated tests, several configurations per process | Code that cannot be injected uses a static default anyway |
+
+<Callout type="interview" title="The two-minute version">
+
+"Four concerns: the Logger decides whether, with one comparison against its effective level, inherited down a dotted-name hierarchy; Appenders decide where; Layouts decide the text; Filters are a chain with accept, deny and neutral replies for the exceptions. The event is created only after the level check, so disabled logging allocates nothing, and it carries an immutable copy of a thread-local context map. Async is a Decorator appender with a bounded queue and a worker thread; when the queue is full, INFO and below are dropped and counted, WARN and ERROR block. The registry hands out one logger per name and is an injected object, not a Singleton." Then offer rolling files or the ring-buffer alternative.
+
+</Callout>
+
+<DeepDive title="Go deeper: a ring buffer instead of a queue">
+
+An `ArrayBlockingQueue` takes a lock on every `offer` and `poll`, so under heavy contention the appender's own lock becomes the next bottleneck after the disk. Log4j 2's asynchronous loggers use a pre-allocated ring buffer from the LMAX Disruptor instead: producers claim a slot with a compare-and-set on a sequence number, write into it and publish; the single consumer follows a cursor. No lock, no node allocation, and reused slots, which is what makes a garbage-free mode possible. The costs are real: the buffer is fixed at start-up and large, 256 thousand slots by default; when it fills the same block-or-discard decision returns and the application logs at the speed of its slowest appender; and an appender's exception is harder to signal back to the thread that logged. The design decision does not change, only the structure behind `append`: the queue when simplicity matters more than the last microsecond, the ring buffer when a profiler says the queue lock is where time goes.
+
+</DeepDive>

@@ -1,0 +1,43 @@
+Static content (images, video, JS, CSS) is identical for everyone. So a CDN (Content Delivery Network) caches it on **edge servers**, called PoPs (points of presence), near users instead of hitting your **origin** for every request.
+
+<Diagram name="cdn-edges" caption="Users hit the nearest edge. Only misses travel to the origin." />
+
+## Pull vs push
+
+- **Pull CDN**: serves hits from the edge and fetches misses from the origin, caching them with a TTL. The common choice.
+- **Push CDN**: you load content ahead of time. Suits large files that rarely change.
+
+<Comparison>
+
+<ComparisonItem title="Wins">
+
+- Lower latency for users everywhere
+- Far less origin load and bandwidth
+- Absorbs traffic spikes
+- DDoS protection
+
+</ComparisonItem>
+
+<ComparisonItem title="Costs">
+
+- Stale copies: use TTLs, invalidation or versioned file names like `app.3f9a2.js`
+- Little help for personalised content
+- It costs money
+
+</ComparisonItem>
+
+</Comparison>
+
+<Callout type="idea" title="The edge caches by URL">
+
+An edge server keys its cache by the URL (and a few headers it is told to respect). Anything that differs per user, such as a personalised feed, cannot be cached at the edge unless the URL or a header distinguishes it. That is why public media and static files are the CDN's sweet spot, and why versioned file names work so well.
+
+</Callout>
+
+Examples: **Cloudflare, Akamai, Amazon CloudFront**. CDNs steer users to the nearest edge with DNS geo-routing (see [DNS](/learn/dns)) or anycast. How edges, cache keys, purges and origin shields work: [CDN architecture in depth](/learn/cdn-internals).
+
+<DeepDive title="Go deeper: versioned file names beat invalidation">
+
+Build tools add a content hash to each file name (`app.3f9a2.js`). When the code changes, the hash and therefore the URL change, and the HTML points at the new URL. Because a given URL never changes content, files can be cached for a year (`Cache-Control: max-age=31536000, immutable`). Only the small HTML page needs a short TTL.
+
+</DeepDive>

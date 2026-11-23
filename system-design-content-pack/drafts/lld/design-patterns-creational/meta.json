@@ -1,0 +1,59 @@
+{
+  "slug": "design-patterns-creational",
+  "title": "Design patterns I: creational",
+  "moduleId": "lld",
+  "level": "intermediate",
+  "minutes": 9,
+  "problem": "Code that builds its own collaborators with new cannot be tested, grows an if-chain for every new type, and leaks constructor details into every caller.",
+  "summary": "Creational patterns separate deciding which object to build from using it: Factory Method centralises the choice, Abstract Factory keeps families consistent, Builder assembles objects with many optional parts, and Singleton's global access is the part to avoid.",
+  "catTip": "I am an instance of Cat, built by a Builder: whiskers, tail and appetite set step by step, validated once. Please do not make me a Singleton; the test suite needs a fresh cat.",
+  "recall": {
+    "q": "A checkout needs a charger, a refunder and a webhook verifier that must all belong to the same payment provider. Which creational pattern fits, and why not a plain factory method?",
+    "a": "Abstract Factory: one interface with a creation method per family member and one concrete factory per provider, so the client can never mix a Razorpay charger with a Stripe refunder. A single factory method returns one product and cannot enforce that several products match."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a creational pattern the class that uses an object also decides its concrete type, so every new type edits working code and no test can substitute a fake.",
+    "tradeoffs": "Every pattern adds at least one interface and one class, and a Singleton's convenient global access hides dependencies and makes tests order-dependent.",
+    "explainSimply": "Instead of making every part of a program build the things it needs, you hand the building to a specialist. It is like ordering at a restaurant counter: you say what you want, and the kitchen decides who cooks it and how. The program only has to know what it asked for.",
+    "hint": "Think about what must stay consistent across several objects, not just how one object gets created."
+  },
+  "meow": "Meow-ke me with a Builder, pick my food with a Factory, and never, ever getInstance() the cat.",
+  "quiz": [
+    {
+      "prompt": "A class has a constructor with nine parameters, five of which are optional and two of which must never be combined. Which pattern addresses this most directly?",
+      "options": ["Abstract Factory", "Builder", "Singleton", "Prototype"],
+      "answer": 1,
+      "explanation": "A Builder names each optional part at the call site and validates the combination once in build(). Abstract Factory is about producing a consistent family of different objects, not about assembling one object with many options."
+    },
+    {
+      "prompt": "Why do experienced reviewers treat a Singleton accessed through getInstance() as a design smell?",
+      "options": [
+        "Java cannot guarantee a single instance, so the pattern never works",
+        "It is slower than creating a new object on every call",
+        "Every caller gains a hidden dependency that tests cannot replace, and shared state leaks between tests",
+        "It prevents the class from implementing an interface"
+      ],
+      "answer": 2,
+      "explanation": "The problem is global access, not the single instance: constructors stop declaring what they need and tests cannot swap in a fake. Java can guarantee one instance per JVM (an enum singleton does), so the first option is wrong."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A teammate replaces every new SmtpSender() with SmtpSender.getInstance(). What did they fix, and what did they break?",
+      "a": "They removed duplicated construction and kept a single instance, but they hid the dependency: callers no longer declare it, tests cannot substitute a fake, and state is shared across tests. Build the instance once at the composition root and inject it instead."
+    },
+    {
+      "q": "Factory Method and Abstract Factory in one sentence each?",
+      "a": "Factory Method returns one product behind an interface so the concrete class is chosen in one place. Abstract Factory returns a family of related products from one concrete factory so they are guaranteed to match."
+    }
+  ],
+  "glossary": [
+    { "term": "GoF", "full": "Gang of Four", "note": "Gamma, Helm, Johnson and Vlissides, authors of Design Patterns (1994); their 23 patterns are the ones interviewers name." }
+  ],
+  "sources": [
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994), ch. 3 Creational Patterns", "url": "https://en.wikipedia.org/wiki/Design_Patterns", "accessed": "2026-11-22", "supports": "definitions and intents of Factory Method, Abstract Factory, Builder, Singleton and Prototype", "status": "reference" },
+    { "title": "Joshua Bloch, Effective Java, 3rd ed. (Addison-Wesley, 2018), Items 2 and 3", "url": "https://www.informit.com/store/effective-java-9780134685991", "accessed": "2026-11-22", "supports": "the Builder for constructors with many parameters; enum and initialisation-on-demand holder idioms for a correct Singleton", "status": "reference" },
+    { "title": "Java SE 21 API: java.net.http.HttpRequest", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.net.http/java/net/http/HttpRequest.html", "accessed": "2026-11-22", "supports": "HttpRequest.newBuilder() as a JDK example of the Builder shape", "status": "verified" }
+  ]
+}

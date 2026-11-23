@@ -1,0 +1,114 @@
+{
+  "slug": "design-instagram",
+  "title": "Design Instagram",
+  "moduleId": "hld",
+  "level": "advanced",
+  "minutes": 18,
+  "problem": "Ten thousand posts a second must reach two hundred followers each within seconds while a terabit of photos leaves every second, and one celebrity post can swamp the feed pipeline.",
+  "summary": "Photos go straight to object storage behind a CDN and are resized asynchronously; posts live in PostgreSQL sharded by user with time-ordered IDs; a fan-out service pushes post IDs into Redis feed lists, celebrity posts are merged at read time, and likes are Redis counters.",
+  "catTip": "Two numbers decide everything: a terabit of pictures, so the CDN carries them, and millions of feed reads, so I hand out ready-made lists of post IDs. The cat with fifty million followers gets no delivery round. Likes I count on my paws, ledger later.",
+  "recall": {
+    "q": "Why is Instagram's feed built with fan-out on write for most accounts but not for accounts with millions of followers, and what does a follower's feed read do instead?",
+    "a": "Pushing a post ID to 200 followers' Redis lists costs about 2M inserts a second at 10k posts a second, far cheaper than 50M reads a second for fan-out on read, but one 50M-follower post would consume the whole fan-out tier for tens of seconds. Accounts over a follower threshold are not pushed; the feed service merges their latest posts from the post cache into the follower's pushed list at read time."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Building each feed by reading 200 followees' posts on every open costs 50M reads a second, pushing every post to every follower lets one celebrity post block the fan-out tier for minutes, and 3,000 likes a second on one row serialize on a lock.",
+    "tradeoffs": "Fan-out on write spends 2M writes a second and terabytes of RAM to make reads cheap, a follower threshold adds a merge step on every feed read, and Redis counters make like counts approximate for a few seconds.",
+    "explainSimply": "Deliver every newspaper to subscribers' doors before dawn, except the national dailies, which readers pick up at the newsstand on their way, because one national paper would need a delivery fleet of its own. Photos travel a separate road through warehouses near the readers. Likes are tallied on a notepad and copied into the ledger every few seconds.",
+    "hint": "Compare the cost of pushing one post to its followers with the cost of 250,000 feed reads each pulling from 200 accounts, then ask which account breaks the average."
+  },
+  "meow": "Photo to the warehouse, ID to two hundred lists, celebrity cats fetched at read time. Likes on paws, ledger later, meow.",
+  "quiz": [
+    {
+      "prompt": "A photo-sharing feed has 10k posts a second, 200 followers per user and 250k feed views a second. Which fan-out design is right, and why?",
+      "options": [
+        "Fan-out on read, because it costs nothing at post time and celebrities are free",
+        "Fan-out on write for everyone, because 2M list inserts a second is cheaper than 50M reads a second",
+        "Fan-out on write for accounts under a follower threshold and read-time merging for accounts above it, because push is 25 times cheaper on average but one huge account's post would monopolise the fan-out tier",
+        "Fan-out on read with a 24-hour cache per user, because feeds change rarely"
+      ],
+      "answer": 2,
+      "explanation": "Push wins on the average (2M writes versus 50M reads a second) but fails on the tail, where a 50M-follower post would take tens of seconds of the entire tier, so the hybrid caps the cost of any one post at the threshold. Pure fan-out on write is the strongest distractor because it is right for every account except the handful that matter most."
+    },
+    {
+      "prompt": "A celebrity's post is collecting 3,000 likes a second and its like count is a column on the posts row. What is the first thing to change?",
+      "options": [
+        "Add an index on posts.like_count so the update finds the row faster",
+        "Move the count to a Redis INCR per post, insert the like row for idempotency, and flush the counter to the column every few seconds",
+        "Shard the posts table by like_count so hot posts spread across machines",
+        "Switch the likes table to an LSM engine so the appends are sequential"
+      ],
+      "answer": 1,
+      "explanation": "The problem is 3,000 updates a second serializing on one row lock, which a counter in Redis absorbs while the column becomes a periodically refreshed denormalized copy. An index does not help because the row is already found by primary key; the lock, not the lookup, is the bottleneck."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Problem: 10k posts a second, 200 followers each, 250k feed views a second, and a few accounts with tens of millions of followers. Decision and why?",
+      "a": "Fan-out on write into Redis lists of post IDs for accounts under a follower threshold (about 2M inserts a second, versus 50M reads a second for fan-out on read), and no fan-out for accounts above it; the feed service merges those accounts' latest posts from the post cache at read time, a handful of extra cache reads per feed view. The threshold is the largest fan-out cost you accept for one post."
+    },
+    {
+      "q": "Problem: one post receives 3,000 likes a second and is hydrated by a large share of 2.5M post reads a second. Decision and why?",
+      "a": "Write each like as a row (the primary key makes repeats a no-op) and count in a Redis INCR per post, flushing to the denormalized like_count every few seconds, because row updates would serialize on one lock. Treat the post as a hot key: replicate it across cache nodes or keep an in-process copy, and protect its expiry with single-flight rebuilds and TTL jitter; split the counter key only if one Redis node cannot take the rate."
+    }
+  ],
+  "glossary": [
+    {
+      "term": "EXIF",
+      "full": "Exchangeable Image File Format",
+      "note": "Metadata a camera stores inside a photo file, such as the model, the time and often the GPS location; servers strip it when re-encoding uploads."
+    }
+  ],
+  "sources": [
+    {
+      "title": "Instagram Engineering, \"Sharding & IDs at Instagram\" (2012)",
+      "url": "https://instagram-engineering.com/sharding-ids-at-instagram-1cf5a71e5a5c",
+      "accessed": "2026-11-22",
+      "supports": "64-bit IDs with 41 bits of milliseconds since a custom epoch, 13 bits of logical shard ID and 10 bits of per-shard sequence modulo 1024, giving 1,024 IDs per shard per millisecond; several thousand logical shards implemented as PostgreSQL schemas mapped onto fewer physical servers. The post itself refused automated fetching on the access date; the figures were confirmed through search excerpts of the post and Mike Krieger's \"Sharding @ Instagram\" slides (SFPUG, April 2012, media.postgresql.org/sfpug/instagram_sfpug.pdf)",
+      "status": "secondary"
+    },
+    {
+      "title": "Instagram Engineering, \"What Powers Instagram: Hundreds of Instances, Dozens of Technologies\" (2011), via High Scalability's write-up of 6 December 2011",
+      "url": "https://highscalability.com/instagram-architecture-14-million-users-terabytes-of-photos/",
+      "accessed": "2026-11-22",
+      "supports": "Redis powered the main feed, activity feed and sessions; photos stored in Amazon S3 and served through CloudFront; Gearman used for feed fan-out; PostgreSQL for users and photo metadata. The original post refused automated fetching, so the write-up was read",
+      "status": "secondary"
+    },
+    {
+      "title": "Instagram Engineering, \"Open-sourcing a 10x reduction in Apache Cassandra tail latency\" (Dikang Gu, 2018)",
+      "url": "https://instagram-engineering.com/open-sourcing-a-10x-reduction-in-apache-cassandra-tail-latency-d64f86b43589",
+      "accessed": "2026-11-22",
+      "supports": "Instagram began using Cassandra in 2012 for use cases including fraud detection, Feed and Direct; P99 read latency reduced from 60 ms to 20 ms with the RocksDB-based engine. The post refused automated fetching; confirmed through search excerpts and Planet Cassandra's repost (planetcassandra.org/usecases/instagram/150/)",
+      "status": "secondary"
+    },
+    {
+      "title": "Instagram, \"See the Moments You Care About First\" (announcement, 15 March 2016)",
+      "url": "https://about.instagram.com/blog/announcements/see-posts-you-care-about-first-in-your-feed",
+      "accessed": "2026-11-22",
+      "supports": "the feed would be ordered to show the moments each person is believed to care about most; people miss on average 70 percent of their feeds",
+      "status": "verified"
+    },
+    {
+      "title": "High Scalability, \"The Architecture Twitter Uses to Deal with 150M Active Users…\" (8 July 2013), a write-up of Raffi Krikorian's QCon talk \"Timelines at Scale\"",
+      "url": "http://highscalability.com/blog/2013/7/8/the-architecture-twitter-uses-to-deal-with-150m-active-users.html",
+      "accessed": "2026-11-22",
+      "supports": "fan-out on write into per-user Redis timelines holding tweet IDs; timelines capped at 800 entries, bounded by RAM; a 31M-follower account's tweet could take up to five minutes to fan out; highest-follower accounts merged at read time instead of fanned out; about 300k timeline reads a second",
+      "status": "secondary"
+    },
+    {
+      "title": "Raffi Krikorian, \"Timelines at Scale\", QCon San Francisco 2012 (InfoQ, published 3 April 2013)",
+      "url": "https://www.infoq.com/presentations/Twitter-Timeline-Scalability/",
+      "accessed": "2026-11-22",
+      "supports": "the primary talk behind the High Scalability write-up; only the landing page could be read",
+      "status": "reference"
+    },
+    {
+      "title": "Redis documentation, LTRIM",
+      "url": "https://redis.io/docs/latest/commands/ltrim/",
+      "accessed": "2026-11-22",
+      "supports": "LPUSH followed by LTRIM keeps a list capped at a fixed length; used this way LTRIM is an O(1) operation on average",
+      "status": "verified"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "slug": "lld-revision",
+  "title": "Revision: low-level design",
+  "moduleId": "lld-practice",
+  "level": "basic",
+  "minutes": 8,
+  "problem": "Fourteen case studies and thirteen foundations blur together unless you can name the pattern behind each problem on demand.",
+  "summary": "Flashcards for modules 15 and 16: each card names a design problem, and you answer with the principle, pattern or class structure that solves it. The table maps every card to its lesson, and the closing advice is to redo one case study a week from a blank page.",
+  "catTip": "I can tell a Strategy from a State from across the room: one is a toy I swap, the other is a mood that swaps me. Say which before you flip, and say why.",
+  "recall": {
+    "q": "Problem: \"an Order class has switch (status) at the top of five methods.\" Which pattern, and what is the lighter alternative?",
+    "a": "The State pattern: each status becomes a class that decides what each event does and which state comes next. For a small machine, an enum with a transition table does the same with fewer classes."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without retrieval practice the patterns stay as vocabulary: you can define Strategy and State but reach for an if-chain the moment a real class is on the whiteboard.",
+    "tradeoffs": "Redoing a case study from a blank page takes half an hour and feels worse than rereading it in five minutes, and the cards you miss keep coming back; that effort is what moves the pattern from recognition to use.",
+    "explainSimply": "This page is a deck of cards. Each one describes a coding problem, and you say which design idea solves it before turning the card over. Then, once a week, redo one of the fourteen problems without looking and compare your drawing with the lesson's.",
+    "hint": "Think about where the rules for one status live now, and where they would live if each status were a class."
+  },
+  "meow": "Strategy or State? Composition or inheritance? Say it, flip it, then redraw the parking lot from memory.",
+  "quiz": [],
+  "cards": [],
+  "glossary": [],
+  "sources": []
+}

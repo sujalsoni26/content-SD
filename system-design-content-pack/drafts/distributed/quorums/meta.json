@@ -1,0 +1,69 @@
+{
+  "slug": "quorums",
+  "title": "Quorums and leaderless replication",
+  "moduleId": "distributed",
+  "level": "advanced",
+  "minutes": 10,
+  "problem": "Without a leader every replica accepts writes, so a reader must decide how many copies to ask before trusting an answer, and replicas can hold different versions of one key.",
+  "summary": "Leaderless stores write to N replicas and wait for W acknowledgements, read from R and keep the newest. R + W > N makes the sets overlap, hinted handoff and repair keep replicas converging, and version vectors catch conflicts that last-write-wins silently drops.",
+  "catTip": "Three bowls, and the humans fill two of them each evening. If I check any two bowls I always find tonight's dinner in at least one. Unless the humans were sloppy and fed the neighbour's bowl instead.",
+  "recall": {
+    "q": "A store runs N = 3, W = 2, R = 2. Why does a read normally see the latest write, and name two situations where it still returns stale data.",
+    "a": "Any two replicas share at least one node with any other two, so some replica in the read set holds the acknowledged write and the newest version wins. It can still be stale after a sloppy quorum wrote to stand-in nodes, after a write that failed before reaching W nodes but stayed on some, or when two writes were concurrent and last-write-wins picked the wrong one."
+  },
+  "archNodes": ["db"],
+  "guide": {
+    "breaks": "Without a rule for how many replicas must answer, a reader can hit the one copy that missed a write and return stale data, and two replicas that accepted different writes to the same key never discover that they disagree.",
+    "tradeoffs": "Larger quorums make reads fresher but slower and less available, hints and repair add background traffic, and version vectors push conflict merging onto the application instead of silently dropping a write.",
+    "explainSimply": "Imagine telling your dinner plan to any two of your three flatmates and later asking any two of them what it was. Someone you ask always heard the plan. But if you changed the plan twice through different flatmates at the same time, the two who answer may disagree, and you need a rule for which plan counts.",
+    "hint": "Draw three circles, shade the two that acknowledged the write and the two you read from, then ask what could break the overlap."
+  },
+  "meow": "Two of three bowls acknowledged dinner. Read two bowls, find dinner. Sloppy human fed the wrong bowl, meow is stale.",
+  "quiz": [
+    {
+      "prompt": "A leaderless store uses N = 3, W = 2, R = 2. Which situation can still make a successful read return inconsistent or stale data?",
+      "options": [
+        "A replica that acknowledged the write crashes and restarts from its intact disk",
+        "The write reached only one replica before the client gave up, and that replica kept it",
+        "The read happens to contact the two replicas that acknowledged the write",
+        "The coordinator returns the version with the dominating version vector"
+      ],
+      "answer": 1,
+      "explanation": "A write that reached fewer than W nodes is reported as failed but is not rolled back, so later reads may or may not see it depending on which replicas answer. A crash-recovery with an intact disk keeps the acknowledged write, so the first option is harmless."
+    },
+    {
+      "prompt": "In Cassandra, a write at consistency level QUORUM with replication factor 3 is reported successful when…",
+      "options": [
+        "all three replicas have acknowledged it",
+        "two replicas have acknowledged it; the third gets it directly or later through a hint",
+        "one replica has acknowledged it and the coordinator has stored hints for the others",
+        "the coordinator has written it to its own commit log"
+      ],
+      "answer": 1,
+      "explanation": "QUORUM is a majority, n/2 + 1 = 2 of 3; Cassandra still sends the write to all three and stores a hint for a replica that does not respond. One acknowledgement plus a hint only satisfies level ANY."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Your Cassandra cluster spans two data centres with replication factor 3 in each. Why would you choose LOCAL_QUORUM over QUORUM for most reads and writes, and what do you give up?",
+      "a": "LOCAL_QUORUM needs a majority of the replicas in the coordinator's own data centre, so no request waits on a cross-data centre round trip; QUORUM counts a majority of all six replicas and usually has to cross the link. You give up guaranteed overlap with writes made in the other data centre, so reads there can be stale until hints or repair catch up."
+    },
+    {
+      "q": "Two replicas hold different versions of a shopping cart with version vectors [A:2, B:1] and [A:1, B:2]. What should the store do, and what would last-write-wins have done?",
+      "a": "Neither vector dominates the other, so the writes were concurrent: keep both as siblings and let the application merge them, as Dynamo's cart did by union. Last-write-wins would keep whichever carried the higher timestamp and silently drop the other customer's items."
+    }
+  ],
+  "glossary": [
+    { "term": "LWW", "full": "Last-Write-Wins", "note": "Conflict rule that keeps the write with the highest timestamp and discards the rest; simple and convergent, but it loses concurrent writes." }
+  ],
+  "sources": [
+    { "title": "DeCandia et al., \"Dynamo: Amazon's Highly Available Key-value Store\", SOSP 2007", "url": "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf", "accessed": "2026-11-22", "supports": "N, R, W and R + W > N (§4.5); sloppy quorum and hinted handoff (§4.6); Merkle-tree anti-entropy (§4.7); vector clocks and read-time reconciliation (§4.4); last-write-wins as a store-side fallback; the (3,2,2) production configuration (§6); read repair", "status": "verified" },
+    { "title": "Apache Cassandra documentation, \"Dynamo\" (tunable consistency, replica synchronization, data versioning)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html", "accessed": "2026-11-22", "supports": "consistency level definitions; QUORUM as n/2 + 1; W + R > RF; writes always sent to all replicas; ANY satisfied by a stored hint; last-write-wins by timestamp", "status": "verified" },
+    { "title": "Apache Cassandra documentation, \"Hints\"", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/hints.html", "accessed": "2026-11-22", "supports": "hinted handoff; max_hint_window default of 3 hours; a replica down longer stays out of sync until read repair or anti-entropy repair", "status": "verified" },
+    { "title": "Apache Cassandra documentation, \"Read repair\"", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/read_repair.html", "accessed": "2026-11-22", "supports": "read repair on reads above ONE; blocking read repair is the default and provides monotonic quorum reads; the newest replica is chosen by timestamp", "status": "verified" },
+    { "title": "Apache Cassandra documentation, \"Repair\"", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/repair.html", "accessed": "2026-11-22", "supports": "anti-entropy repair compares Merkle trees and streams only the differing ranges; recommendation to repair every node at least once every 7 days; incremental repair is the default", "status": "verified" },
+    { "title": "Amazon DynamoDB Developer Guide, \"DynamoDB read consistency\"", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html", "accessed": "2026-11-22", "supports": "eventually consistent reads are the default; ConsistentRead for strongly consistent reads; eventually consistent reads cost half as much; strongly consistent reads unsupported on global secondary indexes", "status": "verified" },
+    { "title": "Riak KV documentation, \"Causal Context\"", "url": "https://docs.riak.com/riak/kv/latest/learn/concepts/causal-context/index.html", "accessed": "2026-11-22", "supports": "vector clocks versus dotted version vectors; siblings; sibling explosion; DVVs recommended and enabled on bucket types since 2.0", "status": "verified" },
+    { "title": "Martin Kleppmann, Designing Data-Intensive Applications, ch. 5 \"Replication\" (O'Reilly, 2017)", "url": "https://dataintensive.net/", "accessed": "2026-11-22", "supports": "the list of reasons a quorum read can still be stale (concurrent writes, partial write failure, sloppy quorums, timing)", "status": "reference" }
+  ]
+}

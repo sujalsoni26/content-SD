@@ -1,0 +1,66 @@
+{
+  "slug": "security-fundamentals",
+  "title": "Security fundamentals for system design",
+  "moduleId": "security",
+  "level": "basic",
+  "minutes": 7,
+  "problem": "Every box and arrow you draw is somewhere an attacker can read, change or deny access to data, and most designs never say where that is checked.",
+  "summary": "Security means confidentiality, integrity and availability for the right people and nobody else. You get there by marking trust boundaries, shrinking the attack surface, layering independent defences and giving every service and person the least privilege that still works.",
+  "catTip": "I nap on the server rack because the door was open, the badge reader was broken and the rack key was taped to the rack. Three layers, three failures. One working layer and I would be napping in the lobby.",
+  "recall": {
+    "q": "You add a webhook receiver to the post service. Which three security words describe what must happen when a call crosses that new trust boundary?",
+    "a": "Authenticate the sender (verify the webhook signature), authorise the action (may this sender change this object) and account for it (log who did what). The endpoint also widens the attack surface, so it should be the only new public path and run with least privilege."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without explicit boundaries and layers, one leaked password or one unchecked endpoint hands an attacker everything, because the design only ever assumed the front door would hold.",
+    "tradeoffs": "Every layer costs latency, operational work and friction for legitimate users, so you choose where the boundaries are and how many layers each one deserves instead of defending everything equally.",
+    "explainSimply": "A secure system lets the right people see and change their data and keeps everyone else out, even when part of it is under attack. Think of a bank branch: a lock, a guard, cameras and a vault, each built assuming the one before it has failed. You decide where the doors are and give every key the fewest rooms it needs.",
+    "hint": "Think of the three A words, and what a new public endpoint does to the attack surface."
+  },
+  "meow": "Meow at the door: who are you? Meow at the fridge: may you? Meow in the log: you did. Three layers, no purr-imeter trust.",
+  "quiz": [
+    {
+      "prompt": "An attacker floods the public API so that real users cannot load their feed. No data is read or changed. Which security property is violated?",
+      "options": [
+        "None; security is about data, and no data was exposed or altered",
+        "Confidentiality, because the attacker learned which endpoints exist",
+        "Availability, because legitimate users lost timely access to the service",
+        "Integrity, because the request counts in the logs are now wrong"
+      ],
+      "answer": 2,
+      "explanation": "Availability is one third of the CIA triad; denying service to legitimate users is a security failure even when nothing leaks. The 'none' option is the common mistake of treating security as confidentiality only."
+    },
+    {
+      "prompt": "The post service's database password leaks in a log line. Which design decision limits the damage most directly, following defence in depth and least privilege?",
+      "options": [
+        "Rotating all passwords every 30 days so the leaked one expires soon",
+        "Giving the post service a database user that can only read and write the posts tables, reachable only from the private subnet",
+        "Hashing the password with Argon2id before writing it to the log",
+        "Moving the database to a bigger instance so it can absorb the extra load"
+      ],
+      "answer": 1,
+      "explanation": "A scoped database user behind a network boundary makes the leaked credential useful for little and from nowhere. Periodic rotation helps but leaves a 30-day window, and a service must present its password in plaintext, so hashing it does not work."
+    }
+  ],
+  "cards": [
+    {
+      "q": "Name the three properties of the CIA triad and give one attack that targets each.",
+      "a": "Confidentiality (eavesdropping, reading another user's messages), integrity (tampering with a request or a stored record), availability (a denial-of-service flood). Availability is the one teams forget counts as security."
+    },
+    {
+      "q": "What is a trust boundary, and what four things should happen when a request crosses one?",
+      "a": "A line where the level of trust changes, such as internet to gateway or service to database. Crossing it, you authenticate the sender, validate the input, authorise the action and log it. The crossings reachable by outsiders are your attack surface."
+    }
+  ],
+  "glossary": [
+    { "term": "CIA", "full": "Confidentiality, Integrity, Availability", "note": "The three security properties; availability counts even though a denial-of-service attack steals nothing." }
+  ],
+  "sources": [
+    { "title": "NIST Computer Security Resource Center glossary: confidentiality, integrity, availability (definitions from 44 U.S.C. § 3542 via FIPS 200)", "url": "https://csrc.nist.gov/glossary/term/confidentiality", "accessed": "2026-11-22", "supports": "the CIA triad definitions paraphrased in the table (sibling entries /integrity and /availability read the same day)", "status": "verified" },
+    { "title": "NIST CSRC glossary: attack surface (NIST SP 800-53 Rev. 5)", "url": "https://csrc.nist.gov/glossary/term/attack_surface", "accessed": "2026-11-22", "supports": "the definition of attack surface as the set of points where an attacker can try to enter, cause an effect or extract data", "status": "verified" },
+    { "title": "NIST CSRC glossary: defense in depth (NIST SP 800-53 Rev. 5; ISA/IEC 62443 variants)", "url": "https://csrc.nist.gov/glossary/term/defense_in_depth", "accessed": "2026-11-22", "supports": "defence in depth as the application of multiple countermeasures in a layered manner", "status": "verified" },
+    { "title": "Jerome H. Saltzer and Michael D. Schroeder, \"The Protection of Information in Computer Systems\" (1975), section I.A.3 design principles", "url": "https://www.cs.virginia.edu/~evans/cs551/saltzer/", "accessed": "2026-11-22", "supports": "the least-privilege quotation and the eight design principles summarised in the DeepDive", "status": "verified" },
+    { "title": "NIST SP 800-207, Zero Trust Architecture (August 2020)", "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-207.pdf", "accessed": "2026-11-22", "supports": "the callout that network location alone does not imply trust", "status": "verified" }
+  ]
+}

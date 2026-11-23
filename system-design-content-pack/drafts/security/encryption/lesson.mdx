@@ -1,0 +1,77 @@
+**Encryption** turns data into ciphertext that only a key holder can read. The algorithms are solved; the design work is where keys live, who may use them, and which attacker each layer defeats. TLS itself is in [HTTP](/learn/http); this lesson is everything around it.
+
+## Certificates and PKI in brief
+
+TLS authenticates the server with an **X.509 certificate**: a signed document binding a public key to a name, issued by a **certificate authority** (CA) the client already trusts, via a chain from an intermediate up to a root in the operating system or browser trust store. Certificates expire, and a CA publishes revocation lists for ones it withdraws early. The whole arrangement is a **public key infrastructure** (PKI); inside your own network a private CA issues short-lived certificates that only your services trust.
+
+## Mutual TLS between services
+
+Ordinary TLS proves only the server's identity. **Mutual TLS** (mTLS) makes the client present a certificate too, so both ends know who they are talking to before any application data flows. Between services this gives encrypted east-west traffic plus a cryptographic identity per workload: the payments service *is* whoever holds the payments private key, whatever its IP address.
+
+By hand that means issuing, distributing and rotating certificates for every instance. A service mesh (see [Service mesh](/learn/service-mesh)) automates it: a sidecar beside each instance obtains a certificate for the workload's identity, rotates it before expiry and upgrades connections to mTLS without code changes.
+
+## Encryption at rest: name the attacker
+
+"Encrypted at rest" is a tick-box until you say whom it stops.
+
+| Layer | Stops | Does not stop | Cost |
+| --- | --- | --- | --- |
+| Disk or volume | A stolen disk, a decommissioned drive, a copied snapshot | Anyone logged into the running machine | Nearly free; usually on by default |
+| Database, transparent data encryption | Stolen data files, log files and backups | Anyone with valid database credentials; data in transit | Small CPU overhead; backups need the key too |
+| Application or field-level | A compromised database account, a curious administrator | Bugs in the application itself | You cannot index or search what you encrypted |
+| End-to-end, client-side | Your own servers | Nothing once a device is compromised | Server-side search and moderation become impossible |
+
+Transparent data encryption, in SQL Server for example, encrypts database pages as they are written and decrypts them as they are read, so neither the application nor an attacker holding a connection string notices. That is why the most sensitive columns, say national id numbers, often get a second layer in the application: the database holds only ciphertext and the key lives where the database account cannot reach.
+
+## Envelope encryption with a KMS
+
+That key cannot live in the database it protects or in a config file. A **key management service** (KMS) holds keys inside hardware security modules, never releases them, and encrypts or decrypts on request, with access control and an audit log per call.
+
+Sending every row to the KMS would be slow, so you use **envelope encryption**: encrypt the data locally with a fresh **data encryption key** (DEK), have the KMS encrypt the DEK under a **key encryption key** (KEK) that never leaves it, and store the wrapped DEK next to the ciphertext.
+
+<Mermaid caption="The KEK never leaves the KMS. Data is encrypted locally with a data key, and only the small wrapped data key travels to the KMS to be unwrapped." chart={`flowchart LR
+    subgraph app["Application"]
+        gen["1. Ask KMS for a data key"]
+        enc["3. Encrypt object with plaintext DEK, then drop it from memory"]
+        store["4. Store ciphertext plus wrapped DEK together"]
+        dec["6. Decrypt object with plaintext DEK"]
+    end
+    subgraph kms["KMS with HSM-held KEK"]
+        kek["2. Generate DEK, return plaintext DEK and DEK wrapped under KEK"]
+        unwrap["5. Unwrap DEK for an authorised caller"]
+    end
+    gen --> kek --> enc --> store
+    store -->|"later: wrapped DEK"| unwrap --> dec
+`} />
+
+AWS KMS's data-key API is the canonical shape: one call returns a plaintext data key and the same key encrypted under your KMS key; you encrypt with the plaintext key, discard it as soon as possible, and keep the encrypted copy with the data. Bulk data never crosses the network to the KMS, each object can have its own DEK so one leaked key exposes one object, and every unwrap is an authorised, audited event.
+
+## Rotation and crypto-shredding
+
+Rotating a KEK is cheap: AWS KMS generates new key material on a schedule (365 days by default) but keeps the old material to decrypt what it already wrapped, so nothing is re-encrypted and data keys are untouched. Rotating a DEK means re-encrypting the data it protects, so it is done per object. <mark>Rotation limits what a leaked key exposes; it does not undo a leak.</mark>
+
+The same hierarchy gives you **crypto-shredding**, NIST's cryptographic erase: destroy a key and everything under it becomes unrecoverable, including copies in backups you cannot find. Give each user or tenant their own DEK and "delete my account" becomes one key deletion.
+
+<Callout type="warning" title="Lose the key, lose the data">
+
+A KEK deleted by mistake, a TDE certificate never backed up, a KMS unreachable at startup: every layer has a mirror-image failure, so key backup, deletion waiting periods and a rehearsed restore are part of the design.
+
+</Callout>
+
+<Callout type="analogy" title="The box and the envelope">
+
+Lock the parcel with a small padlock, put that padlock's key in an envelope, and have the vault seal the envelope so only the vault can open it. Where it stops: a vault opens one envelope at a time, while a KMS answers thousands of unwrap requests a second.
+
+</Callout>
+
+<Callout type="interview" title="Say the attacker, not the buzzword">
+
+"Volumes are encrypted by default, which covers stolen disks. The database uses TDE so backups are protected. Personal identifiers are field-encrypted in the application with per-user data keys wrapped by the KMS, so a leaked connection string reads ciphertext, and deleting a user is deleting a key."
+
+</Callout>
+
+<DeepDive title="Go deeper: searching a field you encrypted">
+
+Randomised encryption makes `WHERE email = ?` impossible. The usual compromise is a **blind index**: store beside the ciphertext an HMAC of the normalised value under a separate key, and query on that. Equality works, ranges do not, and whoever steals the index key can test guesses against it, so blind indexes suit high-entropy identifiers better than dates of birth.
+
+</DeepDive>

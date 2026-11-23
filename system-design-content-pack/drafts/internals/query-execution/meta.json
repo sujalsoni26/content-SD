@@ -1,0 +1,71 @@
+{
+  "slug": "query-execution",
+  "title": "Indexes and query execution",
+  "moduleId": "internals",
+  "level": "intermediate",
+  "minutes": 9,
+  "problem": "A query that should touch twenty rows reads the whole table, or the app fires one query per row, and nobody can tell which from the code alone.",
+  "summary": "The planner turns SQL into a tree of scans and joins using statistics; EXPLAIN ANALYZE shows estimated against actual rows. Covering indexes enable index-only scans, selectivity decides when an index helps, and N+1 lives outside the planner's reach.",
+  "catTip": "Before I pounce I check the floor plan: shortest path to the bowl, not the longest. EXPLAIN is the floor plan the database drew; if its guess of where the mice are is wrong, so is the route.",
+  "recall": {
+    "q": "EXPLAIN ANALYZE shows a nested loop whose inner index scan has loops=50000, while the outer node estimated 20 rows and produced 50,000. What went wrong and what do you do first?",
+    "a": "The planner's row estimate was far too low, usually from stale statistics or correlated columns, so it chose a nested loop that ran 50,000 times. Run ANALYZE, consider extended statistics on the correlated columns, and recheck the plan before adding indexes."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a planner working from accurate statistics the database full-scans tables or loops an index lookup millions of times, and without reading the plan you optimise blind.",
+    "tradeoffs": "Every index speeds some reads and slows every write, covering indexes widen the index, and statistics are a sample, so estimates can be wrong exactly on the skewed data that matters.",
+    "explainSimply": "You tell the database what you want and a planner works out the route, like a satnav choosing between the motorway and side streets. EXPLAIN shows the route and how long each leg really took. If the satnav's map is out of date it picks a bad route, and refreshing the map (statistics) often fixes more than building new roads (indexes).",
+    "hint": "Compare what the planner expected with what actually happened, and look at how many times the inner loop ran."
+  },
+  "meow": "Seq scan, index scan, index-only if the index has it all. Rows estimated versus rows actual, meow: that gap is the bug.",
+  "quiz": [
+    {
+      "prompt": "A query filters orders by status, a column with three values where the chosen value matches about 40% of rows. The team adds an index on status, but EXPLAIN still shows a Seq Scan. Why?",
+      "options": [
+        "The index is corrupt and must be rebuilt",
+        "Low selectivity: fetching 40% of rows individually costs more than reading every page once, so the planner correctly prefers the scan",
+        "PostgreSQL never uses an index until ANALYZE has run",
+        "Bitmap scans are disabled by default"
+      ],
+      "answer": 1,
+      "explanation": "An index pays off when it skips most pages; at 40% selectivity scattered fetches cost more than one sequential pass. A bitmap scan is chosen for middling selectivity, but 40% is still too much."
+    },
+    {
+      "prompt": "Which change turns an Index Scan into an Index Only Scan for SELECT status, total FROM orders WHERE customer_id = 42?",
+      "options": [
+        "Adding status and total to the index with INCLUDE, provided the visibility map marks the heap pages all-visible",
+        "Increasing work_mem",
+        "Forcing a hash join",
+        "Running VACUUM FULL once"
+      ],
+      "answer": 0,
+      "explanation": "An index-only scan needs every referenced column in the index and all-visible heap pages; INCLUDE supplies the columns without widening the search key. work_mem affects sorts and hash tables, not scans."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A page renders 50 orders and then runs 50 more queries to fetch each order's customer. Name the problem and two fixes.",
+      "a": "The N+1 problem: 1 + 50 round trips. Fix it with a JOIN that returns orders with their customers, a single batch query using WHERE id IN (...), or the ORM's eager loading (includes or preload)."
+    },
+    {
+      "q": "When does a hash join beat a nested loop, and what does Batches above 1 in a Hash node tell you?",
+      "a": "A hash join wins for large inputs joined on equality when the build side fits in memory; a nested loop wins when the outer side is small and the inner side has an index. Batches above 1 means the hash table exceeded work_mem and spilled to disk."
+    }
+  ],
+  "glossary": [
+    { "term": "ORM", "full": "Object-Relational Mapper", "note": "A library that maps objects to tables and generates SQL; a common source of N+1 query patterns." }
+  ],
+  "sources": [
+    { "title": "PostgreSQL documentation, Using EXPLAIN", "url": "https://www.postgresql.org/docs/current/using-explain.html", "accessed": "2026-11-22", "supports": "the sample plans quoted (Nested Loop, Bitmap Heap Scan, Index Scan, Execution Time), the meaning of cost, rows, width, actual time and loops, BUFFERS output, Hash node batches, and that EXPLAIN ANALYZE executes the statement", "status": "verified" },
+    { "title": "PostgreSQL documentation, Index-Only Scans and Covering Indexes", "url": "https://www.postgresql.org/docs/current/indexes-index-only-scans.html", "accessed": "2026-11-22", "supports": "conditions for index-only scans, the visibility map check, and INCLUDE covering indexes", "status": "verified" },
+    { "title": "PostgreSQL documentation, CREATE INDEX", "url": "https://www.postgresql.org/docs/current/sql-createindex.html", "accessed": "2026-11-22", "supports": "INCLUDE adds non-key payload columns; wide included columns bloat the index", "status": "verified" },
+    { "title": "PostgreSQL documentation, Combining Multiple Indexes", "url": "https://www.postgresql.org/docs/current/indexes-bitmap-scans.html", "accessed": "2026-11-22", "supports": "bitmap scans build in-memory bitmaps, AND/OR them, visit rows in physical order and lose index ordering", "status": "verified" },
+    { "title": "PostgreSQL documentation, Statistics Used by the Planner", "url": "https://www.postgresql.org/docs/current/planner-stats.html", "accessed": "2026-11-22", "supports": "reltuples and relpages, pg_statistic most common values and histograms, default_statistics_target of 100, extended statistics via CREATE STATISTICS", "status": "verified" },
+    { "title": "PostgreSQL documentation, ANALYZE", "url": "https://www.postgresql.org/docs/current/sql-analyze.html", "accessed": "2026-11-22", "supports": "ANALYZE samples large tables randomly and the planner uses the result", "status": "verified" },
+    { "title": "PostgreSQL documentation, Planner/Optimizer", "url": "https://www.postgresql.org/docs/current/planner-optimizer.html", "accessed": "2026-11-22", "supports": "nested loop, merge join and hash join descriptions; genetic query optimizer above geqo_threshold", "status": "verified" },
+    { "title": "PostgreSQL documentation, Resource Consumption (work_mem)", "url": "https://www.postgresql.org/docs/current/runtime-config-resource.html", "accessed": "2026-11-22", "supports": "work_mem default of 4 MB", "status": "verified" },
+    { "title": "PostgreSQL documentation, Routine Vacuuming", "url": "https://www.postgresql.org/docs/current/routine-vacuuming.html", "accessed": "2026-11-22", "supports": "planner statistics gathered by ANALYZE, which autovacuum runs; the visibility map used by index-only scans", "status": "verified" },
+    { "title": "Ruby on Rails Guides, Active Record Query Interface, N + 1 queries problem", "url": "https://guides.rubyonrails.org/active_record_querying.html", "accessed": "2026-11-22", "supports": "the 1 + 10 = 11 queries example reduced to 2 with eager loading", "status": "verified" }
+  ]
+}

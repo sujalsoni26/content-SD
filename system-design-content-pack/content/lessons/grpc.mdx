@@ -1,0 +1,94 @@
+**RPC** (Remote Procedure Call) means calling a function on another machine as if it were local: `userService.GetUser(42)`. **gRPC** is Google's open-source RPC framework, built for chatty internal service-to-service traffic.
+
+## How it works
+
+<Steps>
+
+1. Define services and messages in a `.proto` file (**Protocol Buffers**).
+2. **Generate** client and server code in many languages.
+3. Send compact **binary** messages over **HTTP/2**.
+
+</Steps>
+
+```protobuf
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User);
+}
+```
+
+**Serialization** turns in-memory data into bytes. Protobuf is <mark>smaller and faster to parse than JSON</mark>.
+
+## Four kinds of call
+
+| Kind | Shape | Example |
+| --- | --- | --- |
+| Unary | One request, one response, like a normal function call | `GetUser(42)` |
+| Server streaming | One request, then a stream of responses | Subscribe to live price updates |
+| Client streaming | A stream of requests, then one response | Upload a file in chunks, get one receipt |
+| Bidirectional streaming | Both sides send streams independently | Chat, live collaboration |
+
+Streams ride on HTTP/2, so many calls share one connection and a long stream does not block the calls beside it.
+
+## Deadlines and cancellation
+
+Every call should carry a **deadline**: how long the caller is willing to wait before the call fails with `DEADLINE_EXCEEDED`. When the feed service calls the ranking service, it passes on the time it has *left*, so a chain of calls can never outlive the user's patience.
+
+<Mermaid caption="Deadlines propagate: each hop gets the remaining time, so no service keeps working on a request the user has already given up on." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client
+    participant F as Feed service
+    participant R as Ranking service
+    C->>F: GetFeed (deadline 300 ms)
+    Note over F: 40 ms spent
+    F->>R: Rank (deadline 260 ms)
+    Note over R: Too slow
+    R-->>F: DEADLINE_EXCEEDED
+    F-->>C: Chronological feed (fallback)
+`} />
+
+Either side can **cancel** a call that is in flight, which stops further work; changes already made are not rolled back. Client and server also judge success independently: the server may have finished while the client saw a timeout. That is one more reason to make writes idempotent (see [Idempotency](/learn/idempotency)).
+
+## Status codes
+
+gRPC has its own small set, including `OK`, `INVALID_ARGUMENT`, `NOT_FOUND`, `ALREADY_EXISTS`, `PERMISSION_DENIED`, `UNAVAILABLE`, `DEADLINE_EXCEEDED` and `INTERNAL`. Clients retry `UNAVAILABLE` with backoff and never retry `INVALID_ARGUMENT`: the same split as 5xx versus 4xx in REST.
+
+<Comparison>
+
+<ComparisonItem title="Pros">
+
+- Fast, compact binary messages
+- Strongly typed contract: mismatches are caught at build time
+- Streaming in both directions
+- Many calls share one connection
+
+</ComparisonItem>
+
+<ComparisonItem title="Cons">
+
+- Not human-readable
+- Browsers need gRPC-Web or a proxy
+- Services couple to the shared schema
+
+</ComparisonItem>
+
+</Comparison>
+
+<Callout type="idea" title="Rule of thumb">
+
+Use gRPC for internal calls; keep REST for public and browser APIs.
+
+</Callout>
+
+Trivia: the "g" isn't officially "Google". The project gives it a new meaning each release.
+
+<DeepDive title="Go deeper: how protobuf stays small and compatible">
+
+Protobuf sends **field numbers**, not field names. `string name = 2;` travels as a tiny tag "2" plus the value, while JSON repeats `"name":` in every message. Because fields are identified by number, you can add new fields and old clients simply ignore them. The one rule: never reuse or renumber a field.
+
+</DeepDive>

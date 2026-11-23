@@ -1,0 +1,48 @@
+When a post is created, notifications, analytics, moderation and recommendations all care. Calling each one directly couples them to the post service: every new feature means changing the post service. With **pub/sub**, the post service publishes one `PostCreated` event to a **topic**, and every subscriber gets its own copy.
+
+<Diagram name="queue-vs-pubsub" caption="Message queue vs pub/sub." />
+
+- **Queue:** each message goes to *one* consumer (work distribution).
+- **Pub/sub:** each event goes to *all* subscribers (fan-out).
+- Real systems combine them: each subscriber gets its own queue, or its own Kafka consumer group, so its copies are shared out among its workers.
+
+<Interactive name="pubsub-fanout" />
+
+## Event-driven architecture (EDA)
+
+Services emit and react to **events**, past-tense facts like `PostCreated` or `OrderPlaced`, instead of calling each other directly.
+
+<Comparison>
+
+<ComparisonItem title="Pros">
+
+- Loose coupling
+- New consumers without touching the producer
+- Independent scaling
+
+</ComparisonItem>
+
+<ComparisonItem title="Cons">
+
+- Hard to trace who reacts to what
+- Eventual consistency
+- Duplicate and out-of-order events
+- Event formats must evolve carefully
+
+</ComparisonItem>
+
+</Comparison>
+
+<Callout type="warning" title="A copy for everyone, not exactly one copy in order">
+
+A topic promises each subscriber its own copy of every event. It does not promise exactly one copy, or arrival in the order events happened. Subscribers must tolerate duplicates (see [Idempotency](/learn/idempotency)) and late events, for example by trusting the timestamp inside the event rather than its arrival time.
+
+</Callout>
+
+Examples: Kafka, Google Cloud Pub/Sub, Amazon SNS + SQS, Redis Pub/Sub. Designing the events and evolving their schemas: [Event-driven architecture in practice](/learn/eda-patterns). Two patterns built on events: [CQRS](/learn/cqrs) and [Event sourcing](/learn/event-sourcing).
+
+<DeepDive title="Go deeper: the dual-write problem and the outbox">
+
+The post service must save the post *and* publish `PostCreated`. If it does both separately, a crash in between leaves a post with no event (or an event with no post). The **transactional outbox** pattern fixes this: write the post and an "outbox" row in the same database transaction, and let a separate relay read the outbox and publish the events. Publishing may repeat after a crash, which is fine because subscribers are idempotent.
+
+</DeepDive>

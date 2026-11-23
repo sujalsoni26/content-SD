@@ -1,0 +1,78 @@
+**Linearizability** is the promise that a replicated value behaves as if there were a single copy and every operation on it took effect at one instant between the moment it was issued and the moment it returned. Once any client has seen a write, every later read by anyone sees it. It is the "strong" row of [Consistency models](/learn/consistency) made precise, by Herlihy and Wing in 1990.
+
+## One copy, in real time
+
+<Mermaid caption="Alice's read finished before Bob's began, so a single-copy system would have to show Bob the result. A lagging replica breaks linearizability even though each node is internally correct." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant W as Scorekeeper
+    participant R1 as Replica 1
+    participant R2 as Replica 2
+    participant A as Alice
+    participant B as Bob
+    W->>R1: write final score
+    R1-->>W: ok
+    A->>R1: read score
+    R1-->>A: final score
+    Note over A,B: Alice tells Bob the match is over
+    B->>R2: read score
+    R2-->>B: still in progress
+    Note over B: Not linearizable
+`} />
+
+The real-time condition is the part that bites. Alice's read *completed* before Bob's *started*, in actual time rather than by any clock the system reads, so the single copy must already hold the result when Bob asks. Serving Bob from a replica that has not received the write breaks the promise even though no node did anything wrong. [Clocks, time and ordering](/learn/time-and-ordering) explains why "before" is itself hard to establish across machines.
+
+Where is the guarantee genuinely required?
+
+- **Locks and leader election.** "Exactly one holder" is a linearizable compare-and-set on one key; a stale read means two holders (see [Distributed locking](/learn/distributed-locks)).
+- **Uniqueness.** One account per username, one booking per seat, one winner of the last item in a sale.
+- **Cross-channel ordering.** A user uploads a photo, a queue tells a worker to resize it, and the worker reads from a replica that lacks the photo. The queue carried the fact faster than replication did.
+
+<Callout type="analogy" title="One scoreboard, many screens">
+
+A stadium has one scoreboard, and everyone who looks up sees the same score the instant it changes. Replicas are television screens in the concourse with different delays, and linearizability is the promise that every screen behaves as if it were the one scoreboard: nobody who has seen the goal can later be shown the old score. Where the analogy stops: in a stadium "before" is decided by the clock on the wall. In a distributed system, one operation is only before another if it finished before the other started, and overlapping operations may legitimately land in either order.
+
+</Callout>
+
+## Serializability is about transactions, not time
+
+**Serializability** says that running transactions concurrently gives the same result as running them one at a time in *some* order (Papadimitriou, 1979). It is the strongest isolation level in [ACID transactions](/learn/acid), and it says nothing about which order, or about real time. A database may place a transaction that started at 10:02 before one that committed at 10:01, provided no transaction can tell the difference. A read-only transaction served from a slightly old snapshot is serializable and not linearizable.
+
+Put the two together and you get **strict serializability**: the serial order must also respect real time, so a transaction that begins after another commits sees its effects. Spanner's paper calls this *external consistency* and treats it as linearizability applied to whole transactions. <mark>Linearizability is about single operations on one object in real time; serializability is about many operations on many objects in some order; strict serializability is both.</mark>
+
+## The zoo on one map
+
+| Model | Scope | Promise | Real-time order | Answers during a partition |
+| --- | --- | --- | --- | --- |
+| Strict serializable | Transactions | Some serial order that also matches real time | Yes | No |
+| Linearizable | One object | Single copy; a read sees every completed write | Yes | No |
+| Serializable | Transactions | Some serial order, not necessarily recent | No | No |
+| Snapshot isolation | Transactions | Each transaction reads one consistent snapshot; some write anomalies remain | No | No |
+| Sequential | One object | Everyone sees the same order, consistent with each client's own order | No | No |
+| Causal | Related operations | Effects never appear before causes; unrelated writes may be seen in different orders | No | Yes, if a client sticks to one server |
+| Eventual | Replicas | Copies converge once writes stop | No | Yes |
+
+*Real-time order* separates the models that behave like one copy from those that merely agree on an order, and *answers during a partition* follows from it: the top five rows must sometimes refuse or wait, because a cut-off node cannot know whether a newer write exists. Causal is the strongest row that keeps answering, provided each client stays with one server; the session guarantees in the consistency lesson are its practical form. Snapshot isolation sits between read committed and serializable in many MVCC databases; [MVCC and isolation levels](/learn/mvcc-isolation) covers what it lets through.
+
+## What the top of the map costs
+
+A linearizable read cannot be served by whichever replica is closest; it must go through the leader or a quorum guaranteed to include the latest write, and a linearizable write must wait for that quorum (see [Quorums and leaderless replication](/learn/quorums) and [Consensus: Raft in one picture](/learn/consensus)). Each is a network round trip, and across regions one round trip is most of a page's latency budget, which [CAP and PACELC](/learn/cap) puts numbers on. CAP's C is linearizability, as defined in Gilbert and Lynch's proof, and neither linearizability nor serializability can be had without coordination.
+
+So keep the set of linearizable things small. In a ticket-booking system the seat allocation is linearizable (one row, one compare-and-set or a unique constraint), the seat map users browse is eventually consistent, a user's own booking history is read-your-writes, and the chat with support is causal. Ask of each feature what a stale read would cost, and buy real-time guarantees only where the answer is money or a double booking.
+
+<Callout type="interview" title={"\"Which object needs to be a single copy?\""}>
+
+Name the objects that need linearizability, usually the lock, the unique name and the last seat, and say what you give up for them: a leader or quorum round trip on every read and write, and unavailability for those keys during a partition. Then say that everything else is causal or eventual, and why that is acceptable for each.
+
+</Callout>
+
+<DeepDive title="Go deeper: Jepsen's map">
+
+Kyle Kingsbury's Jepsen project tests databases by running concurrent operations under injected faults, then checking the recorded history against a model. Its consistency reference arranges the models above and more into one hierarchy from stronger to weaker, defining each by the dependency cycles it forbids. It is where a vendor's "strong consistency" claim gets translated into a name on the map.
+
+</DeepDive>

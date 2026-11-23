@@ -1,0 +1,38 @@
+{
+  "slug": "lld-intro",
+  "title": "What low-level design is",
+  "moduleId": "lld",
+  "level": "basic",
+  "minutes": 6,
+  "problem": "The architecture names an order service, but nobody has decided which classes live inside it, who owns the price arithmetic, or what happens when a coupon expires mid-checkout.",
+  "summary": "Low-level design turns one box of an architecture into classes with clear responsibilities, sensible relationships and defined interactions, working from requirements through entities, classes and sequences to edge cases and extension points.",
+  "catTip": "Humans drew the house; I decide which cupboard each toy lives in and who may open it. That is low-level design: the boxes are settled, so now every object needs one job and a door.",
+  "recall": {
+    "q": "You are given 'design a parking lot' with 40 minutes. What do you produce, in what order, and what is the interviewer listening for?",
+    "a": "Requirements and assumptions, then entities with one responsibility each, a class diagram with relationships and multiplicity, a sequence for the main flow, named edge cases and one extension point. They listen for clear responsibilities, relationships that match the domain, patterns justified by a problem and trade-offs said out loud."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Without a low-level design, the first developer to open the box invents the classes under deadline, responsibilities land wherever the cursor was, and every later change means reading the whole component to find out who owns what.",
+    "tradeoffs": "Every class, interface and pattern is a boundary that must be named, understood and tested, so more structure buys flexibility at the price of indirection and more files to read.",
+    "explainSimply": "High-level design decides which buildings a campus needs and which roads join them. Low-level design is the floor plan of one building: which rooms exist, what each is for, and which doors connect them. You settle the rooms before anyone lays a brick.",
+    "hint": "List the artefacts in the order you would draw them on a whiteboard, then the four things a reviewer would tick off."
+  },
+  "meow": "Meow: one box, many classes. Each gets one job, one door and a reason to exist. Purr-sponsibilities assigned.",
+  "quiz": [],
+  "cards": [
+    {
+      "q": "Your architecture has a box labelled 'Notification service'. Name three questions low-level design must answer that the box leaves open.",
+      "a": "Which classes compose it (Notification, Channel, Template, RetryPolicy); who owns each decision (which channel to use, when to retry); and how the objects interact for one send, including edge cases such as an opted-out user or a channel that is down."
+    }
+  ],
+  "glossary": [
+    { "term": "LLD", "full": "Low-Level Design", "note": "Designing the classes, responsibilities, relationships and interactions inside one component of a system." },
+    { "term": "HLD", "full": "High-Level Design", "note": "Designing which services, stores and queues a system has and how data and traffic move between them." }
+  ],
+  "sources": [
+    { "title": "Martin Fowler, UML Distilled, 3rd ed. (Addison-Wesley, 2003), chapters on class diagrams and sequence diagrams", "url": "https://martinfowler.com/books/uml.html", "accessed": "2026-11-22", "supports": "class and sequence diagrams as the two drawings that express a design's structure and one use case's interactions", "status": "reference" },
+    { "title": "Gamma, Helm, Johnson, Vlissides, Design Patterns: Elements of Reusable Object-Oriented Software (Addison-Wesley, 1994)", "url": "https://www.informit.com/store/design-patterns-elements-of-reusable-object-oriented-9780201633610", "accessed": "2026-11-22", "supports": "patterns as named solutions to recurring design problems, to be chosen from the problem rather than the catalogue", "status": "reference" },
+    { "title": "Robert C. Martin, Clean Architecture (Prentice Hall, 2017), Part III \"Design Principles\"", "url": "https://www.informit.com/store/clean-architecture-a-craftsmans-guide-to-software-structure-9780134494166", "accessed": "2026-11-22", "supports": "assigning responsibilities to classes and the code-level trade-off between flexibility and indirection", "status": "reference" }
+  ]
+}

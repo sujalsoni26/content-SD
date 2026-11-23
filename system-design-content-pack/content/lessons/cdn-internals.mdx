@@ -1,0 +1,73 @@
+A CDN is a hierarchy of HTTP caches with a routing trick in front. Three decisions do all the work: the **cache key** says what counts as the same object, **Cache-Control** says how long a copy may live, and **anycast** decides which edge a user reaches. [CDN](/learn/cdn) covered why edges exist and how versioned file names work; this lesson is about the inside.
+
+## Anycast: reaching the nearest edge
+
+Every edge announces the *same* IP addresses. Under anycast a service address is reachable from many independent locations and the routing system delivers each packet to the one topologically closest to the user's network, which usually but not always means lowest latency. Unlike [DNS-based steering](/learn/dns) there is no TTL to wait out when a site fails (routers simply stop hearing its announcement), and attack traffic is spread across every site at once, which is why Cloudflare runs its network on anycast addresses.
+
+<Diagram name="cdn-edges" caption="The same hostname leads each user to a nearby edge. A hit is answered there; a miss travels up the hierarchy towards the origin." />
+
+## Tiers: edge, shield, origin
+
+With hundreds of edges and no coordination, a newly popular object costs one origin fetch *per edge*: a YouTube-style thumbnail going viral in two hundred cities is two hundred requests for the same bytes, so CDNs cache in tiers.
+
+<Mermaid caption="A miss at the edge asks a regional cache; a miss there asks the origin shield; only the shield talks to the origin, so the origin sees roughly one request per object." chart={`flowchart LR
+    U["User"] --> E["Edge location"]
+    E -->|miss| RG["Regional cache"]
+    RG -->|miss| SH["Origin shield: one tier, near the origin"]
+    SH -->|miss| O["Origin"]
+`} />
+
+An **origin shield** is one caching tier, placed in the region closest to your origin, through which every other tier fetches. CloudFront's Origin Shield consolidates simultaneous misses from all regional caches into as few as one origin request per object; Cloudflare's Tiered Cache makes lower tiers ask an upper tier first, and Smart Tiered Cache picks the upper tier nearest your origin. Origin load stops depending on how many edges exist, for an extra hop on cold misses and a per-request charge.
+
+## The cache key
+
+The cache key is what an edge computes from a request to find a stored response. CloudFront's default is the distribution's domain name plus the URL path, ignoring query strings, headers and cookies unless a cache policy adds them; Cloudflare's is scheme, host, path and query string. Everything you add multiplies the variants and divides the hit ratio: four spellings of `Accept-Language: en-US` cache the same page four times, and `User-Agent` has thousands of values. Normalise before you key: strip or sort query parameters, map languages to a few values, or put the variant in the path (`/en/story.html`), where the key already looks.
+
+HTTP's own way to declare variation is the **Vary** header: `Vary: Accept-Language` lets a cache reuse a response only for requests whose `Accept-Language` matches the original, and `Vary: *` means never reuse. CDNs honour it selectively: Cloudflare ignores Vary by default apart from `Accept-Encoding` and configured rules; CloudFront honours it only for `Accept-Encoding` and headers already in the cache key, stripping other values. <mark>Put the variation in the cache key explicitly; do not rely on Vary to do it for you.</mark>
+
+## Cache-Control, TTL and purge
+
+| Directive | Meaning for a CDN |
+| --- | --- |
+| `max-age=600` | Fresh for 600 seconds in every cache, browser included |
+| `s-maxage=600` | Fresh for 600 seconds in shared caches only; overrides `max-age` there, so browsers can be given a shorter life |
+| `no-store` | Never store the response anywhere |
+| `private` | Browsers may store it; shared caches such as a CDN must not |
+| `stale-while-revalidate=30` | After expiry, serve the stale copy for up to 30 more seconds while one background request refreshes it |
+| `stale-if-error=3600` | If the origin returns a 5xx, keep serving the stale copy for up to an hour |
+
+The last two come from RFC 5861 and turn a cache into insurance: nobody waits on a revalidation, and an origin outage shows yesterday's page instead of an error. Cloudflare serves such requests at once with an `UPDATING` status while it refreshes.
+
+A TTL expires a copy passively; a **purge** removes it now. Cloudflare purges by URL, prefix, hostname, cache tag or everything; CloudFront *invalidations* work by path, the first 1,000 paths a month free, a wildcard counting as one. Purge is for content whose URL cannot change (an HTML page, a price); versioned file names remain the tool for assets, since a purge never reaches browsers.
+
+## Private content and code at the edge
+
+To serve a paid video or private download from a cache, the edge must check authorisation without calling your origin. A **signed URL** carries an expiry and signature in its query string and protects one file, suiting downloads and cookie-less clients; a **signed cookie** protects many URLs at once, such as every segment of an HLS stream, without changing them.
+
+**Edge compute** runs small pieces of your code on the CDN itself: Cloudflare Workers run JavaScript in V8 isolates, which avoid a virtual machine's cold starts; AWS Lambda@Edge runs Node.js or Python on four triggers (viewer request and response at the edge, origin request and response around the origin fetch); the lighter CloudFront Functions handle viewer events with sub-millisecond start-up. Typical jobs: token checks, URL rewrites, normalising headers *before* the cache key is computed. Every function sits in the request path, so its run time is paid on each request it touches.
+
+## Request collapsing
+
+When an object expires on a busy edge, thousands of requests miss at once and, unprotected, all go to the origin: the stampede [Caching](/learn/caching) warns about. Edges **collapse** them: CloudFront forwards the first request, holds the identical ones (same cache key) until the response arrives and answers them all from it; Fastly uses the same term. Collapsing applies only to cacheable responses, so `private`, `no-store` or a zero TTL switches it off; the origin shield extends it across edges.
+
+## What gets hard
+
+Over-specific keys melt origins; under-specific keys leak one user's page to another, the worst CDN bug, so every personalised response needs `private` or `no-store`. Purges never reach browsers, edge functions are a second deployment target, and a CDN hides origin problems until TTLs run out, which is what `stale-if-error` is for.
+
+<Callout type="analogy" title="Branch libraries and a central depot">
+
+Edges are branch libraries, the origin shield is the regional depot and the publisher is the origin. The cache key is the catalogue number: if each branch files the same book under a different number (query strings, headers), they all order their own copies. The loan period is the TTL; a recall notice is a purge. The analogy fails on one point: books do not go stale on a schedule, pages do.
+
+</Callout>
+
+<Callout type="interview" title="Name the three decisions">
+
+"What is in the cache key, how long is it fresh and in which caches, and what happens on a miss: collapsed at the edge, funnelled through an origin shield, with stale-while-revalidate so users never wait and stale-if-error so an origin outage serves yesterday's copy." That covers more ground than any list of vendors.
+
+</Callout>
+
+<DeepDive title="Go deeper: stale-while-revalidate on a timeline">
+
+With `max-age=600, stale-while-revalidate=30`, a copy fetched at second 0 is served as fresh until second 600. The first request between 600 and 630 gets the stale copy immediately and triggers one background revalidation; if it succeeds the clock restarts. After 630 with no successful revalidation the copy is simply expired and a request must wait for the origin. Add `stale-if-error=1200` and a 5xx from the origin keeps the stale copy in service until second 1800. Revalidation is triggered by requests, so an object nobody asks for is never refreshed in the background.
+
+</DeepDive>

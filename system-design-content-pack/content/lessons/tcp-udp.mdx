@@ -1,0 +1,54 @@
+Data moves as small **packets** under a stack of protocols. Each layer solves one problem.
+
+| Layer | Job | Examples |
+| --- | --- | --- |
+| Application | What the message means | HTTP, DNS, WebSocket |
+| Transport | Deliver data between two programs (ports) | TCP, UDP |
+| Internet | Address and route packets between machines | IP |
+| Link | Move bits over one physical hop | Wi-Fi, Ethernet |
+
+**IP is best-effort**: packets can be lost, duplicated or reordered. The transport layer decides what to do about that.
+
+## TCP vs UDP
+
+|  | TCP | UDP |
+| --- | --- | --- |
+| How | 3-way handshake (SYN → SYN-ACK → ACK), then acks, resends and ordering | No connection; just sends datagrams |
+| Guarantees | Reliable, ordered, congestion-controlled | None: a lost packet stays lost |
+| Cost | Extra round trips and overhead | Minimal, low latency |
+| Use for | Web pages, APIs, payments, files, DB connections | Voice/video calls, games, live streams, DNS queries |
+
+<Interactive name="tcp-udp" />
+
+The race simplifies one thing: it resends packet 3 only when the **retransmission timer** fires. Real TCP also watches the acknowledgements. Three duplicate ACKs for the same packet are a strong hint that the next one was lost, so the sender resends it at once (**fast retransmit**) instead of waiting for the timer.
+
+<Callout type="analogy" title="Registered post vs shouting across a room">
+
+TCP is tracked registered post: signed for, numbered, resent if lost. UDP is shouting across a room: instant, but if someone misses a word, it's gone. In a video call a late frame is useless, so UDP wins.
+
+</Callout>
+
+**HTTP/3** runs on **QUIC**, which builds reliability on top of UDP. It gets TCP-like guarantees without some of TCP's delays (see [HTTP and HTTPS](/learn/http)).
+
+<DeepDive title="Go deeper: why three steps in the handshake?">
+
+Each side picks a random starting **sequence number** and needs the other side to confirm it. The client's SYN carries its number; the server's SYN-ACK acknowledges it and carries the server's own; the client's ACK acknowledges that. Two messages would leave one side unconfirmed. This setup costs one full round trip before any data flows, which is why reusing connections (keep-alive, HTTP/2) matters so much.
+
+<Mermaid caption="The handshake: each side's starting sequence number is acknowledged before any data flows." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: SYN (client sequence number x)
+    S-->>C: SYN-ACK (ack x+1, server sequence number y)
+    C->>S: ACK (ack y+1)
+    Note over C,S: One full round trip spent. Now data can flow.
+    C->>S: First data, such as an HTTP request
+`} />
+
+</DeepDive>

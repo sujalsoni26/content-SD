@@ -1,0 +1,42 @@
+Images, videos and PDFs are large binary blobs that bloat a relational database. **Object storage** (Amazon S3, Google Cloud Storage, Azure Blob) stores *objects* (data + metadata) in *buckets*, addressed by a key, over HTTP. It is massively scalable, durable and cheap per GB.
+
+## How an upload flows
+
+<Diagram name="presigned-upload" caption="Big bytes go straight to storage; the database only remembers where they are." />
+
+- The client uploads straight to storage with a **pre-signed URL** (a temporary, limited upload permission), so big files skip the app servers.
+- The database keeps only metadata and the key:
+
+```text
+posts(id, user_id, caption, image_key = 'photos/123.jpg')
+```
+
+- A CDN in front of the storage serves the files (see [CDN](/learn/cdn)).
+
+## Trade-offs
+
+- You replace whole objects; there are no in-place edits.
+- Latency is higher than a local disk.
+- You can't query inside files.
+
+<Callout type="interview" title="Say all three parts">
+
+Pre-signed URL upload, a metadata row that stores only the key, and a CDN in front for reads. Interviewers listen for all three, and for the reason the bytes never touch your API servers. A full design that builds on this: [Design Google Drive / Dropbox](/learn/design-file-storage).
+
+</Callout>
+
+## Object vs block vs file storage
+
+| Type | What it is | Typical use |
+| --- | --- | --- |
+| Block | Raw disks attached to servers | Databases, VM boot disks |
+| File | Shared network filesystems with folders and paths | Shared drives, older apps that expect a filesystem |
+| Object | Objects in buckets by key, over HTTP | Photos, videos, backups, static assets |
+
+<DeepDive title="Go deeper: durability is not availability">
+
+S3 Standard is designed for 99.999999999% (eleven nines) *durability*: the chance of losing an object you stored is tiny, because copies live across several facilities. Its designed *availability* is 99.99%: you may occasionally be unable to reach an object that is perfectly safe.
+
+Two features you will meet in real systems: **multipart upload** splits a large file into chunks that upload in parallel and can be retried one by one, and **lifecycle rules** move old objects to cheaper, slower storage classes (such as S3 Glacier) automatically.
+
+</DeepDive>

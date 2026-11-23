@@ -1,0 +1,63 @@
+{
+  "slug": "slos-error-budgets",
+  "title": "SLIs, SLOs and error budgets",
+  "moduleId": "operations",
+  "level": "intermediate",
+  "minutes": 8,
+  "problem": "Without a user-facing target and an agreed budget for failure, teams page on noise, sleep through slow bleeds, and argue about whether the service is reliable enough.",
+  "summary": "SLIs measure what users feel, an SLO sets a target for them over a rolling window, and the gap to 100% is an error budget that burn-rate alerts protect and a written policy spends.",
+  "catTip": "I allow myself 43 minutes of knocking things off shelves a month. Spend it slowly on small experiments, or blow it in one glorious afternoon. Either way the budget is the budget, and it does not roll over.",
+  "recall": {
+    "q": "What is an error budget, and how does burn rate relate to it?",
+    "a": "The error budget is 1 minus the SLO over the window: the failures you are allowed. Burn rate is how fast you are spending it relative to the SLO; a burn rate of 1 exhausts the budget exactly at the end of the window, and 14.4 spends 2% of a 30-day budget in one hour."
+  },
+  "archNodes": [],
+  "guide": {
+    "breaks": "Threshold alerts page at night on blips users never notice and stay silent during a slow bleed that eats the whole month's reliability, while product and operations argue about what 'reliable enough' means.",
+    "tradeoffs": "Good SLIs need measurement at the load balancer or client, a window long enough to be meaningful makes one bad day haunt you for weeks, and an honest budget policy occasionally freezes a launch the business wanted.",
+    "explainSimply": "An SLO is a promise like 'the app works 999 times out of 1,000 this month'. The one failure in a thousand is your budget, like a monthly data allowance: spend it slowly on experiments or lose it all in one bad afternoon. Alerts should ring when you are spending it far too fast, not on every tiny hiccup.",
+    "hint": "Think of the SLO as a monthly allowance and ask how fast it is being spent, not whether it has run out."
+  },
+  "meow": "Meow-nine-nine-point-nine: a thousand purrs, one allowed hiss. Hiss too fast and the pager meows back.",
+  "quiz": [
+    {
+      "prompt": "Your SLO is 99.9% of requests succeeding over a rolling 30 days. Which condition is the best reason to page someone at 3 a.m.?",
+      "options": [
+        "The error rate has been above 0.1% for the last five minutes",
+        "2% of the error budget was consumed in the last hour and errors are still occurring in the last five minutes",
+        "CPU utilisation on two database servers has passed 80%",
+        "The month's error budget has just been fully consumed"
+      ],
+      "answer": 1,
+      "explanation": "A burn rate of 14.4 over an hour, confirmed by a short window, is the SRE Workbook's paging condition. A 0.1% error rate is a burn rate of exactly 1, on schedule rather than an emergency, so paging on it produces constant noise; CPU is a cause, not a symptom; and a fully spent budget is a policy decision, far too late for a page."
+    },
+    {
+      "prompt": "Which SLI best reflects what a user of a ride-booking app experiences?",
+      "options": [
+        "Average CPU utilisation of the matching service",
+        "The proportion of booking requests that return a successful response within 2 seconds, measured at the load balancer",
+        "The number of matching-service pods currently running",
+        "The median latency recorded in the matching service's own logs"
+      ],
+      "answer": 1,
+      "explanation": "A good SLI is a ratio of good events to all events, measured as close to the user as possible. The median from server logs is the strongest distractor, but it hides the tail and the logs never see requests that failed to reach the server."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A team's SLO is 99.95% over 28 days and they serve 5 million requests a day. How many failures can they afford in the window, and what is the burn rate if 0.5% of requests are failing right now?",
+      "a": "0.0005 × 140 million = 70,000 failures. Burn rate = 0.5% ÷ 0.05% = 10, so at this rate the budget is gone in 2.8 days instead of 28."
+    },
+    {
+      "q": "Why do multi-window burn-rate alerts pair a 1-hour window with a 5-minute window?",
+      "a": "The long window proves the burn is big enough to matter (2% of the budget); the short window proves it is still happening, so the alert fires only during an active burn and stops minutes after the fix rather than an hour later."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Google SRE Workbook, ch. 5 \"Alerting on SLOs\"", "url": "https://sre.google/workbook/alerting-on-slos/", "accessed": "2026-11-22", "supports": "definition of burn rate; burn rate 1 exhausts the budget at the end of the window; the 14.4 / 6 / 1 multi-window table with 1h/5m, 6h/30m, 3d/6h windows and 2% / 5% / 10% budget for a 30-day window; short window about 1/12 of the long window", "status": "verified" },
+    { "title": "Google SRE Workbook, ch. 2 \"Implementing SLOs\"", "url": "https://sre.google/workbook/implementing-slos/", "accessed": "2026-11-22", "supports": "the SLI menu (availability, latency, quality, freshness, correctness, coverage, durability); four-week rolling window and whole-number-of-weeks advice; error-budget policy consequences; measuring at the load balancer or client rather than server logs", "status": "verified" },
+    { "title": "Google SRE Book, ch. 4 \"Service Level Objectives\"", "url": "https://sre.google/sre-book/service-level-objectives/", "accessed": "2026-11-22", "supports": "SLI/SLO/SLA definitions; keep few SLOs, do not set targets from current performance, avoid absolutes, start loose; internal SLO tighter than SLA; Chubby's deliberate outages when too reliable", "status": "verified" },
+    { "title": "Google SRE Book, ch. 3 \"Embracing Risk\"", "url": "https://sre.google/sre-book/embracing-risk/", "accessed": "2026-11-22", "supports": "error budget as the agreed level of allowed unreliability; releases temporarily halted when the budget is spent; shared incentive between product development and SRE", "status": "verified" }
+  ]
+}

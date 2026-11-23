@@ -1,0 +1,53 @@
+When a dependency is dead, every caller waiting on timeouts and retries ties up threads and spreads the outage: a **cascading failure**. A **circuit breaker** tracks failures and stops calling a failing dependency, like a house's electrical breaker that trips before the wiring catches fire.
+
+- **Closed:** calls pass; failures are counted.
+- **Open:** past the threshold, calls <mark>fail fast</mark> with a fallback (cached data, a default), giving the dependency room to recover.
+- **Half-open:** after a cooldown, a few trial calls go through; success closes the breaker, failure reopens it.
+
+<Interactive name="circuit-breaker" />
+
+<Mermaid caption="Circuit-breaker states. Open fails fast; Half-open lets a few trial calls decide." chart={`stateDiagram-v2
+    state "Half-open" as HalfOpen
+    [*] --> Closed
+    Closed --> Open: failures pass the threshold
+    Open --> HalfOpen: cooldown ends
+    HalfOpen --> Closed: trial calls succeed
+    HalfOpen --> Open: a trial call fails
+`} />
+
+## How a breaker decides
+
+The simulation above trips after **five failures in a row**. Production breakers usually judge a **window** instead:
+
+| Rule | How it counts | Trade-off |
+| --- | --- | --- |
+| Consecutive failures | Open after N failures in a row | Simple; one lucky success resets the count |
+| Count-based window | Failure *rate* over the last N calls (Resilience4j's default: the last 100 calls, open at 50%) | Smooths noise; needs a minimum number of calls before it judges |
+| Time-based window | Failure rate over the last N seconds | Follows the clock, not the traffic; quiet periods carry little data |
+| Slow calls count too | Calls slower than a threshold are treated as failures | Catches a dependency that is alive but crawling |
+
+Two more knobs: how long to stay open before trying again (often 30–60 seconds), and how many trial calls the half-open state lets through before it decides (Resilience4j allows 10 by default).
+
+## One breaker per dependency
+
+A breaker belongs to one downstream dependency, often to one endpoint of it. If the feed service shared a single breaker across ranking, ads and search, a dead ads service would switch off ranking too. Keep one breaker per thing that can fail on its own. Service meshes apply the same idea per upstream host and call it outlier detection.
+
+<Callout type="idea" title="Timeouts feed the breaker">
+
+A breaker counts timeouts as failures, so the two work together: the timeout stops one call from hanging, and the breaker stops thousands of calls from even trying.
+
+</Callout>
+
+<Callout type="warning" title="What a breaker is not">
+
+It is not a retry policy and not a rate limiter. It does one job: stop calling something that is failing, and give a cheap answer instead. That cheap answer, the **fallback**, has to exist and has to be tested. An open breaker with no fallback is just a faster error.
+
+</Callout>
+
+Tools: Resilience4j, service meshes (Istio/Envoy). Netflix's Hystrix popularized the pattern and is now in maintenance mode.
+
+<DeepDive title="Go deeper: bulkheads">
+
+A ship is split into watertight compartments (bulkheads) so one leak can't sink it. The software version gives each dependency its own limited pool of threads or connections. If the recommendations service hangs, it can exhaust only its own pool, and calls to payments still have threads to run on. Breakers stop the calls; bulkheads limit the damage while they happen. Bulkheads, cells and degraded modes get a full lesson: [Bulkheads and graceful degradation](/learn/bulkheads-degradation).
+
+</DeepDive>

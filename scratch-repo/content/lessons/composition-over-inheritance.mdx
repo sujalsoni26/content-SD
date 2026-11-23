@@ -1,0 +1,102 @@
+Inheritance reuses a class by extending it; **composition** reuses a class by holding an instance of it in a field and forwarding calls to it. The second is usually the safer default, because a subclass depends on *how* its parent is written, while a wrapper depends only on *what* the parent promises.
+
+## The fragile base class, concretely
+
+Suppose you need a `HashSet` that counts how many elements were ever added, duplicates included. Extending `HashSet` looks easy.
+
+```java
+class CountingSet<E> extends HashSet<E> {
+    private int added = 0;
+    @Override public boolean add(E e) { added++; return super.add(e); }
+    @Override public boolean addAll(Collection<? extends E> c) {
+        added += c.size();
+        return super.addAll(c);
+    }
+    int added() { return added; }
+}
+```
+
+Now call `addAll(List.of("a", "b", "c"))` and ask for `added()`: 6, not 3. `HashSet` does not define `addAll`; it inherits the version in `AbstractCollection`, whose documented implementation calls `add` for each element. That call lands on *your* overridden `add`, so every element is counted twice. Nothing in the parent's public contract told you this: your class works or breaks on the parent's **self-use**, an implementation detail a future release is free to change.
+
+This is the **fragile base class problem**: a subclass is coupled to its parent's internals, so the parent can break it without touching it. The reverse happens too: the parent gains a method in a later version, the subclass does not override it, and the invariant it was enforcing now has a hole. Joshua Bloch's *Effective Java* uses this very example to argue for composition.
+
+The fix is to stop being a `HashSet` and start having one:
+
+```java
+final class CountingSet<E> implements Set<E> {
+    private final Set<E> inner;
+    private int added = 0;
+    CountingSet(Set<E> inner) { this.inner = inner; }
+    public boolean add(E e) { added++; return inner.add(e); }
+    public boolean addAll(Collection<? extends E> c) { added += c.size(); return inner.addAll(c); }
+    int added() { return added; }
+    // every other Set method forwards to inner: inner.size(), inner.contains(o), ...
+}
+```
+
+Now `inner.addAll(c)` calls `inner`'s own `add`, not yours, so the count is 3, and the wrapper works for any `Set`, not just a `HashSet`. Bloch calls this a **forwarding class**; it is the Decorator pattern from [structural patterns](/learn/design-patterns-structural) with the dullest possible decoration. The cost is the forwarding boilerplate, which is why he suggests writing one reusable forwarding class per interface.
+
+## Is-a versus has-a
+
+Inheritance makes a claim: every `B` is an `A`, in every context an `A` is used. A counting set *is* a set; that part was fine. The JDK's `Stack extends Vector` is the cautionary tale: a vector lets callers insert in the middle, so a stack is not one, and the class's own documentation now points people at `Deque`. `Properties extends Hashtable` similarly admits non-string keys into a string-to-string map. When "B is-an A" needs a footnote, you want **has-a**: B holds an A and exposes only the operations that make sense.
+
+<Callout type="analogy" title={"An extension on someone else's foundation"}>
+
+Inheriting is building your extension on a neighbour's foundation: when they re-lay the floor, your walls crack, and they had every right to. Composing is building next door with a corridor between: you depend on where their front door is, not on their floor. Where the analogy stops: the corridor still breaks if they move the door; composition still depends on the parent's public interface, just not its internals.
+
+</Callout>
+
+## Delegation and behaviour as parts
+
+Composition's second use is bigger than wrapping collections. Any behaviour that varies independently of the class that needs it can be pulled into its own small interface and handed in, so the class **delegates** to it. Take late fees in a library: students pay one rate, staff another, and a festival amnesty charges nothing.
+
+With inheritance you get `StudentMember`, `StaffMember`, `StudentMemberDuringAmnesty`, and each new axis multiplies the classes. With composition the fee rule becomes a part:
+
+```java
+interface LateFeePolicy { Money feeFor(Loan loan); }
+
+final class Member {
+    private final LateFeePolicy lateFees;          // behaviour is a part, not a parent
+    Member(LateFeePolicy lateFees) { this.lateFees = lateFees; }
+    Money owes(Loan loan) { return lateFees.feeFor(loan); }
+}
+```
+
+In the notation of [Class relationships and UML](/learn/class-relationships-uml), the member has an association to the policy and each rule realises it:
+
+<Mermaid caption="Behaviour composed rather than inherited: Member holds a policy, new rules are new classes, and a member's rule can change at runtime." chart={`classDiagram
+    class LateFeePolicy {
+        <<interface>>
+        +feeFor(Loan loan) Money
+    }
+    class Member {
+        -LateFeePolicy lateFees
+        +owes(Loan loan) Money
+    }
+    Member --> LateFeePolicy : delegates to
+    StudentRate ..|> LateFeePolicy
+    StaffRate ..|> LateFeePolicy
+    NoFee ..|> LateFeePolicy
+`} />
+
+`Member` is one class, each rule is one class, a rule can be swapped while the member is alive (a student graduates), and each rule is tested with no `Member` in sight. This is the Strategy pattern, covered in [behavioural patterns](/learn/design-patterns-behavioural): composition applied to behaviour instead of data.
+
+## When inheritance is still right
+
+Composition is the default, not a ban. Inheritance earns its place when three things hold.
+
+- **It is a true subtype.** Every `B` is substitutable for an `A` everywhere, with no surprising methods (the Liskov principle, in [SOLID](/learn/solid)).
+- **The parent was designed for it.** The class documents which of its methods call which (its self-use), marks hook methods `protected`, and promises to keep those contracts. Bloch's rule is blunt: design and document for inheritance, or prohibit it with `final`.
+- **Both sides are yours, or the parent is a framework contract.** Extending `AbstractList` to get a dozen methods from `get` and `size`, or a framework base class with documented hooks, is inheritance as intended; extending a library class whose next version you do not control is the risky case.
+
+Inheritance of *type* is also fine: a `sealed` interface with records as leaves shares no implementation, so there is no base class to be fragile. The problem is inheriting implementation you do not control.
+
+## The smell of over-doing it
+
+Composition has its own failure mode: dozens of one-line forwarding methods, objects that cannot be constructed without wiring five collaborators, and an interface with a single implementation for a behaviour that never varied. If a class forwards everything and adds nothing, you have paid the indirection and bought no flexibility. [Dependency injection](/learn/interfaces-abstractions-di) is how later lessons keep the wiring cost in one place.
+
+<Callout type="interview" title={"Say \"compose\" with the reason attached"}>
+
+"I will hold a `PricingStrategy` rather than subclass `Spot`, because pricing changes independently of the spot's size and I do not want a class per combination." The reason is what shows judgement; the word alone does not.
+
+</Callout>

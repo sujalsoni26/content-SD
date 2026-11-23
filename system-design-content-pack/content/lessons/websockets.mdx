@@ -1,0 +1,27 @@
+In plain HTTP only the client starts a conversation. So how does a chat app learn about new messages?
+
+| Technique | How | Trade-off |
+| --- | --- | --- |
+| Polling | Ask every few seconds | Mostly empty answers; delay up to the interval |
+| Long polling | Server holds the request until there is news | Still a new request per update |
+| Server-Sent Events (SSE) | One-way server → client stream over HTTP | Push only; good for feeds, notifications, streaming AI replies |
+| WebSocket | Persistent full-duplex TCP connection, opened by an HTTP Upgrade | Server pushes instantly; connections are stateful |
+
+<Interactive name="polling-vs-ws" />
+
+- **Use for:** chat, collaborative editing, live dashboards, multiplayer games.
+- **Scaling cost:** each server holds many long-lived *stateful* connections. Delivering A's message to B means finding the server that holds B's connection, often through **Redis pub/sub**. Clients must reconnect after drops.
+
+<Callout type="analogy" title="Calling back vs staying on the line">
+
+Polling is calling the pizza shop every two minutes to ask if your order is ready. A WebSocket is staying on the line so they can tell you the second it leaves the oven.
+
+</Callout>
+
+## REST vs gRPC vs WebSocket
+
+|  | REST | gRPC | WebSocket |
+| --- | --- | --- | --- |
+| Style | Resources + HTTP verbs | Function calls | Open two-way channel |
+| Format | JSON (text) | Protobuf (binary) | Any (often JSON) |
+| Best for | Public and client APIs | Internal service calls | Real-time features |

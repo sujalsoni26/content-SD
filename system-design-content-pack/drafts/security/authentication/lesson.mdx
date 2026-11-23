@@ -1,0 +1,111 @@
+**Authentication** is proving that a request comes from the account it claims to come from. It has two halves: checking a proof once, at login, and remembering the result across later requests without tying the user to one server (see [Vertical vs horizontal scaling](/learn/scaling)). HTTP is stateless (see [HTTP](/learn/http)), so the memory lives in a cookie, a token or a shared store.
+
+## Storing passwords: salted, slow and adaptive
+
+You never store the password, only the output of a function that is deliberately expensive to compute, so an attacker who steals the table cannot test billions of guesses a second, as they could against a fast hash such as MD5, SHA-1 or SHA-256, which were designed for speed and are the wrong tool.
+
+| Function | Role today | OWASP floor |
+| --- | --- | --- |
+| Argon2id | First choice; memory-hard | 19 MiB memory, 2 iterations, 1 lane |
+| scrypt | When Argon2id is unavailable | Cost 2^17, block size 8, parallelism 1 |
+| bcrypt | Legacy systems | Work factor at least 10; cap input at 72 bytes |
+| PBKDF2 with HMAC-SHA256 | When FIPS compliance is required | 600,000 iterations |
+
+A **salt** is a random value, unique per password and stored beside the hash; it makes identical passwords hash differently and defeats precomputed tables. **Adaptive** means the cost is a parameter: as hardware speeds up you raise it and rehash each user at their next login.
+
+NIST's current password rules: at least 15 characters as a sole factor (8 inside MFA), no composition rules, no forced periodic changes, and a blocklist check against breached passwords.
+
+## Remembering the login: sessions and tokens
+
+<Mermaid caption="Login creates server-side state and hands the browser an opaque session id in a cookie. Later requests carry the cookie, and any gateway instance resolves it against the shared store." chart={`---
+config:
+  sequence:
+    mirrorActors: false
+    width: 110
+    actorMargin: 30
+---
+sequenceDiagram
+    participant B as Browser
+    participant G as API gateway
+    participant A as Auth service
+    participant S as Session store
+    B->>G: POST /login (email, password, TOTP code)
+    G->>A: verify credentials
+    A->>A: Argon2id(password, salt) matches stored hash?
+    A->>S: create session s7f3 for user 42, idle expiry 30 min
+    A-->>B: Set-Cookie sid=s7f3 (HttpOnly, Secure, SameSite=Lax)
+    B->>G: GET /feed with Cookie sid=s7f3
+    G->>S: lookup s7f3
+    S-->>G: user 42
+    G->>G: forward to feed service with user id 42
+`} />
+
+<Comparison>
+
+<ComparisonItem title="Session cookie (opaque id)">
+
+- A random id; everything about the user lives in a shared store such as Redis, so log-out is one delete.
+- Costs a store lookup per request and a highly available store.
+
+</ComparisonItem>
+
+<ComparisonItem title="Bearer token (self-contained)">
+
+- Carries signed claims that any server verifies locally (see [OAuth 2.0, OpenID Connect and JWT](/learn/oauth-jwt)).
+- Valid until it expires, so revocation is hard; keep lifetimes short.
+
+</ComparisonItem>
+
+</Comparison>
+
+Both keep application servers stateless: no server holds the session in its own memory. A session id needs at least 64 bits of randomness, and timeouts are enforced server-side; OWASP cites idle timeouts of 2 to 5 minutes for high-value applications and 15 to 30 for low-risk ones.
+
+## Cookie flags
+
+| Flag | What it stops |
+| --- | --- |
+| Secure | Sending the cookie over plain HTTP |
+| HttpOnly | Page scripts reading it, so an XSS bug cannot steal the session |
+| SameSite=Lax or Strict | The browser attaching it to cross-site requests, the basis of CSRF (see [API security](/learn/api-security)) |
+| No Domain attribute, Path=/ | Subdomains reading or planting it |
+
+Chrome treats a cookie without SameSite as Lax, which still sends it on top-level GET navigations, so <mark>a state change must never be a GET</mark>. OWASP also recommends the `__Host-` prefix, which makes browsers enforce those three at once.
+
+## Session fixation and rotation
+
+In **session fixation** the attacker plants their own session id in your browser, through a link or a planted cookie, and waits for you to log in. If the server keeps that id after login, the attacker is logged in as you. The fix is one rule: **regenerate the session id on every privilege change**, and invalidate other sessions when the password changes.
+
+## Adding a second factor
+
+**MFA** requires proof from two different factor types: something you know, have or are. The question is which second factor resists what.
+
+| Factor | How it works | Weakness |
+| --- | --- | --- |
+| TOTP app | A code from a shared secret and the current 30-second window (RFC 6238) | Phishable: a fake page relays the code within the window |
+| Push notification | Approve on the phone; number matching stops blind taps | MFA fatigue: attackers spam prompts until someone taps yes |
+| WebAuthn, passkeys | A key pair per site; the browser signs only for the origin that registered it | Needs a device or synced credential; recovery |
+| SMS code | A code sent by text message | SIM swap and interception; NIST SP 800-63B classes it as restricted |
+
+NIST SP 800-63B requires at least one phishing-resistant option at its middle assurance level, and WebAuthn is the mainstream one; keep SMS as an opt-in fallback. The session records which factors were used, so sensitive actions can demand a step-up.
+
+## Single sign-on
+
+**SSO** moves authentication into an identity provider: your app redirects the user there, the provider authenticates them and returns a signed assertion, XML in **SAML 2.0** or a JSON ID token in **OpenID Connect** (see [OAuth 2.0, OpenID Connect and JWT](/learn/oauth-jwt)). Your service never sees the password, and still creates its own session afterwards.
+
+<Callout type="analogy" title="The cloakroom ticket">
+
+You hand over your coat once and get a numbered ticket. The ticket means nothing by itself, the cloakroom's list does, and anyone holding it can collect the coat. A signed receipt any attendant can check without the list is the token model. Where it stops: a cloakroom cannot cancel every ticket at once; a session store can.
+
+</Callout>
+
+<Callout type="interview" title="Say where the login state lives">
+
+"Passwords are Argon2id-hashed with per-user salts. Login creates a session in Redis and sets an HttpOnly, Secure, SameSite cookie with a freshly generated id; the gateway resolves it on every request, so app servers stay stateless. MFA is TOTP or a passkey, with a step-up for payments."
+
+</Callout>
+
+<DeepDive title="Go deeper: upgrading a table of weak hashes">
+
+You inherit users hashed with unsalted MD5 and cannot rehash without the passwords. Rehash each user with Argon2id at their next login, storing algorithm and parameters beside every hash so old and new coexist. For users who never return, compute Argon2id over the existing MD5 value now; it stops offline cracking today and is replaced at their next login.
+
+</DeepDive>

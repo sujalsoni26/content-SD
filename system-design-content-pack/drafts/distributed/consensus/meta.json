@@ -1,0 +1,73 @@
+{
+  "slug": "consensus",
+  "title": "Consensus: Raft in one picture",
+  "moduleId": "distributed",
+  "level": "advanced",
+  "minutes": 12,
+  "problem": "Several machines must agree on one leader and one order of writes while some crash or lose contact, and any two of them that decide differently corrupt the data.",
+  "summary": "Consensus lets a cluster agree on a replicated log despite crashes and partitions. Raft elects a leader per numbered term with randomised timeouts and majority votes, and an entry is committed once a majority stores it, so any two decisions always share a witness.",
+  "catTip": "Five cats, one sunbeam. We vote; three purrs and the sunbeam is decided for this term. If two of us wander off the other three still agree, and the wanderers learn from the term number when they return.",
+  "recall": {
+    "q": "In a five-node Raft cluster, why is an entry committed only once three nodes hold it, and what happens to a leader stuck on the two-node side of a partition?",
+    "a": "Any two majorities of five share at least one node, so a committed entry is guaranteed to be in the log of every future leader (leader completeness). The minority-side leader can accept entries but never gets enough acknowledgements to commit them; when the partition heals it sees the higher term from the new leader, steps down, and its uncommitted entries are overwritten."
+  },
+  "archNodes": ["db"],
+  "guide": {
+    "breaks": "Without consensus two nodes can each believe they are the leader or hold different versions of the same log, so a partition turns into two diverging truths that nobody can merge afterwards.",
+    "tradeoffs": "Every committed write costs a round trip to a majority, a cluster of 2f + 1 nodes stops accepting writes when more than f fail, and elections cause short pauses, so consensus is reserved for small, critical metadata rather than bulk data.",
+    "explainSimply": "Picture a committee that only passes a motion when more than half its members sign it, with every meeting numbered. Two different motions can never both pass in one meeting, because someone would have had to sign both. A member who was out of the room sees the meeting number and knows to catch up before voting.",
+    "hint": "Count how many nodes two majorities of five must have in common, then ask who can win a vote without holding that node's log."
+  },
+  "meow": "Three of five purrs and the sunbeam is committed. Two cats in a cupboard cannot out-vote us, however loudly they meow.",
+  "quiz": [
+    {
+      "prompt": "A five-node Raft cluster is partitioned three against two, and the current leader is on the two-node side. What happens?",
+      "options": [
+        "Both sides keep committing writes until the partition heals, then merge their logs",
+        "The two-node side keeps committing because it has the leader; the three-node side waits",
+        "The three-node side elects a new leader in a higher term; the old leader can accept but never commit entries, and steps down when it sees the higher term",
+        "The cluster stops accepting writes entirely until all five nodes can talk again"
+      ],
+      "answer": 2,
+      "explanation": "Committing needs a majority, three of five, which only the larger side has, and terms let the old leader recognise it has been superseded. The cluster needs a majority, not all five nodes, so the last option is wrong."
+    },
+    {
+      "prompt": "Why does Raft give each follower a randomised election timeout?",
+      "options": [
+        "To make failover faster than the heartbeat interval",
+        "So that followers rarely become candidates at the same moment, which would split the vote",
+        "To spread read traffic across followers",
+        "Because wall clocks on different machines disagree"
+      ],
+      "answer": 1,
+      "explanation": "If every follower timed out together, the votes would split and nobody would reach a majority; random timeouts make one server usually time out first and win. Clock disagreement is irrelevant, because Raft terms are logical rather than wall-clock."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A colleague wants to run etcd with four nodes \"for extra capacity\". What do you say?",
+      "a": "Four nodes tolerate only one failure, the same as three, because a majority of four is three; every write still waits on a majority, so the fourth node adds cost and no fault tolerance. Run three or five, and scale reads elsewhere."
+    },
+    {
+      "q": "Name the consensus protocol behind etcd, ZooKeeper and Kafka's controller, and say what changed in Kafka 4.0.",
+      "a": "etcd uses Raft; ZooKeeper uses Zab, its own atomic broadcast protocol in which a leader proposes and a quorum acknowledges before commit; Kafka's KRaft controller quorum uses Raft to replicate the cluster metadata log. Kafka 4.0, released in March 2025, removed ZooKeeper mode entirely."
+    }
+  ],
+  "glossary": [],
+  "sources": [
+    { "title": "Diego Ongaro and John Ousterhout, \"In Search of an Understandable Consensus Algorithm (Extended Version)\", USENIX ATC 2014", "url": "https://raft.github.io/raft.pdf", "accessed": "2026-11-22", "supports": "roles, terms as a logical clock, randomised election timeouts (150–300 ms example), one vote per term, commit on majority replication, Log Matching and Leader Completeness properties, five servers tolerating two failures, the no-op entry and read-only heartbeat check (§8)", "status": "verified" },
+    { "title": "The Raft Consensus Algorithm website", "url": "https://raft.github.io/", "accessed": "2026-11-22", "supports": "Raft is designed to be understandable and is equivalent to Paxos in fault tolerance and performance; the paper received a Best Paper Award at USENIX ATC 2014", "status": "verified" },
+    { "title": "etcd README (etcd-io/etcd)", "url": "https://github.com/etcd-io/etcd", "accessed": "2026-11-22", "supports": "etcd uses the Raft consensus algorithm to manage a highly-available replicated log; frequently teamed with Kubernetes", "status": "verified" },
+    { "title": "etcd documentation, \"Tuning\" (v3.5)", "url": "https://etcd.io/docs/v3.5/tuning/", "accessed": "2026-11-22", "supports": "default heartbeat interval 100 ms and election timeout 1000 ms; tuning needed across data centres", "status": "verified" },
+    { "title": "etcd documentation, \"FAQ\" (v3.5)", "url": "https://etcd.io/docs/v3.5/faq/", "accessed": "2026-11-22", "supports": "Raft is leader-based; three members tolerate one failure and five tolerate two; odd member counts recommended; permanent quorum loss is catastrophic", "status": "verified" },
+    { "title": "Apache ZooKeeper documentation, \"ZooKeeper Internals\" (Atomic Broadcast)", "url": "https://zookeeper.apache.org/doc/current/zookeeperInternals.html", "accessed": "2026-11-22", "supports": "a leader proposes and proposals commit when a quorum acknowledges; quorum size n/2 + 1; zxid consists of an epoch and a counter; the epoch changes with leadership", "status": "verified" },
+    { "title": "Junqueira, Reed, Serafini, \"Zab: High-performance broadcast for primary-backup systems\", DSN 2011", "url": "https://ieeexplore.ieee.org/document/5958223", "accessed": "2026-11-22", "supports": "Zab is a crash-recovery atomic broadcast protocol designed for ZooKeeper, motivated by delivering a primary's updates in generation order", "status": "secondary" },
+    { "title": "Apache ZooKeeper wiki, \"Zab vs. Paxos\"", "url": "https://cwiki.apache.org/confluence/display/ZOOKEEPER/Zab+vs.+Paxos", "accessed": "2026-11-22", "supports": "Zab is a different protocol from Paxos, designed for primary-backup ordering that Paxos does not guarantee when a primary fails with outstanding proposals", "status": "verified" },
+    { "title": "KIP-500: Replace ZooKeeper with a Self-Managed Metadata Quorum", "url": "https://cwiki.apache.org/confluence/display/KAFKA/KIP-500%3A+Replace+ZooKeeper+with+a+Self-Managed+Metadata+Quorum", "accessed": "2026-11-22", "supports": "controller nodes form a Raft quorum that manages the metadata log; the leader of the metadata log is the active controller", "status": "verified" },
+    { "title": "Apache Kafka 4.0.0 Release Announcement (18 March 2025)", "url": "https://kafka.apache.org/blog/2025/03/18/apache-kafka-4.0.0-release-announcement/", "accessed": "2026-11-22", "supports": "Kafka 4.0 is the first major release to operate entirely without ZooKeeper", "status": "verified" },
+    { "title": "Apache Kafka documentation, \"Upgrading\" (4.1)", "url": "https://kafka.apache.org/41/getting-started/upgrade/", "accessed": "2026-11-22", "supports": "Kafka 4.0 only supports KRaft mode; ZooKeeper mode has been removed; ZooKeeper clusters must migrate to KRaft before upgrading", "status": "verified" },
+    { "title": "HashiCorp Consul documentation, \"Consensus protocol\"", "url": "https://developer.hashicorp.com/consul/docs/concept/consensus", "accessed": "2026-11-22", "supports": "Consul implements Raft; quorum is (N/2) + 1; three servers tolerate one failure and five tolerate two", "status": "verified" },
+    { "title": "CockroachDB documentation, \"Replication Layer\"", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/replication-layer", "accessed": "2026-11-22", "supports": "each range is replicated with Raft and a quorum of replicas must agree before a change commits; the Raft leader coordinates writes", "status": "verified" },
+    { "title": "Wikipedia, \"Paxos (computer science)\"", "url": "https://en.wikipedia.org/wiki/Paxos_(computer_science)", "accessed": "2026-11-22", "supports": "Paxos attribution to Lamport, first submitted 1989 and published 1998 as \"The Part-Time Parliament\"; used by Chubby, Spanner, Megastore and Cassandra lightweight transactions", "status": "secondary" }
+  ]
+}

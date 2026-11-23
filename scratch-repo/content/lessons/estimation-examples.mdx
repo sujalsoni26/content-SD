@@ -1,0 +1,41 @@
+## URL shortener
+
+Assume 100M new URLs/day ([Design a URL shortener](/learn/url-shortener) walks through the full design), reads:writes = 100:1, 10-year retention, about 500 B per record (round to 1 KB).
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Write QPS | 10⁸ ÷ 10⁵ | 1k (peak \~3k) |
+| Read QPS | 1k × 100 | 100k (peak \~300k) |
+| Storage | 10⁸ × 1 KB × 3,650 days × 3 copies | ≈ 1 PB |
+| Records in 10 years | 10⁸ × 3,650 | ≈ 365 billion |
+| Short-code length | 62⁷ ≈ 3.5 trillion > 365 billion (62⁶ ≈ 57 billion is too few) | 7 base-62 characters |
+| App servers | 300k peak ÷ 1k per server | \~300 |
+| Cache | 100k × 10⁵ s × 1 KB × 20% | ≈ 2 TB (upper bound) |
+
+→ **Read-heavy with tiny objects:** cache aggressively and add read replicas.
+
+<Callout type="warning" title="Common slip">
+
+10 years at 100M/day is about 365 billion records, not 4 billion; 7 base-62 characters still cover it.
+
+</Callout>
+
+## Google Drive
+
+Assume 50M DAU, 2 uploads per user per day, a 500 KB average file, reads:writes = 1:1.
+
+| Quantity | Working | Result |
+| --- | --- | --- |
+| Upload QPS | 5 × 10⁷ × 2 ÷ 10⁵ | 1k (peak \~3k) |
+| Ingress | 1k × 500 KB | 500 MB/s ≈ 4 Gbps |
+| Egress | 1k reads/s × 500 KB | 500 MB/s ≈ 4 Gbps |
+| Storage per day | 10⁸ × 500 KB | 50 TB |
+| Storage per year | 50 TB × 365 × 3 copies | ≈ 55 PB |
+
+→ The same 1k writes/s as the URL shortener, but objects <mark>500× bigger</mark>, so storage and bandwidth dominate: object storage, a CDN, chunked uploads, deduplication and a separate metadata database. (500 megabytes/s × 8 bits = 4 gigabits/s.)
+
+<Callout type="idea" title="Try them yourself">
+
+Both examples are presets in the estimator in [the formulas lesson](/learn/estimation-formulas). Change one assumption and watch which output moves the most. The full designs are [Design Pastebin](/learn/design-pastebin), the shortener's bigger cousin, and [Design Google Drive / Dropbox](/learn/design-file-storage).
+
+</Callout>

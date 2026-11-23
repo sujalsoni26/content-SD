@@ -1,0 +1,80 @@
+{
+  "slug": "kubernetes",
+  "title": "Kubernetes fundamentals",
+  "moduleId": "infrastructure",
+  "level": "intermediate",
+  "minutes": 10,
+  "problem": "Hundreds of containers across dozens of machines need placing, restarting, addressing and upgrading, and doing it by hand or by script fails the first time a node dies mid-rollout.",
+  "summary": "Kubernetes keeps a fleet of containers matching a declared desired state: Deployments roll Pods out through ReplicaSets, Services give them a stable address, Ingress or Gateway routes HTTP in, probes decide who is healthy, and requests and limits tell the scheduler where things fit.",
+  "catTip": "I do not chase every mouse myself. I declare three mice, caught, and let the kittens reconcile reality with the plan. If one kitten naps, another takes the shift. That is a controller loop, with whiskers.",
+  "recall": {
+    "q": "During a rollout a new Pod starts but cannot reach the database yet. Which probe keeps it from taking traffic, and why must that check not be the liveness probe?",
+    "a": "The readiness probe: while it fails the Pod is removed from the Service's EndpointSlices, so no traffic reaches it and the rolling update pauses. A liveness failure restarts the container, so a dependency check there would restart every Pod whenever the database blips."
+  },
+  "archNodes": ["gateway"],
+  "guide": {
+    "breaks": "Without an orchestrator nothing replaces a crashed container, callers must track changing Pod IPs by hand, and a rollout that produces a broken version takes the whole service down before anyone notices.",
+    "tradeoffs": "You take on a control plane, a large YAML surface and probe, request and limit settings that are wrong by default for your workload, which is why most teams run a managed Kubernetes rather than their own.",
+    "explainSimply": "Kubernetes is a thermostat for software: you say how many copies you want running and how they should be reached, and it keeps adjusting until reality matches. If a copy crashes it starts another, and when you change the version it swaps copies a few at a time, checking each new one works before retiring an old one.",
+    "hint": "Think about which probe removes a Pod from traffic and which one restarts it."
+  },
+  "meow": "Meow-nifest says three Pods. Two Pods? Controller purrs, makes a third. Readiness nap until the food bowl, the database, answers.",
+  "quiz": [
+    {
+      "prompt": "A Deployment has 8 replicas with the default rolling update settings. During the update, what are the most Pods that can exist and the fewest that must stay available?",
+      "options": [
+        "8 and 8: Kubernetes replaces Pods strictly one at a time",
+        "10 and 6: maxSurge 25% rounds up to 2 and maxUnavailable 25% rounds down to 2",
+        "16 and 8: a whole new set is created before the old one is removed",
+        "9 and 7: both settings default to one Pod"
+      ],
+      "answer": 1,
+      "explanation": "25% of 8 is 2 for both settings, with maxSurge rounded up and maxUnavailable rounded down, so the Deployment may run 10 Pods and must keep 6 available. The 16-and-8 option describes a blue-green switch, which is not how RollingUpdate behaves."
+    },
+    {
+      "prompt": "Why does a Service exist in front of a set of Pods?",
+      "options": [
+        "Pods have no network identity, so the Service gives them IP addresses",
+        "Pod IPs change whenever Pods are recreated, so callers need a stable virtual IP and DNS name that routes to whichever Pods are currently ready",
+        "A Service terminates TLS and routes requests by URL path",
+        "A Service stores the configuration that Pods read at startup"
+      ],
+      "answer": 1,
+      "explanation": "Each Pod has its own IP but it changes on every recreation, so the Service's ClusterIP and DNS name are the stable handle and EndpointSlices track which Pods are ready behind it. TLS and path routing belong to Ingress or Gateway, which is the strongest distractor."
+    }
+  ],
+  "cards": [
+    {
+      "q": "A Pod requests 500m CPU and 1Gi memory but sets no limits. What does the scheduler use, and what happens if the container uses 3Gi at run time?",
+      "a": "The scheduler places the Pod using the requests alone, compared with the node's capacity rather than its real usage. With no limit nothing caps the container on that node, so it can starve its neighbours; with a memory limit the kernel may OOM-kill the container once it exceeds it."
+    },
+    {
+      "q": "The Ingress API is frozen. What replaces it, and what are its three main kinds?",
+      "a": "The Gateway API, which the Kubernetes project calls the successor to Ingress: GatewayClass (a set of gateways managed by one controller), Gateway (an instance of traffic-handling infrastructure such as a cloud load balancer) and HTTPRoute (the rules mapping requests to backends). Ingress keeps working but gets no new features."
+    }
+  ],
+  "glossary": [
+    { "term": "K8s", "full": "Kubernetes", "note": "The numeronym: K, the eight letters of 'ubernete', s. The container orchestrator that reconciles declared state." },
+    { "term": "HPA", "full": "Horizontal Pod Autoscaler", "note": "Kubernetes controller that changes a Deployment's replica count from CPU, memory or custom metrics." }
+  ],
+  "sources": [
+    { "title": "Kubernetes Docs, Pods", "url": "https://kubernetes.io/docs/concepts/workloads/pods/", "accessed": "2026-11-22", "supports": "a Pod is the smallest deployable unit; containers in a Pod share the network namespace, IP address and ports and talk over localhost; Pods are disposable and usually created by workload resources", "status": "verified" },
+    { "title": "Kubernetes Docs, ReplicaSet", "url": "https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/", "accessed": "2026-11-22", "supports": "a ReplicaSet maintains a stable set of replica Pods; Deployments are recommended over direct use", "status": "verified" },
+    { "title": "Kubernetes Docs, Deployments", "url": "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/", "accessed": "2026-11-22", "supports": "declarative updates; RollingUpdate default; maxSurge and maxUnavailable default 25% (rounded up and down) and cannot both be zero; revisionHistoryLimit default 10; kubectl rollout undo", "status": "verified" },
+    { "title": "Kubernetes Docs, Service", "url": "https://kubernetes.io/docs/concepts/services-networking/service/", "accessed": "2026-11-22", "supports": "Service definition and types ClusterIP, NodePort (default range 30000-32767), LoadBalancer, ExternalName; headless Services; Endpoints API deprecated since v1.33", "status": "verified" },
+    { "title": "Kubernetes Docs, Ingress", "url": "https://kubernetes.io/docs/concepts/services-networking/ingress/", "accessed": "2026-11-22", "supports": "Ingress routes HTTP and HTTPS by host and path and terminates TLS; it requires an Ingress controller; the Ingress API is frozen", "status": "verified" },
+    { "title": "Kubernetes Docs, Gateway API", "url": "https://kubernetes.io/docs/concepts/services-networking/gateway/", "accessed": "2026-11-22", "supports": "Gateway API is the successor to Ingress; role-oriented GatewayClass, Gateway and HTTPRoute kinds; header matching and traffic weighting without annotations", "status": "verified" },
+    { "title": "Kubernetes Docs, ConfigMaps", "url": "https://kubernetes.io/docs/concepts/configuration/configmap/", "accessed": "2026-11-22", "supports": "non-confidential key-value data, 1 MiB limit, consumption as env vars or files; mounted ConfigMaps update eventually, env vars need a restart", "status": "verified" },
+    { "title": "Kubernetes Docs, Secrets", "url": "https://kubernetes.io/docs/concepts/configuration/secret/", "accessed": "2026-11-22", "supports": "Secrets are stored unencrypted in etcd by default; base64 obscures but does not protect; 1 MiB limit; encryption at rest and RBAC recommended", "status": "verified" },
+    { "title": "Kubernetes Docs, Liveness, Readiness and Startup Probes", "url": "https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/", "accessed": "2026-11-22", "supports": "liveness restarts the container, readiness removes the Pod from EndpointSlices, startup holds off the other probes; a missing probe counts as Success; incorrect liveness probes cause cascading failures", "status": "verified" },
+    { "title": "Kubernetes Docs, Configure Liveness, Readiness and Startup Probes", "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/", "accessed": "2026-11-22", "supports": "the startup probe example: failureThreshold 30 times periodSeconds 10 gives 300 seconds before the liveness probe takes over", "status": "verified" },
+    { "title": "Kubernetes API Reference, Pod v1 (Probe)", "url": "https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/", "accessed": "2026-11-22", "supports": "probe defaults: periodSeconds 10, timeoutSeconds 1, failureThreshold 3, successThreshold 1", "status": "verified" },
+    { "title": "Kubernetes Docs, Resource Management for Pods and Containers", "url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/", "accessed": "2026-11-22", "supports": "the scheduler uses the sum of requests against node capacity, not actual usage; CPU limits throttle and memory limits OOM-kill via cgroups; 1 CPU is one core and 100m is one hundred millicpu; a limit without a request sets the request", "status": "verified" },
+    { "title": "Kubernetes Docs, Kubernetes Components", "url": "https://kubernetes.io/docs/concepts/overview/components/", "accessed": "2026-11-22", "supports": "kube-apiserver, etcd, kube-scheduler, kube-controller-manager, cloud-controller-manager, kubelet, kube-proxy and container runtime roles", "status": "verified" },
+    { "title": "etcd Docs, FAQ", "url": "https://etcd.io/docs/v3.5/faq/", "accessed": "2026-11-22", "supports": "etcd is a consistent distributed key-value store whose consistency is enforced by Raft", "status": "verified" },
+    { "title": "Kubernetes Docs, Virtual IPs and Service Proxies", "url": "https://kubernetes.io/docs/reference/networking/virtual-ips/", "accessed": "2026-11-22", "supports": "kube-proxy watches Services and EndpointSlices and programs iptables, ipvs or nftables rules; iptables is the default in 1.37 with nftables planned; backends chosen randomly unless session affinity", "status": "verified" },
+    { "title": "Kubernetes Docs, EndpointSlices", "url": "https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/", "accessed": "2026-11-22", "supports": "EndpointSlices track backend IPs for a Service, at most 100 endpoints per slice by default", "status": "verified" },
+    { "title": "Kubernetes Docs, Container Runtimes", "url": "https://kubernetes.io/docs/setup/production-environment/container-runtimes/", "accessed": "2026-11-22", "supports": "CRI-conformant runtimes containerd and CRI-O; dockershim removed in release 1.24", "status": "verified" },
+    { "title": "Kubernetes Docs, Horizontal Pod Autoscaling", "url": "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/", "accessed": "2026-11-22", "supports": "the HPA scales workload replica counts from metrics", "status": "verified" }
+  ]
+}
